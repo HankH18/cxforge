@@ -116,8 +116,8 @@ public reply posted, autonomous mode only.
 Tables beyond `cases`: `kb_chunks(id, doc_slug, text, embedding vector)`;
 `tickets_seen(ticket_id, comment_id, pk both)`; `runs(id, ticket_id, route,
 confidence, outcome outcome_enum, verifier_score, trace_id, received_at,
-replied_at)` with `outcome_enum = auto_sent|gated_sent|rejected|escalated|
-off_topic`; `drafts(id, run_id, body, edited_body, status draft_enum)` with
+replied_at, reasons text[])` with `outcome_enum = auto_sent|gated_sent|
+rejected|escalated|off_topic`; `drafts(id, run_id, body, edited_body, status draft_enum)` with
 `draft_enum = pending|approved|rejected|auto_sent`; `settings(key, value)`.
 Labeled eval set is a repo fixture (`evals/labeled_set.yaml`), not a table:
 `{id, subject, body, expected_route, expected_escalate, expected_reasons[]}`.

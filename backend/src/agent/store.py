@@ -20,6 +20,7 @@ from datetime import datetime
 
 from agent.config import GATE_SETTING_KEY
 from data import get_connection
+from escalation.schemas import Reason
 
 _TRUE_VALUES = {"1", "true", "on", "yes"}
 
@@ -46,17 +47,28 @@ def record_run(
     trace_id: str,
     received_at: datetime,
     replied_at: datetime | None,
+    reasons: list[Reason] | None = None,
 ) -> int:
     """Insert one ``runs`` row (R10's portal feed, R13's metrics source).
     ``outcome`` is left ``None`` when the gate holds the draft pending —
-    T-8's approve/reject flow fills it in once a human decides."""
+    T-8's approve/reject flow fills it in once a human decides.
+
+    ``reasons`` is the escalation decision's own ``EscalationTrigger.reason``
+    list (``agent.nodes.act`` passes ``state["escalation"].triggers``'
+    reasons here) — every reason DESIGN's combinator attached to THIS run,
+    in the order the engine produced them, duplicates already removed
+    upstream by ``escalation.engine``'s own dedupe. Left ``None``/empty
+    (stored as ``'{}'``, ``data.schema``'s column default) for a run that
+    never escalated — never a fake placeholder reason. ``portal.service.
+    compute_metrics``'s ``escalations_by_reason`` and ``fetch_feed``'s
+    ``escalation_reason`` are this column's only readers."""
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO runs (
                 ticket_id, route, confidence, outcome, verifier_score,
-                trace_id, received_at, replied_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                trace_id, received_at, replied_at, reasons
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -68,6 +80,7 @@ def record_run(
                 trace_id,
                 received_at,
                 replied_at,
+                list(reasons) if reasons else [],
             ),
         )
         row = cur.fetchone()

@@ -51,6 +51,7 @@ from agent.schemas import Classification, GroundednessJudgment, KBAnswerDraft, P
 from agent.state import RunState
 from data import Case, RetrievedChunk, get_case, get_cases_by_requester, search_kb
 from escalation.notes import compose_internal_note
+from escalation.schemas import Reason
 from helpdesk.models import EscalationGroup, Message, Ticket
 from helpdesk.port import HelpdeskPort
 
@@ -551,6 +552,21 @@ _OUTCOME_BY_ROUTE = {
 }
 
 
+def _escalation_reasons(state: RunState) -> list[Reason]:
+    """The escalation decision's own reasons, for ``store.record_run``'s
+    ``reasons`` column (SPEC R13 / DESIGN's ``escalations_by_reason``) — the
+    exact ``EscalationTrigger.reason`` list DESIGN's combinator attached to
+    THIS run, never re-derived or guessed here. ``[]`` for a run that never
+    escalated (``state["escalation"]`` is only ever set once a branch node
+    or ``decide`` has forwarded a condition to the escalation seam — see
+    ``RunState.escalation``'s own docstring), which ``record_run`` stores as
+    an empty array, not a fake reason."""
+    decision = state.get("escalation")
+    if decision is None:
+        return []
+    return [trigger.reason for trigger in decision.triggers]
+
+
 def act(state: RunState, config: RunnableConfig) -> dict[str, Any]:
     """Performs the HelpdeskPort calls (gate OFF) or persists the draft as
     ``pending`` (gate ON) and records the run. Gate ON never calls the port
@@ -585,6 +601,7 @@ def act(state: RunState, config: RunnableConfig) -> dict[str, Any]:
             trace_id=trace_id,
             received_at=received_at,
             replied_at=None,
+            reasons=_escalation_reasons(state),
         )
         store.record_draft(run_id=run_id, body=draft, status="pending")
         return {"actions": [*actions, "gate:held_pending"]}
@@ -643,6 +660,7 @@ def act(state: RunState, config: RunnableConfig) -> dict[str, Any]:
         trace_id=trace_id,
         received_at=received_at,
         replied_at=datetime.now(UTC),
+        reasons=_escalation_reasons(state),
     )
     store.record_draft(run_id=run_id, body=draft, status="auto_sent")
 
