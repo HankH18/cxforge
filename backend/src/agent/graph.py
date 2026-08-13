@@ -20,10 +20,11 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from agent import nodes
-from agent.escalation_seam import EscalationDecider, PlaceholderEscalationDecider
+from agent.escalation_seam import EscalationDecider
 from agent.llm import LLMClient
 from agent.nodes import AgentDeps
 from agent.state import RunState
+from escalation.engine import EscalationEngine
 from helpdesk.port import HelpdeskPort
 
 _BRANCH_NODES = ("case_status", "permission", "kb_answer", "off_topic")
@@ -94,12 +95,17 @@ def run_agent(
 ) -> RunState:
     """Public entrypoint: run one full agent turn for ``ticket_id`` and
     return the final ``RunState``. ``escalation_decider`` defaults to
-    ``PlaceholderEscalationDecider`` — T-6 passes its real engine instead;
-    no other argument or call site changes."""
+    ``escalation.engine.EscalationEngine`` (T-6's real engine), built from
+    the same ``llm`` passed here — so every graph/grounding test that
+    passes a fake ``LLMClient`` for ``llm`` gets an engine backed by that
+    same fake, never a second, independent OpenAI client. Pass
+    ``escalation_decider`` explicitly (e.g.
+    ``agent.escalation_seam.PlaceholderEscalationDecider()``) to bypass the
+    real engine entirely."""
     deps = AgentDeps(
         port=port,
         llm=llm,
-        escalation_decider=escalation_decider or PlaceholderEscalationDecider(),
+        escalation_decider=escalation_decider or EscalationEngine(llm=llm),
     )
     compiled = build_graph()
     result = compiled.invoke(

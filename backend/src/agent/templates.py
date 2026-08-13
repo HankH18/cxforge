@@ -14,21 +14,21 @@ action name comes from the closed ``AlwaysGrantKind`` the ``permission``
 node matched (itself grounded in the KB's always-grant list — see
 ``agent.nodes.permission``), not from free text.
 
-Everything else here is either fixed copy (no interpolation at all —
-``OFF_TOPIC_REPLY``, ``ESCALATION_CUSTOMER_REPLY``) or a template over the
-escalation's own structured fields (``render_escalation_note``), never over
-free-generated text.
+``OFF_TOPIC_REPLY`` and ``ESCALATION_CUSTOMER_REPLY`` are fixed copy with no
+interpolation at all — the latter is SPEC R6's customer-facing escalation
+notice, publicly told to every escalated ticket's requester regardless of
+why it escalated, deliberately with zero customer-supplied content
+interpolated into it (a red-team finding T-5 already fixed once; T-6 must
+not reintroduce it). The escalation INTERNAL note (conversation summary,
+template-filled grounded facts, escalation reason enum) is composed by
+``escalation.notes.compose_internal_note`` instead — T-6's territory, kept
+out of this module since it is not a *customer-facing* reply template.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from agent.state import AlwaysGrantKind
 from data import Case
-
-if TYPE_CHECKING:
-    from agent.state import RunState
 
 _STAGE_DESCRIPTIONS: dict[str, str] = {
     "intake": "paperwork verification and accessioning",
@@ -98,31 +98,3 @@ ESCALATION_CUSTOMER_REPLY = (
     "specialists, so I've routed it to our team and they'll follow up with "
     "you directly. We appreciate your patience."
 )
-
-
-def render_escalation_note(state: RunState) -> str:
-    """Internal-note template for an escalated run (R6: "post an internal
-    note — conversation summary, grounded facts, escalation reason").
-    Every value interpolated below comes from the run's own state: the
-    escalation decision's own structured triggers, ``classify``'s topic
-    summary, and (when present) the resolved ``Case`` tool result — never
-    free-generated prose about the case."""
-    decision = state.get("escalation")
-    triggers = decision.triggers if decision is not None else []
-    reasons = ", ".join(t.reason for t in triggers) or "unspecified"
-    details = "; ".join(t.detail for t in triggers) or "(no detail recorded)"
-    topic = state.get("topic") or "(no summary available)"
-
-    lines = [
-        f"Escalation reason(s): {reasons}",
-        f"Detail: {details}",
-        f"Conversation summary: {topic}",
-    ]
-    tool_results = state.get("tool_results") or {}
-    case = tool_results.get("case")
-    if isinstance(case, Case):
-        lines.append(
-            f"Case on file: {case.case_id} (stage={case.stage}, "
-            f"last_updated={case.last_updated.isoformat()})"
-        )
-    return "\n".join(lines)

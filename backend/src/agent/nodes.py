@@ -50,6 +50,8 @@ from agent.prompts import (
 from agent.schemas import Classification, GroundednessJudgment, KBAnswerDraft, PermissionMatch
 from agent.state import RunState
 from data import Case, RetrievedChunk, get_case, get_cases_by_requester, search_kb
+from escalation.engine import detect_deterministic_hard_rule
+from escalation.notes import compose_internal_note
 from helpdesk.models import EscalationGroup, Message, Ticket
 from helpdesk.port import HelpdeskPort
 
@@ -484,11 +486,37 @@ def verify(state: RunState, config: RunnableConfig) -> dict[str, Any]:
 def decide(state: RunState, config: RunnableConfig) -> dict[str, Any]:
     """Reads R11's gate and stashes the decision for ``act`` — the actual
     port calls / persistence live in ``act``, so ``decide`` never touches
-    the port or the database's write tables directly."""
+    the port or the database's write tables directly.
+
+    Also runs the two escalation hard rules that need no upstream T-5
+    trigger and no tool result at all — DESIGN's "billing terms" and
+    "explicit human request"
+    (``escalation.engine.detect_deterministic_hard_rule``, pure and
+    LLM-free) — over the conversation's latest customer message, for any
+    run not already routed to ``"escalate"`` by an earlier node. This is
+    the one piece of T-6's hard-rule set with no natural home in an
+    existing branch node (unlike unknown_case/out_of_procedure/
+    low_confidence, it is not a side effect of a lookup any node already
+    performs), so it runs here, immediately before ``act`` would otherwise
+    send or hold a normal reply. See ``agent.escalation_seam``'s module
+    docstring for why the classifier-driven half of the contract
+    (frustration/complexity) is deliberately NOT given an equivalent
+    always-on call site here: it would need an ``LLMClient`` call on every
+    run, which this repo's fake-``LLMClient``-backed graph/grounding test
+    fixtures do not register a response for and would fail loudly on."""
     gate_enabled = store.read_gate_enabled()
     tool_results = _tool_results(state)
     tool_results["decision"] = {"gate_enabled": gate_enabled}
-    return {"tool_results": tool_results, "actions": _actions(state, "decide")}
+    actions = _actions(state, "decide")
+
+    if state["route"] != "escalate":
+        message_text = _latest_customer_message(state["conversation"])
+        hard_trigger = detect_deterministic_hard_rule(message_text)
+        if hard_trigger is not None:
+            update = _escalate_for(config, state, hard_trigger, tool_results=tool_results)
+            return {**update, "draft": templates.ESCALATION_CUSTOMER_REPLY, "actions": actions}
+
+    return {"tool_results": tool_results, "actions": actions}
 
 
 # -- act --------------------------------------------------------------------
@@ -507,7 +535,13 @@ def act(state: RunState, config: RunnableConfig) -> dict[str, Any]:
     ``pending`` (gate ON) and records the run. Gate ON never calls the port
     at all — R11: "ON: every outbound public reply is held as a draft for
     reviewer edit/approve/reject before send"; T-8's approval flow is what
-    eventually calls the port for a gated draft."""
+    eventually calls the port for a gated draft.
+
+    The ``"escalate"`` branch's port-call order follows SPEC R6's own
+    wording exactly: "post an internal note ..., tag, assign to the
+    escalation group, and publicly tell the customer" — internal
+    housekeeping first, the customer-facing notice last. Every other route
+    keeps its original order (public reply, then tags/status) unchanged."""
     deps = _deps(config)
     ticket_id = _ticket_id(config)
     route = state["route"]
@@ -534,24 +568,15 @@ def act(state: RunState, config: RunnableConfig) -> dict[str, Any]:
         store.record_draft(run_id=run_id, body=draft, status="pending")
         return {"actions": [*actions, "gate:held_pending"]}
 
-    deps.port.post_public_reply(ticket_id, draft)
-    actions.append("port:post_public_reply")
-
-    if route in ("case_status", "permission", "kb"):
-        tag = {"case_status": "case-status", "permission": "permission-granted", "kb": "kb-answer"}[
-            route
-        ]
-        deps.port.add_tags(ticket_id, [tag])
-        deps.port.set_status(ticket_id, "solved")
-        actions += ["port:add_tags", "port:set_status:solved"]
-    elif route == "off_topic":
-        deps.port.add_tags(ticket_id, ["off-topic"])
-        deps.port.set_status(ticket_id, "open")
-        actions += ["port:add_tags", "port:set_status:open"]
-    elif route == "escalate":
+    if route == "escalate":
         decision = state.get("escalation")
         triggers = decision.triggers if decision is not None else []
-        note_body = templates.render_escalation_note(state)
+        note_body = compose_internal_note(
+            topic=state.get("topic") or "(no summary available)",
+            tool_results=tool_results,
+            triggers=triggers,
+            retrieved_chunks=state.get("retrieved_chunks"),
+        )
         deps.port.post_internal_note(ticket_id, note_body)
         deps.port.add_tags(ticket_id, ["escalated", *[t.reason for t in triggers]])
         deps.port.assign_group(
@@ -561,12 +586,31 @@ def act(state: RunState, config: RunnableConfig) -> dict[str, Any]:
             ),
         )
         deps.port.set_status(ticket_id, "open")
+        deps.port.post_public_reply(ticket_id, draft)
         actions += [
             "port:post_internal_note",
             "port:add_tags",
             "port:assign_group",
             "port:set_status:open",
+            "port:post_public_reply",
         ]
+    else:
+        deps.port.post_public_reply(ticket_id, draft)
+        actions.append("port:post_public_reply")
+
+        if route in ("case_status", "permission", "kb"):
+            tag = {
+                "case_status": "case-status",
+                "permission": "permission-granted",
+                "kb": "kb-answer",
+            }[route]
+            deps.port.add_tags(ticket_id, [tag])
+            deps.port.set_status(ticket_id, "solved")
+            actions += ["port:add_tags", "port:set_status:solved"]
+        elif route == "off_topic":
+            deps.port.add_tags(ticket_id, ["off-topic"])
+            deps.port.set_status(ticket_id, "open")
+            actions += ["port:add_tags", "port:set_status:open"]
 
     outcome = _OUTCOME_BY_ROUTE[route]
     run_id = store.record_run(
