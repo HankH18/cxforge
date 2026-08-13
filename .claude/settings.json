@@ -10,6 +10,13 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "TaskUpdate",
+        "hooks": [
+          { "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/verify_gate.sh" }
+        ]
+      },
+      {
         "matcher": "Edit|Write",
         "hooks": [
           { "type": "command",

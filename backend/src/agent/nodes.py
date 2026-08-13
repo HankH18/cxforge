@@ -50,7 +50,6 @@ from agent.prompts import (
 from agent.schemas import Classification, GroundednessJudgment, KBAnswerDraft, PermissionMatch
 from agent.state import RunState
 from data import Case, RetrievedChunk, get_case, get_cases_by_requester, search_kb
-from escalation.engine import detect_deterministic_hard_rule
 from escalation.notes import compose_internal_note
 from helpdesk.models import EscalationGroup, Message, Ticket
 from helpdesk.port import HelpdeskPort
@@ -488,33 +487,55 @@ def decide(state: RunState, config: RunnableConfig) -> dict[str, Any]:
     port calls / persistence live in ``act``, so ``decide`` never touches
     the port or the database's write tables directly.
 
-    Also runs the two escalation hard rules that need no upstream T-5
-    trigger and no tool result at all — DESIGN's "billing terms" and
-    "explicit human request"
-    (``escalation.engine.detect_deterministic_hard_rule``, pure and
-    LLM-free) — over the conversation's latest customer message, for any
-    run not already routed to ``"escalate"`` by an earlier node. This is
-    the one piece of T-6's hard-rule set with no natural home in an
-    existing branch node (unlike unknown_case/out_of_procedure/
-    low_confidence, it is not a side effect of a lookup any node already
-    performs), so it runs here, immediately before ``act`` would otherwise
-    send or hold a normal reply. See ``agent.escalation_seam``'s module
-    docstring for why the classifier-driven half of the contract
-    (frustration/complexity) is deliberately NOT given an equivalent
-    always-on call site here: it would need an ``LLMClient`` call on every
-    run, which this repo's fake-``LLMClient``-backed graph/grounding test
-    fixtures do not register a response for and would fail loudly on."""
+    Also runs DESIGN's full escalation combinator — ``EscalationDecider.
+    evaluate`` (``escalation.engine.EscalationEngine`` in production): hard
+    rules first (billing terms, explicit human request — pure, LLM-free,
+    over the conversation's latest customer message), then, only if none
+    fired, the classifier (frustration/complexity, one ``LLMClient`` call)
+    — for any run not already routed to ``"escalate"`` by an earlier node's
+    own structural detection (unknown_case/out_of_procedure/empty-retrieval/
+    verifier-threshold; see ``agent.escalation_seam``'s module docstring).
+    Calling the single ``evaluate`` combinator here, rather than
+    reimplementing its hard-rule-then-classifier logic inline, is what
+    guarantees the ordering DESIGN pins (a fired hard rule always
+    short-circuits before the classifier is ever consulted) — the same
+    guarantee ``backend/tests/escalation/test_combinator.py`` and
+    ``test_adversarial.py`` already prove against the engine directly.
+
+    This runs UNCONDITIONALLY on every route that reaches this point still
+    un-escalated — case_status, permission, kb, and off_topic alike — not
+    only "kb". DESIGN's frustration/complexity signal is about the
+    customer's own conversation, not about which route ``classify`` picked;
+    a furious customer asking a routine case-status question must still be
+    escalatable (see ``backend/tests/graph/test_live_escalation_classifier.
+    py``). The ONLY skip is ``state["route"] == "escalate"`` already: an
+    earlier node found a hard-rule-equivalent structural condition, DESIGN's
+    combinator is an OR (nothing changes an already-True decision), and the
+    customer-facing reply is already the fixed
+    ``templates.ESCALATION_CUSTOMER_REPLY`` — there is nothing left to
+    judge, and calling the classifier there would be a wasted ``LLMClient``
+    call with no possible effect on the outcome."""
+    deps = _deps(config)
     gate_enabled = store.read_gate_enabled()
     tool_results = _tool_results(state)
     tool_results["decision"] = {"gate_enabled": gate_enabled}
     actions = _actions(state, "decide")
 
     if state["route"] != "escalate":
-        message_text = _latest_customer_message(state["conversation"])
-        hard_trigger = detect_deterministic_hard_rule(message_text)
-        if hard_trigger is not None:
-            update = _escalate_for(config, state, hard_trigger, tool_results=tool_results)
-            return {**update, "draft": templates.ESCALATION_CUSTOMER_REPLY, "actions": actions}
+        decision = deps.escalation_decider.evaluate(
+            ticket=state["ticket"],
+            conversation=state["conversation"],
+            topic=state.get("topic", ""),
+            tool_results=tool_results,
+        )
+        if decision.escalate:
+            return {
+                "route": "escalate",
+                "escalation": decision,
+                "tool_results": tool_results,
+                "draft": templates.ESCALATION_CUSTOMER_REPLY,
+                "actions": actions,
+            }
 
     return {"tool_results": tool_results, "actions": actions}
 

@@ -39,23 +39,21 @@ be exactly the escalation-rule logic T-5 is not scoped to write — it just
 turns every trigger it's handed into an escalation.
 
 T-5 expected "no other graph code changes" beyond swapping this class for
-T-6's real engine. That held for five of DESIGN's seven hard rules
+T-6's real engine. That held for three of DESIGN's seven hard rules
 (unknown_case/out_of_procedure/low_confidence, already detected upstream by
-existing nodes; frustration/complexity, the classifier's own job) but not
-for two: "billing terms" and "explicit human request" need no upstream tool
-result at all — just the customer's own words — and nothing in T-5's graph
-was already looking at every message for them. ``agent.nodes.decide`` (T-6
-now owns ``backend/src/agent/**`` too) therefore adds exactly one small,
-LLM-free check — ``escalation.engine.detect_deterministic_hard_rule`` —
-immediately before ``act``, so those two rules apply to every run, not only
-ones an earlier node already flagged. See that function's and
-``agent.nodes.decide``'s docstrings for why this is deliberately narrow:
-the classifier-driven half of the contract (frustration/complexity) is NOT
-given an equivalent always-on call site, because that would require an
-``LLMClient`` call on every successful run, which the existing
-graph/grounding suites' fake ``LLMClient`` fixtures do not anticipate and
-would fail. That residual gap is flagged, not silently resolved — see this
-ticket's final report.
+existing nodes) but not for the rest: "billing terms" and "explicit human
+request" need no upstream tool result at all — just the customer's own
+words — and the classifier-driven pair (frustration/complexity) needs no
+upstream trigger EITHER, since DESIGN's combinator runs it whenever no hard
+rule already fired, on every run, not only ones an earlier node happened to
+flag. ``agent.nodes.decide`` (T-6 now owns ``backend/src/agent/**`` too)
+therefore calls ``EscalationDecider.evaluate`` (above) — the full
+combinator, hard rules then classifier — for every run that reaches it with
+``state["route"] != "escalate"``. See that function's docstring for exactly
+which routes that is (every non-escalate branch: case_status, permission,
+kb, off_topic) and why calling it there, rather than duplicating the
+combinator's hard-rule-then-classifier logic inline, is what guarantees a
+fired hard rule always short-circuits the classifier.
 """
 
 from __future__ import annotations
@@ -118,6 +116,22 @@ class EscalationDecider(Protocol):
         tool_results: dict[str, Any],
     ) -> EscalationDecision: ...
 
+    def evaluate(
+        self,
+        *,
+        ticket: Ticket,
+        conversation: list[Message],
+        topic: str,
+        tool_results: dict[str, Any],
+    ) -> EscalationDecision:
+        """The full DESIGN combinator with NO assumed trigger — hard rules
+        first, then (only if none fired) the classifier's escalate+
+        confidence>=threshold verdict. ``agent.nodes.decide`` calls this,
+        not ``decide`` above, for every run that reaches it without an
+        earlier node already having routed to ``"escalate"`` — see that
+        function's docstring for exactly which routes that is and why."""
+        ...
+
 
 class PlaceholderEscalationDecider:
     """T-5's trivial stand-in — see module docstring. Escalates on every
@@ -136,3 +150,20 @@ class PlaceholderEscalationDecider:
         tool_results: dict[str, Any],
     ) -> EscalationDecision:
         return EscalationDecision(escalate=True, triggers=[trigger])
+
+    def evaluate(
+        self,
+        *,
+        ticket: Ticket,
+        conversation: list[Message],
+        topic: str,
+        tool_results: dict[str, Any],
+    ) -> EscalationDecision:
+        """No trigger is handed to this stand-in path, and — per the class
+        docstring — it does no judgment of its own, so it never escalates
+        here. Kept only so this class still structurally satisfies
+        ``EscalationDecider`` now that the Protocol requires the full
+        combinator too; nothing in this repo constructs
+        ``PlaceholderEscalationDecider`` as the live default, so this
+        method's behavior is untested and irrelevant in practice."""
+        return EscalationDecision(escalate=False, triggers=[])

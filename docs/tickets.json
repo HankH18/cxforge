@@ -211,7 +211,8 @@
         "backend/src/escalation/**",
         "backend/tests/escalation/**",
         "backend/src/agent/**",
-        "backend/tests/graph/**"
+        "backend/tests/graph/**",
+        "backend/tests/grounding/**"
       ],
       "depends_on": [
         "T-5"

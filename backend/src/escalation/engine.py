@@ -25,17 +25,12 @@ Two entry points, deliberately different in what they assume:
   contract exercised completely, and is what this ticket's own test suite
   (``backend/tests/escalation/**``) calls directly to prove the hard-rule
   predicates, the combinator's truth table, and the "hard rule beats the
-  classifier" adversarial case.
-
-Wiring note (see ``agent.nodes.decide`` and this ticket's final report):
-under the CURRENT graph, only ``decide`` above is reachable from a live
-run — ``evaluate``'s classifier-inclusive path (independently catching
-frustration/complexity with NO hard rule already fired) has no call site in
-the live graph, because adding one would require an LLMClient call on every
-successful run, which breaks every graph/grounding test's fake LLM client
-(it fails loudly on any schema it wasn't told to expect, by design). That
-is a real, deliberate limitation, not an oversight — flagged rather than
-silently resolved, exactly as instructed.
+  classifier" adversarial case. It is also what ``agent.nodes.decide`` calls
+  on the live graph, via ``AgentDeps.escalation_decider`` (an
+  ``EscalationEngine`` by default — see ``agent.graph.run_agent``), for
+  every run that reaches ``decide`` with ``state["route"] != "escalate"``:
+  the frustration/complexity half of R6 is reachable from a real run, not
+  only from this suite's direct calls into the engine.
 """
 
 from __future__ import annotations

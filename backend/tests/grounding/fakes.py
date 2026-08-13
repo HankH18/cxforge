@@ -17,6 +17,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from escalation.schemas import EscalationCall
+
 ResponseOrFactory = BaseModel | Callable[[list[dict[str, Any]]], BaseModel]
 
 
@@ -27,6 +29,22 @@ class FakeLLMClient:
 
     responses: dict[type[BaseModel], ResponseOrFactory]
     calls: list[tuple[type[BaseModel], list[dict[str, Any]]]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """Default the escalation classifier to a NON-escalating verdict.
+
+        T-6 wired an unconditional classifier call into ``decide``, so every
+        run now consults it. Without a registered response ``structured``
+        raises, and ``run_classifier`` treats any exception as abstention —
+        itself a pinned hard escalation trigger — which would silently turn
+        these send-path grounding tests into escalation tests and stop them
+        exercising the thing they exist to check. A test that wants to drive
+        the classifier registers its own ``EscalationCall`` and overrides
+        this. Mirrors ``backend/tests/graph/fakes.py``.
+        """
+        self.responses.setdefault(
+            EscalationCall, EscalationCall(escalate=False, reasons=[], confidence=0.0)
+        )
 
     def structured(
         self, schema: type[BaseModel], messages: list[dict[str, Any]], temperature: float = 0.0
