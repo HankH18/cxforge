@@ -21,6 +21,7 @@ import pytest
 from helpdesk.models import AuthorKind
 from helpdesk.port import HelpdeskPort
 
+from ._fake_email import make_email_harness
 from ._fake_zendesk import Seeded, ZendeskHarness, make_zendesk_harness
 
 
@@ -52,6 +53,7 @@ class AdapterHarness(Protocol):
 # `test_name[zendesk]`, `test_name[email]`, ...).
 ADAPTER_FACTORIES: dict[str, Callable[[], Iterator[AdapterHarness]]] = {
     "zendesk": make_zendesk_harness,
+    "email": make_email_harness,
 }
 
 
