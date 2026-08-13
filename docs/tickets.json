@@ -274,7 +274,9 @@
       "verify": "uv run pytest backend/tests/portal -q",
       "scope": [
         "backend/src/portal/**",
-        "backend/tests/portal/**"
+        "backend/tests/portal/**",
+        "backend/src/data/**",
+        "backend/src/agent/**"
       ],
       "depends_on": [
         "T-5",
