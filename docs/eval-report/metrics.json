@@ -1,0 +1,38 @@
+{
+  "approved": false,
+  "approval_status": "PROPOSED_AWAITING_HUMAN_REVIEW",
+  "confusion_matrix": {
+    "tp": 21,
+    "fp": 0,
+    "fn": 0,
+    "tn": 30
+  },
+  "precision": 1.0,
+  "recall": 1.0,
+  "f1": 1.0,
+  "hard_trigger_recall": 1.0,
+  "hard_trigger_subset_size": 16,
+  "recommended_threshold": 0.59,
+  "current_provisional_threshold": 0.5,
+  "label_distribution": {
+    "total": 51,
+    "routes": {
+      "case_status": 10,
+      "escalate": 21,
+      "kb": 10,
+      "off_topic": 5,
+      "permission": 5
+    },
+    "escalate": 21,
+    "not_escalate": 30,
+    "reasons": {
+      "billing": 4,
+      "complexity": 2,
+      "frustration": 3,
+      "human_request": 4,
+      "low_confidence": 5,
+      "out_of_procedure": 2,
+      "unknown_case": 2
+    }
+  }
+}

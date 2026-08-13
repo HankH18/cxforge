@@ -1,0 +1,670 @@
+# ============================================================================
+# evals/labeled_set.yaml — Escalation eval labeled set (T-7, docs/tickets.json)
+# ============================================================================
+#
+# WHAT THIS FILE IS
+# ------------------
+# ~50 fictional support tickets for "Meridian Forensic Genomics" (see
+# fixtures/README.md — no real lab/case/person), each hand-labeled with the
+# route and escalation outcome DESIGN's agent graph and escalation engine
+# (backend/src/escalation/**) should produce. `expected_route` is the FINAL
+# route a run should land on (case_status | permission | kb | off_topic |
+# escalate — escalate.py's `decide` always overwrites `route` to "escalate"
+# once any hard rule or thresholded classifier verdict fires, so
+# expected_route == "escalate" iff expected_escalate is true; there is no
+# other combination in the live graph). `expected_reasons` is drawn only
+# from the pinned `Reason` literal in backend/src/escalation/schemas.py:
+# billing, human_request, unknown_case, out_of_procedure, low_confidence,
+# frustration, complexity.
+#
+# THIS IS THE GROUND TRUTH THE EVAL REPORT (evals/report.py) IS MEASURED
+# AGAINST — see the `approval` block immediately below. A confusion
+# matrix / precision / recall number is only meaningful to the extent this
+# file is independent of the system it grades. That independence is the
+# deliverable, not a formality.
+# ============================================================================
+
+approval:
+  # PROPOSED_AWAITING_HUMAN_REVIEW | APPROVED — only the project owner may
+  # ever change this to APPROVED, after working through evals/REVIEW.md.
+  # The coding agent that authored these labels (T-7) MUST NOT set this to
+  # APPROVED, MUST NOT fill in approved_by/approved_date, and MUST NOT
+  # infer approval from anything short of the human explicitly saying so.
+  # docs/tickets.json T-7 non-goal: "no synthetic label approval — the
+  # human sign-off is external ground truth." CLAUDE.md: "T-7 label
+  # approval" is listed under human-only steps to surface and wait on,
+  # never attempt.
+  status: PROPOSED_AWAITING_HUMAN_REVIEW
+  approved_by: ""
+  approved_date: ""
+  statement: >
+    These labels are proposed ground truth for the T-7 escalation eval,
+    authored by the coding agent that implemented T-7. They are NOT yet
+    reviewed or approved. Any precision/recall/F1/confusion-matrix number
+    computed against this file (see evals/report.py and
+    docs/eval-report/) is a DRAFT only, not a real measurement of the
+    escalation engine, until a human owner reviews evals/REVIEW.md and
+    flips this block to status: APPROVED with their name and date.
+
+meta:
+  ticket: T-7
+  authored_by: "coding agent (T-7 implementation) — see approval block above"
+  fictional_lab: "Meridian Forensic Genomics (fixtures/README.md)"
+  source_fixtures: ["fixtures/cases.yaml", "fixtures/kb/*.md"]
+  reason_literal_pinned_in: "backend/src/escalation/schemas.py"
+  route_literal: ["case_status", "permission", "kb", "off_topic", "escalate"]
+  count_note: "~50 tickets; docs/tickets.json T-7 non-goal caps the set at ~60"
+  id_convention: >
+    Ticket ids are prefixed by category for human/test skimmability:
+    cs-* (case_status), perm-* (permission), kb-* (kb), off-* (off_topic),
+    esc-<hard-trigger-name>-* for each of DESIGN's seven hard triggers
+    (billing, human_request, unknown_case, out_of_procedure, and three
+    low_confidence subtypes — empty_retrieval / verifier_failure /
+    abstention, since DESIGN's Reason literal collapses all three to the
+    single value "low_confidence" and the id is the only place the
+    intended subtype is distinguishable), and esc-frustration-* /
+    esc-complexity-* for the classifier-judged fuzzy categories, each
+    split into "clear" and "borderline" ids per evals/REVIEW.md.
+
+tickets:
+  # ==========================================================================
+  # case_status — routine, no escalation
+  # ==========================================================================
+  - id: cs-intake-01
+    subject: "Status of my new submission"
+    body: >
+      Hi, I submitted my case MFG-2026-0158 last week. Can you tell me what
+      stage it's in right now and roughly how long that stage takes?
+    expected_route: case_status
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: cs-extraction-01
+    subject: "Update on case MFG-2025-0822"
+    body: >
+      Checking in on case MFG-2025-0822 — what stage is it in at the moment?
+      No rush, just want a status update for my records.
+    expected_route: case_status
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: cs-sequencing-01
+    subject: "Where is my case in the process"
+    body: >
+      Hello, could you let me know the current stage for case MFG-2025-0530?
+      Just want to know where things stand.
+    expected_route: case_status
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: cs-genealogy-01
+    subject: "Genealogy stage question"
+    body: >
+      My case MFG-2025-0301 is in the genealogy stage. What's actually
+      happening at this point, and roughly how much longer should I expect
+      it to take?
+    expected_route: case_status
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: cs-complete-01
+    subject: "Is my case done?"
+    body: >
+      I think case MFG-2025-0102 should be finished by now — is it complete,
+      and if so what's the current status shown on your end?
+    expected_route: case_status
+    expected_escalate: false
+    expected_reasons: []
+
+  # ==========================================================================
+  # permission — always-granted requests, no escalation
+  # ==========================================================================
+  - id: perm-add-contact-01
+    subject: "Add someone to my case"
+    body: >
+      Can you add my spouse as an authorized contact on case MFG-2025-0734
+      so they can also call in for updates?
+    expected_route: permission
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: perm-add-contact-02
+    subject: "Add a co-investigator to the case file"
+    body: >
+      Please add our co-investigator as an authorized contact on case
+      MFG-2025-0980 so they can request status directly.
+    expected_route: permission
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: perm-resend-report-01
+    subject: "Lost my report download link"
+    body: >
+      Could you resend the report for case MFG-2025-0110 to the email
+      address on file? I lost the original download link.
+    expected_route: permission
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: perm-extend-retention-01
+    subject: "Extend how long you keep my case data"
+    body: >
+      Can you extend the records-retention window on case MFG-2025-0125 by
+      six months? Our internal review is running a bit behind schedule.
+    expected_route: permission
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: perm-extend-retention-02
+    subject: "Retention extension request"
+    body: >
+      Please extend the retention period on case MFG-2025-0140 by a full 12
+      months from today if that's something you can do.
+    expected_route: permission
+    expected_escalate: false
+    expected_reasons: []
+
+  # ==========================================================================
+  # kb — routine policy/process questions, no escalation (includes two
+  # adversarial "looks like a hard trigger but isn't" near-misses)
+  # ==========================================================================
+  - id: kb-turnaround-01
+    subject: "How long does this usually take?"
+    body: >
+      In general, how long does each stage of the process usually take from
+      intake through to a final report?
+    expected_route: kb
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: kb-refund-eligibility-01
+    subject: "Refund question before I decide"
+    body: >
+      If I decide to withdraw my case, is the intake fee refundable? Just
+      trying to understand my options before I commit either way.
+    expected_route: kb
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: kb-billing-structure-01
+    subject: "How does billing work?"
+    body: >
+      Can you explain how billing works and roughly when I get billed at
+      each stage? Just want to understand the payment structure.
+    expected_route: kb
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: kb-rush-eligibility-01
+    subject: "Can I pay to speed things up?"
+    body: >
+      Is there a rush option where I could pay extra to speed up extraction
+      or sequencing? What would that involve?
+    expected_route: kb
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: kb-retention-period-01
+    subject: "How long do you keep my data on file?"
+    body: >
+      How long do you typically retain case data and DNA profiles after a
+      report is delivered?
+    expected_route: kb
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: kb-report-format-01
+    subject: "What will my report look like?"
+    body: >
+      What format will my final report be delivered in, and is there a
+      shorter summary version available too?
+    expected_route: kb
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: kb-genealogy-limits-01
+    subject: "Is a genealogy match guaranteed?"
+    body: >
+      Is genealogy research guaranteed to find a match eventually, or can it
+      come back with nothing? Trying to set my own expectations.
+    expected_route: kb
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: kb-reextraction-explain-01
+    subject: "Why is extraction taking a bit longer?"
+    body: >
+      My case has needed a second extraction attempt. Is that normal, and
+      does it mean anything went wrong with my sample?
+    expected_route: kb
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: kb-adversarial-invoice-mention-01
+    subject: "Question about the fee gates"
+    body: >
+      I noticed the extraction fee on my invoice this month — does the
+      genealogy fee get billed the same way, as a separate charge later on?
+    expected_route: kb
+    expected_escalate: false
+    expected_reasons: []
+    note: >
+      ADVERSARIAL near-miss: mentions "invoice" and a fee by name but is a
+      routine question, not a dispute — must NOT trip the billing-dispute
+      hard rule (rules.is_billing_dispute).
+
+  - id: kb-adversarial-human-mention-01
+    subject: "Is this all automated?"
+    body: >
+      Is a human being reviewing my sample at some point in this process, or
+      is it entirely automated lab machinery from start to finish?
+    expected_route: kb
+    expected_escalate: false
+    expected_reasons: []
+    note: >
+      ADVERSARIAL near-miss: contains "human" but is a curiosity question
+      about lab process, not a request to speak with a person — must NOT
+      trip the explicit-human-request hard rule
+      (rules.is_explicit_human_request).
+
+  # ==========================================================================
+  # off_topic — unrelated to the lab, no escalation
+  # ==========================================================================
+  - id: off-weather-01
+    subject: "Nice weather today"
+    body: >
+      Hope you're having a good day! Is it sunny where your office is? Just
+      making conversation while I wait.
+    expected_route: off_topic
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: off-unrelated-product-01
+    subject: "Do you sell ancestry kits?"
+    body: >
+      Do you sell consumer at-home ancestry test kits like the ones I've
+      seen advertised online? Looking for a gift idea.
+    expected_route: off_topic
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: off-greeting-01
+    subject: "hey"
+    body: >
+      hi there, just saying hello, how's it going
+    expected_route: off_topic
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: off-newsletter-01
+    subject: "Unsubscribe me"
+    body: >
+      Please take me off your mailing list, I keep getting newsletter emails
+      I never signed up for.
+    expected_route: off_topic
+    expected_escalate: false
+    expected_reasons: []
+
+  - id: off-retail-unrelated-01
+    subject: "Do you sell lab coats?"
+    body: >
+      Random question — do you sell branded lab coats or merchandise to the
+      public? A friend of mine works in a lab and I thought it'd be a fun
+      gift.
+    expected_route: off_topic
+    expected_escalate: false
+    expected_reasons: []
+
+  # ==========================================================================
+  # escalate — hard trigger: billing dispute
+  # ==========================================================================
+  - id: esc-billing-double-charge-01
+    subject: "Charged twice for extraction"
+    body: >
+      I was charged twice for my extraction fee this month — this is a
+      billing error and I want it fixed.
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [billing]
+
+  - id: esc-billing-wrong-amount-01
+    subject: "Possible billing mistake"
+    body: >
+      Hi! I hope you're doing well. I think I may have been charged the
+      wrong amount for my extraction fee — could someone please look into
+      it? Thank you so much!
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [billing]
+    note: >
+      ADVERSARIAL: politely worded, should still hard-escalate — tone must
+      not suppress a genuine billing dispute.
+
+  - id: esc-billing-refund-demand-01
+    subject: "Refund for sequencing fee"
+    body: >
+      Please issue a refund for the sequencing fee, I don't think it should
+      have been charged in the first place.
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [billing]
+
+  # ==========================================================================
+  # escalate — hard trigger: explicit human request
+  # ==========================================================================
+  - id: esc-human_request-direct-01
+    subject: "Want a person, not a bot"
+    body: >
+      I want to talk to a real person, not a bot.
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [human_request]
+
+  - id: esc-human_request-polite-01
+    subject: "Could I speak with someone?"
+    body: >
+      Would it be possible to speak with a human representative about this?
+      No rush at all, thank you!
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [human_request]
+    note: >
+      ADVERSARIAL: extremely polite phrasing, should still hard-escalate —
+      a courteous tone is not evidence the customer doesn't want a human.
+
+  - id: esc-human_request-bot-callout-01
+    subject: "I know you're a bot"
+    body: >
+      I know this is a bot. I need an actual person to help me, please.
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [human_request]
+
+  # ==========================================================================
+  # escalate — both a billing dispute AND an explicit human request at once
+  # (DESIGN's engine independently checks both; a run can trip more than
+  # one reason simultaneously — see backend/tests/escalation/test_combinator.py)
+  # ==========================================================================
+  - id: esc-combined-billing-human_request-01
+    subject: "This billing issue needs a person"
+    body: >
+      I need to talk to a real person about this billing error, I was
+      charged twice!
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [billing, human_request]
+
+  # ==========================================================================
+  # escalate — hard trigger: unknown/unresolvable case
+  # ==========================================================================
+  - id: esc-unknown_case-nonexistent-id-01
+    subject: "No news on my case"
+    body: >
+      Is this case with MFG-2025-9999 ever going to be looked at? I
+      submitted it months ago and haven't heard anything.
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [unknown_case]
+    note: >
+      MFG-2025-9999 is deliberately NOT in fixtures/cases.yaml — a case-id
+      hint that fails resolution is DESIGN's "unknown/unresolvable case".
+
+  - id: esc-unknown_case-nonexistent-id-02
+    subject: "Following up"
+    body: >
+      Following up on case MFG-2099-0001, any news on where it stands?
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [unknown_case]
+    note: >
+      MFG-2099-0001 is deliberately NOT in fixtures/cases.yaml (also not a
+      real case id shape used by any 2025/2026 case on file).
+
+  # ==========================================================================
+  # escalate — hard trigger: out-of-procedure request
+  # ==========================================================================
+  - id: esc-out_of_procedure-change-requester-01
+    subject: "Switch who's in charge of the case"
+    body: >
+      Can you change the primary requester on case MFG-2025-0734 to my
+      brother instead of me? He'll be handling it from here.
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [out_of_procedure]
+    note: >
+      Changing the primary requester is explicitly NOT on the always-grant
+      list (fixtures/kb/case-information-authorization.md) — requires
+      specialist review.
+
+  - id: esc-out_of_procedure-early-deletion-01
+    subject: "Delete my data now"
+    body: >
+      Please delete all my genetic data and case file today, I don't want
+      it retained at all.
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [out_of_procedure]
+    note: >
+      Early data-deletion is explicitly a specialist-review matter per
+      fixtures/kb/privacy-and-data-retention.md, not an always-granted
+      request.
+
+  # ==========================================================================
+  # escalate — hard trigger: empty retrieval (kb route, nothing relevant in
+  # any of the 15 fixtures/kb/*.md docs)
+  # ==========================================================================
+  - id: esc-low_confidence-empty_retrieval-accreditation-01
+    subject: "Lab accreditation question"
+    body: >
+      Is Meridian ISO 17025 accredited, and what are your international
+      shipping and customs requirements for skeletal remains?
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [low_confidence]
+    note: >
+      No fixtures/kb/*.md document covers accreditation or international
+      customs — a genuine empty-retrieval case for the kb route.
+
+  - id: esc-low_confidence-empty_retrieval-international-01
+    subject: "Submitting from outside the US"
+    body: >
+      Do you accept samples from law enforcement agencies outside the US,
+      and what import paperwork would be needed on our end?
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [low_confidence]
+    note: >
+      Not covered by any fixtures/kb/*.md document — another genuine
+      empty-retrieval case.
+
+  # ==========================================================================
+  # escalate — hard trigger: verifier failure (verifier_score < 0.7). These
+  # are questions engineered to pull a kb-route draft toward an
+  # over-specific, likely-ungrounded answer (an exact date, or a summed
+  # cross-stage number turnaround-times.md explicitly says not to compute)
+  # that the groundedness judge / grounding guard should catch.
+  # ==========================================================================
+  - id: esc-low_confidence-verifier_failure-exact-date-01
+    subject: "I need an exact date"
+    body: >
+      Can you tell me the EXACT calendar date my results will be ready, not
+      just an estimate? I need to plan around it precisely.
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [low_confidence]
+    note: >
+      fixtures/kb/turnaround-times.md only publishes per-stage windows, not
+      exact dates — a compliant draft cannot ground a specific calendar
+      date, which the verifier/grounding guard should catch.
+
+  - id: esc-low_confidence-verifier_failure-summed-timeline-01
+    subject: "Total days until everything is done"
+    body: >
+      Add up every remaining stage for me: exactly how many total days from
+      today until intake, extraction, sequencing AND genealogy are ALL
+      finished, added together?
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [low_confidence]
+    note: >
+      fixtures/kb/turnaround-times.md explicitly warns against adding
+      stage windows together — a compliant draft has nothing grounded to
+      sum, which the verifier should catch.
+
+  # ==========================================================================
+  # escalate — hard trigger: classifier abstention (the escalation
+  # classifier fails to return a usable, schema-valid verdict). Real
+  # detection requires an actual failed/unparseable LLM call — no
+  # OPENAI_API_KEY exists in this environment, so this label documents the
+  # INTENDED scenario; evals/report.py stubs the classifier failure for
+  # this specific id rather than re-deriving it from the text.
+  # ==========================================================================
+  - id: esc-low_confidence-abstention-garbled-01
+    subject: "???"
+    body: >
+      ??? this isnt right. fix. now. cant even tell whats going on with
+      any of this anymore
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [low_confidence]
+    note: >
+      Represents a classifier-abstention scenario (an unparseable/refused
+      model verdict) — the abstention itself is a property of the LLM
+      call failing, not of the text, so evals/report.py replays this as a
+      stubbed classifier failure for this id specifically rather than
+      inferring it from wording.
+
+  # ==========================================================================
+  # escalate — frustration (classifier-judged), clear-cut
+  # ==========================================================================
+  - id: esc-frustration-repeated-emails-01
+    subject: "Still no response"
+    body: >
+      This is the fourth time I've emailed about case MFG-2025-0822 with no
+      response. I am extremely frustrated and considering finding another
+      lab.
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [frustration]
+
+  - id: esc-frustration-furious-01
+    subject: "Completely ignored"
+    body: >
+      I am furious. Nobody has told me anything in months and I feel
+      completely ignored by this lab.
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [frustration]
+
+  - id: esc-frustration-repeated-asks-01
+    subject: "Third time asking"
+    body: >
+      Absolutely unacceptable. I've asked THREE times now and keep getting
+      the same non-answer every time.
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [frustration]
+
+  # ==========================================================================
+  # escalate — frustration (classifier-judged), GENUINELY BORDERLINE —
+  # see evals/REVIEW.md for the contestable framing and counter-case on
+  # each of these.
+  # ==========================================================================
+  - id: esc-frustration-borderline-mild-01
+    subject: "Any update?"
+    body: >
+      It's been a while and I was hoping for an update, this is a bit
+      frustrating honestly.
+    expected_route: case_status
+    expected_escalate: false
+    expected_reasons: []
+    note: >
+      BORDERLINE (see evals/REVIEW.md) — proposed as a routine status
+      check the agent can answer directly; "esc-" id prefix marks the
+      CANDIDATE hard-trigger-adjacent category being tested, not the
+      final proposed route.
+
+  - id: esc-frustration-borderline-impatient-01
+    subject: "Getting a little impatient"
+    body: >
+      I know these things take time, but I'll admit I'm getting a little
+      impatient waiting on my results.
+    expected_route: case_status
+    expected_escalate: false
+    expected_reasons: []
+    note: >
+      BORDERLINE (see evals/REVIEW.md) — proposed as a routine status
+      check the agent can answer directly.
+
+  - id: esc-frustration-borderline-near-window-01
+    subject: "Kind of annoyed, but I get it"
+    body: >
+      Kind of annoyed I haven't heard back yet, though I do get that these
+      things take time. Just wanted to say something.
+    expected_route: case_status
+    expected_escalate: false
+    expected_reasons: []
+    note: >
+      BORDERLINE (see evals/REVIEW.md) — proposed as a routine status
+      check the agent can answer directly.
+
+  # ==========================================================================
+  # escalate — complexity (classifier-judged), clear-cut
+  # ==========================================================================
+  - id: esc-complexity-entangled-rush-two-cases-01
+    subject: "Trying to plan around a court date"
+    body: >
+      I have two cases with you, one in extraction and one in sequencing.
+      Can I rush both, does the rush surcharge stack differently for
+      extraction versus sequencing, and if I rush the extraction one first
+      would that change when genealogy could realistically start on the
+      other if I add it later? Trying to plan around a court date.
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [complexity]
+
+  - id: esc-complexity-entangled-failure-timeline-shipping-01
+    subject: "A few things at once"
+    body: >
+      My case has already gone through two re-extraction attempts. I'm
+      trying to understand a few things at once: what happens with fees if
+      the next attempt also doesn't work, whether that changes my
+      timeline for sequencing and genealogy after that, and separately
+      whether the process is different for sending a replacement sample
+      from overseas since our agency isn't based in the US.
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [complexity]
+
+  # ==========================================================================
+  # escalate — complexity (classifier-judged), GENUINELY BORDERLINE —
+  # see evals/REVIEW.md for the contestable framing and counter-case on
+  # each of these.
+  # ==========================================================================
+  - id: esc-complexity-borderline-two-part-01
+    subject: "Two quick things"
+    body: >
+      Quick question — what stage is case MFG-2025-0865 in right now, and
+      separately, could I also pay to rush whichever stage is next?
+    expected_route: case_status
+    expected_escalate: false
+    expected_reasons: []
+    note: >
+      BORDERLINE (see evals/REVIEW.md) — proposed as answerable directly
+      (a status lookup plus a routine rush-eligibility explanation), not
+      genuinely tangled enough to need a human.
+
+  - id: esc-complexity-borderline-stalled-01
+    subject: "Feels like nothing is moving"
+    body: >
+      It feels like my case has been sitting for a while without much
+      movement. Is that normal, or is something wrong? Not upset, just
+      want to understand what's going on and whether I should be doing
+      anything differently.
+    expected_route: case_status
+    expected_escalate: false
+    expected_reasons: []
+    note: >
+      BORDERLINE (see evals/REVIEW.md) — proposed as answerable directly
+      via the normal re-extraction/turnaround explanation, not clearly
+      "stalled beyond window" enough on its own to require a specialist.
