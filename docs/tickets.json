@@ -24,7 +24,10 @@
         "docker-compose.yml",
         "pyproject.toml",
         ".env.example",
-        "promptfooconfig.yaml"
+        "promptfooconfig.yaml",
+        "evals/**",
+        ".gitignore",
+        "uv.lock"
       ],
       "depends_on": [],
       "non_goals": [

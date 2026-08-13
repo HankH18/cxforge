@@ -43,7 +43,9 @@ marked `parallel_safe`.
   registered; 4) GitHub Actions workflow runs ruff + mypy + `pytest -m "not
   live"` only; 5) promptfoo config stub and `.env.example` present.
 - **Verify**: `docker compose up -d db && uv run pytest && uv run ruff check . && uv run mypy backend`
-- **Scope**: repo root, `backend/**`, `portal/**` (scaffold only), `.github/**`
+- **Scope**: repo root (`pyproject.toml`, `uv.lock`, `.gitignore`,
+  `docker-compose.yml`, `.env.example`, `promptfooconfig.yaml`), `backend/**`,
+  `portal/**` (scaffold only), `evals/**`, `.github/**`
 - **Depends on**: none
 - **Non-goals**: no business logic, no portal components beyond scaffold.
 
