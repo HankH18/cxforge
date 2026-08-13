@@ -42,7 +42,7 @@ marked `parallel_safe`.
   pgvector healthy; 3) pytest markers `contract`, `grounding`, `live`
   registered; 4) GitHub Actions workflow runs ruff + mypy + `pytest -m "not
   live"` only; 5) promptfoo config stub and `.env.example` present.
-- **Verify**: `docker compose up -d db && pytest && ruff check . && mypy backend`
+- **Verify**: `docker compose up -d db && uv run pytest && uv run ruff check . && uv run mypy backend`
 - **Scope**: repo root, `backend/**`, `portal/**` (scaffold only), `.github/**`
 - **Depends on**: none
 - **Non-goals**: no business logic, no portal components beyond scaffold.
@@ -56,7 +56,7 @@ marked `parallel_safe`.
   and embedded into `kb_chunks`; 3) typed lookup functions (by case_id, by
   requester_email) with miss returning a typed NotFound; 4) retrieval smoke
   test returns the relevant chunk for 5 sample queries.
-- **Verify**: `pytest backend/tests/data -q`
+- **Verify**: `uv run pytest backend/tests/data -q`
 - **Scope**: `backend/src/data/**`, `fixtures/**`, `backend/tests/data/**`
 - **Depends on**: T-0
 - **Non-goals**: no ingestion pipeline; no real-lab content. `parallel_safe`
@@ -73,7 +73,7 @@ marked `parallel_safe`.
   the Protocol, parametrized by adapter, passing over mocked Zendesk HTTP;
   5) `scripts/live_smoke.py` exercising each op against a real trial (manual
   run, env-gated).
-- **Verify**: `pytest -m contract -q`
+- **Verify**: `uv run pytest -m contract -q`
 - **Scope**: `backend/src/helpdesk/**`, `backend/tests/contract/**`, `scripts/live_smoke.py`
 - **Depends on**: T-0
 - **Non-goals**: no macros; no email adapter (T-3). `parallel_safe` with T-1.
@@ -86,7 +86,7 @@ marked `parallel_safe`.
   identical parametrized contract suite; 2) README section stating exactly
   what a production email channel would add (IMAP polling, threading via
   Message-ID) without implementing it.
-- **Verify**: `pytest -m contract -q`
+- **Verify**: `uv run pytest -m contract -q`
 - **Scope**: `backend/src/helpdesk/email_adapter.py`, contract test params
 - **Depends on**: T-2
 - **Non-goals**: no real SMTP/IMAP. Stub stays a stub. `parallel_safe` with
@@ -102,7 +102,7 @@ marked `parallel_safe`.
   AI agent user, trigger with `tags not include ai-processed` nullifier,
   webhook + signing secret, cloudflared; 5) unit tests for HMAC
   reject/accept, dedupe, self-event drop.
-- **Verify**: `pytest backend/tests/ingress -q`
+- **Verify**: `uv run pytest backend/tests/ingress -q`
 - **Scope**: `backend/src/ingress/**`, `backend/tests/ingress/**`, `docs/zendesk-runbook.md`
 - **Depends on**: T-2
 - **Non-goals**: no polling fallback unless the trial blocks webhooks (if it
@@ -120,7 +120,7 @@ marked `parallel_safe`.
   the four canonical scenarios end-to-end in-process; 7) grounding suite:
   adversarial unknown-case and false-premise inputs produce escalation or
   refusal, never invented facts.
-- **Verify**: `pytest backend/tests/graph -q && pytest -m grounding -q`
+- **Verify**: `uv run pytest backend/tests/graph -q && uv run pytest -m grounding -q`
 - **Scope**: `backend/src/agent/**`, `backend/tests/graph/**`, `backend/tests/grounding/**`
 - **Depends on**: T-1, T-2
 - **Non-goals**: no checkpointing/interrupts/subgraphs; no escalation rule
@@ -134,7 +134,7 @@ marked `parallel_safe`.
   final-decision combinator (rule OR classifier≥threshold); 4) internal note
   contains summary, grounded facts, reason enum; customer notice posted; 5)
   wired into T-5's `decide`/`act`.
-- **Verify**: `pytest backend/tests/escalation -q`
+- **Verify**: `uv run pytest backend/tests/escalation -q`
 - **Scope**: `backend/src/escalation/**`, `backend/tests/escalation/**`
 - **Depends on**: T-5
 - **Non-goals**: no threshold tuning (T-7 owns it); no sentiment model beyond
@@ -152,7 +152,7 @@ marked `parallel_safe`.
   curve image with chosen threshold marked; 4) recall ≥ 0.95 on the
   hard-trigger subset at the committed threshold; threshold written to
   config; 5) report lands in `docs/eval-report/`.
-- **Verify**: `python -m evals.report && pytest backend/tests/evals -q`
+- **Verify**: `uv run python -m evals.report && uv run pytest backend/tests/evals -q`
 - **Scope**: `evals/**`, `docs/eval-report/**`, escalation threshold config
 - **Depends on**: T-6
 - **Non-goals**: no expanding the set past ~60; no synthetic label approval —
@@ -166,7 +166,7 @@ marked `parallel_safe`.
   `gated_sent`; 3) metrics computed per the pinned definitions — gated sends
   excluded from the human-avoidance numerator; 4) API tests cover both gate
   states and metric math.
-- **Verify**: `pytest backend/tests/portal -q`
+- **Verify**: `uv run pytest backend/tests/portal -q`
 - **Scope**: `backend/src/portal/**`, `backend/tests/portal/**`
 - **Depends on**: T-5, T-6
 - **Non-goals**: no UI (T-9); no real auth/multi-user. `parallel_safe` with
@@ -195,7 +195,7 @@ marked `parallel_safe`.
   tags, status); 3) emits latency report (p50/p95 webhook→reply); 4) p95 <
   5 min against the deployed or tunneled instance; 5) marked `-m live`,
   excluded from CI.
-- **Verify**: `pytest -m live -q` (env-gated; requires runbook completed)
+- **Verify**: `uv run pytest -m live -q` (env-gated; requires runbook completed)
 - **Scope**: `backend/tests/live/**`, `scripts/scenario_runner.py`
 - **Depends on**: T-4, T-6
 - **Non-goals**: no load testing beyond demo volume.

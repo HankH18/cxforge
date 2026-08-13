@@ -5,7 +5,10 @@
       "id": "T-0",
       "title": "Repo bootstrap and test harness",
       "objective": "Monorepo skeleton so every downstream verify command runs.",
-      "refs": ["SPEC#constraints", "DESIGN#verification-strategy"],
+      "refs": [
+        "SPEC#constraints",
+        "DESIGN#verification-strategy"
+      ],
       "acceptance": [
         "backend/ (FastAPI app stub), portal/ (Vite React TS stub), evals/, docs/ exist",
         "docker-compose brings up Postgres 16 + pgvector healthy",
@@ -13,34 +16,62 @@
         "GitHub Actions workflow runs ruff + mypy + pytest -m 'not live' only",
         "promptfoo config stub and .env.example present"
       ],
-      "verify": "docker compose up -d db && pytest && ruff check . && mypy backend",
-      "scope": ["backend/**", "portal/**", ".github/**", "docker-compose.yml", "pyproject.toml", ".env.example", "promptfooconfig.yaml"],
+      "verify": "docker compose up -d db && uv run pytest && uv run ruff check . && uv run mypy backend",
+      "scope": [
+        "backend/**",
+        "portal/**",
+        ".github/**",
+        "docker-compose.yml",
+        "pyproject.toml",
+        ".env.example",
+        "promptfooconfig.yaml"
+      ],
       "depends_on": [],
-      "non_goals": ["No business logic", "No portal components beyond scaffold"],
+      "non_goals": [
+        "No business logic",
+        "No portal components beyond scaffold"
+      ],
       "parallel_safe": false
     },
     {
       "id": "T-1",
       "title": "Data layer: case system and KB fixtures",
       "objective": "Fictional-lab case DB and KB the agent grounds in (R2, R4).",
-      "refs": ["R2", "R4", "DESIGN#case-system", "DESIGN#data-models"],
+      "refs": [
+        "R2",
+        "R4",
+        "DESIGN#case-system",
+        "DESIGN#data-models"
+      ],
       "acceptance": [
         "cases schema + idempotent seeder, ~30 cases covering every stage incl. edge cases (just-submitted, complete, stale)",
         "~15 fictional SOP/policy/service docs authored under fixtures/kb/, chunked and embedded into kb_chunks",
         "typed lookup functions (by case_id, by requester_email) with miss returning a typed NotFound",
         "retrieval smoke test returns the relevant chunk for 5 sample queries"
       ],
-      "verify": "pytest backend/tests/data -q",
-      "scope": ["backend/src/data/**", "fixtures/**", "backend/tests/data/**"],
-      "depends_on": ["T-0"],
-      "non_goals": ["No ingestion pipeline", "No real-lab content"],
+      "verify": "uv run pytest backend/tests/data -q",
+      "scope": [
+        "backend/src/data/**",
+        "fixtures/**",
+        "backend/tests/data/**"
+      ],
+      "depends_on": [
+        "T-0"
+      ],
+      "non_goals": [
+        "No ingestion pipeline",
+        "No real-lab content"
+      ],
       "parallel_safe": true
     },
     {
       "id": "T-2",
       "title": "HelpdeskPort, ZendeskAdapter, contract suite",
       "objective": "The port boundary and its full Zendesk implementation (R1 write-side, R14 foundation).",
-      "refs": ["R14", "DESIGN#helpdeskport"],
+      "refs": [
+        "R14",
+        "DESIGN#helpdeskport"
+      ],
       "acceptance": [
         "Protocol + normalized models exactly as pinned in DESIGN",
         "OAuth client (no API tokens), backoff honoring Retry-After",
@@ -48,50 +79,90 @@
         "contract suite written against the Protocol, parametrized by adapter, passing over mocked Zendesk HTTP",
         "scripts/live_smoke.py exercising each op against a real trial (manual run, env-gated)"
       ],
-      "verify": "pytest -m contract -q",
-      "scope": ["backend/src/helpdesk/**", "backend/tests/contract/**", "scripts/live_smoke.py"],
-      "depends_on": ["T-0"],
-      "non_goals": ["No macros", "No email adapter (T-3)"],
+      "verify": "uv run pytest -m contract -q",
+      "scope": [
+        "backend/src/helpdesk/**",
+        "backend/tests/contract/**",
+        "scripts/live_smoke.py"
+      ],
+      "depends_on": [
+        "T-0"
+      ],
+      "non_goals": [
+        "No macros",
+        "No email adapter (T-3)"
+      ],
       "parallel_safe": true
     },
     {
       "id": "T-3",
       "title": "EmailAdapter stub passes the contract suite",
-      "objective": "Prove the port is swappable — the differentiation artifact (R14).",
-      "refs": ["R14", "DESIGN#helpdeskport"],
+      "objective": "Prove the port is swappable \u2014 the differentiation artifact (R14).",
+      "refs": [
+        "R14",
+        "DESIGN#helpdeskport"
+      ],
       "acceptance": [
         "EmailAdapter over an in-memory fake transport passes the identical parametrized contract suite",
         "README section stating exactly what a production email channel would add (IMAP polling, threading via Message-ID) without implementing it"
       ],
-      "verify": "pytest -m contract -q",
-      "scope": ["backend/src/helpdesk/email_adapter.py", "backend/tests/contract/**", "README.md"],
-      "depends_on": ["T-2"],
-      "non_goals": ["No real SMTP/IMAP — the stub stays a stub"],
+      "verify": "uv run pytest -m contract -q",
+      "scope": [
+        "backend/src/helpdesk/email_adapter.py",
+        "backend/tests/contract/**",
+        "README.md"
+      ],
+      "depends_on": [
+        "T-2"
+      ],
+      "non_goals": [
+        "No real SMTP/IMAP \u2014 the stub stays a stub"
+      ],
       "parallel_safe": true
     },
     {
       "id": "T-4",
       "title": "Webhook ingress and Zendesk setup runbook",
       "objective": "Exactly-once, loop-safe ticket event intake (R1).",
-      "refs": ["R1", "DESIGN#webhook-ingress"],
+      "refs": [
+        "R1",
+        "DESIGN#webhook-ingress"
+      ],
       "acceptance": [
         "HMAC-verified endpoint matching the pinned payload",
-        "idempotency via tickets_seen — duplicate (ticket, comment) events are no-ops",
+        "idempotency via tickets_seen \u2014 duplicate (ticket, comment) events are no-ops",
         "events authored by the AI user are dropped",
         "docs/zendesk-runbook.md covers the human steps: trial signup, OAuth app, AI agent user, trigger with 'tags not include ai-processed' nullifier, webhook + signing secret, cloudflared",
         "unit tests for HMAC reject/accept, dedupe, self-event drop"
       ],
-      "verify": "pytest backend/tests/ingress -q",
-      "scope": ["backend/src/ingress/**", "backend/tests/ingress/**", "docs/zendesk-runbook.md"],
-      "depends_on": ["T-2"],
-      "non_goals": ["No polling fallback unless the trial blocks webhooks — if it does, STOP and tell the human (plan defect)"],
+      "verify": "uv run pytest backend/tests/ingress -q",
+      "scope": [
+        "backend/src/ingress/**",
+        "backend/tests/ingress/**",
+        "docs/zendesk-runbook.md"
+      ],
+      "depends_on": [
+        "T-2"
+      ],
+      "non_goals": [
+        "No polling fallback unless the trial blocks webhooks \u2014 if it does, STOP and tell the human (plan defect)"
+      ],
       "parallel_safe": true
     },
     {
       "id": "T-5",
       "title": "Agent core graph",
-      "objective": "The LangGraph run: classify, route, ground, compose, verify, decide, act (R2–R5, R7, R9, R11 decide-side).",
-      "refs": ["R2", "R3", "R4", "R5", "R7", "R9", "DESIGN#agent-graph", "DESIGN#llmclient"],
+      "objective": "The LangGraph run: classify, route, ground, compose, verify, decide, act (R2\u2013R5, R7, R9, R11 decide-side).",
+      "refs": [
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R7",
+        "R9",
+        "DESIGN#agent-graph",
+        "DESIGN#llmclient"
+      ],
       "acceptance": [
         "graph nodes/state exactly as pinned in DESIGN",
         "all model calls through LLMClient; OpenAI impl with strict structured outputs, pinned model constant",
@@ -101,17 +172,30 @@
         "graph tests with a fake LLMClient cover the four canonical scenarios end-to-end in-process",
         "grounding suite: adversarial unknown-case and false-premise inputs produce escalation or refusal, never invented facts"
       ],
-      "verify": "pytest backend/tests/graph -q && pytest -m grounding -q",
-      "scope": ["backend/src/agent/**", "backend/tests/graph/**", "backend/tests/grounding/**"],
-      "depends_on": ["T-1", "T-2"],
-      "non_goals": ["No checkpointing/interrupts/subgraphs", "No escalation rule logic beyond calling T-6's interface (stub until T-6 lands)"],
+      "verify": "uv run pytest backend/tests/graph -q && uv run pytest -m grounding -q",
+      "scope": [
+        "backend/src/agent/**",
+        "backend/tests/graph/**",
+        "backend/tests/grounding/**"
+      ],
+      "depends_on": [
+        "T-1",
+        "T-2"
+      ],
+      "non_goals": [
+        "No checkpointing/interrupts/subgraphs",
+        "No escalation rule logic beyond calling T-6's interface (stub until T-6 lands)"
+      ],
       "parallel_safe": false
     },
     {
       "id": "T-6",
       "title": "Escalation engine",
       "objective": "Hard rules + classifier + internal-note composition (R6).",
-      "refs": ["R6", "DESIGN#escalation-contract"],
+      "refs": [
+        "R6",
+        "DESIGN#escalation-contract"
+      ],
       "acceptance": [
         "hard rules exactly as pinned, deterministic, unit-tested individually",
         "classifier via LLMClient emitting EscalationCall",
@@ -119,52 +203,94 @@
         "internal note contains summary, grounded facts, reason enum; customer notice posted",
         "wired into T-5's decide/act"
       ],
-      "verify": "pytest backend/tests/escalation -q",
-      "scope": ["backend/src/escalation/**", "backend/tests/escalation/**", "backend/src/agent/**"],
-      "depends_on": ["T-5"],
-      "non_goals": ["No threshold tuning (T-7 owns it)", "No sentiment model beyond the classifier prompt"],
+      "verify": "uv run pytest backend/tests/escalation -q",
+      "scope": [
+        "backend/src/escalation/**",
+        "backend/tests/escalation/**",
+        "backend/src/agent/**"
+      ],
+      "depends_on": [
+        "T-5"
+      ],
+      "non_goals": [
+        "No threshold tuning (T-7 owns it)",
+        "No sentiment model beyond the classifier prompt"
+      ],
       "parallel_safe": false
     },
     {
       "id": "T-7",
       "title": "Labeled set and escalation eval report",
-      "objective": "The flagship credibility artifact — measured precision/recall on escalation (R15).",
-      "refs": ["R15", "DESIGN#verification-strategy"],
+      "objective": "The flagship credibility artifact \u2014 measured precision/recall on escalation (R15).",
+      "refs": [
+        "R15",
+        "DESIGN#verification-strategy"
+      ],
       "acceptance": [
         "evals/labeled_set.yaml with ~50 tickets spanning all routes, all hard triggers, fuzzy frustration/complexity cases, adversarial phrasing",
-        "HUMAN GATE: labels reviewed and approved by the project owner before use — record approval in the fixture header; stop and ask, never self-approve",
+        "HUMAN GATE: labels reviewed and approved by the project owner before use \u2014 record approval in the fixture header; stop and ask, never self-approve",
         "promptfoo run + report generator producing confusion matrix, P/R/F1, PR curve image with chosen threshold marked",
         "recall >= 0.95 on the hard-trigger subset at the committed threshold; threshold written to escalation config",
         "report lands in docs/eval-report/"
       ],
-      "verify": "python -m evals.report && pytest backend/tests/evals -q",
-      "scope": ["evals/**", "backend/tests/evals/**", "backend/src/escalation/**"],
-      "depends_on": ["T-6"],
-      "non_goals": ["No expanding the set past ~60", "No synthetic label approval — human sign-off is external ground truth"],
+      "verify": "uv run python -m evals.report && uv run pytest backend/tests/evals -q",
+      "scope": [
+        "evals/**",
+        "backend/tests/evals/**",
+        "backend/src/escalation/**"
+      ],
+      "depends_on": [
+        "T-6"
+      ],
+      "non_goals": [
+        "No expanding the set past ~60",
+        "No synthetic label approval \u2014 human sign-off is external ground truth"
+      ],
       "parallel_safe": true
     },
     {
       "id": "T-8",
       "title": "Portal API and approval gate",
-      "objective": "Feed, draft edit/approve/reject, gate toggle, metrics (R10–R13).",
-      "refs": ["R10", "R11", "R12", "R13", "DESIGN#portal-api", "DESIGN#metric-definitions"],
+      "objective": "Feed, draft edit/approve/reject, gate toggle, metrics (R10\u2013R13).",
+      "refs": [
+        "R10",
+        "R11",
+        "R12",
+        "R13",
+        "DESIGN#portal-api",
+        "DESIGN#metric-definitions"
+      ],
       "acceptance": [
         "endpoints exactly as pinned, X-Portal-Token auth",
         "gate ON holds drafts pending; approve sends via HelpdeskPort and records gated_sent",
-        "metrics computed per the pinned definitions — gated sends excluded from the human-avoidance numerator",
+        "metrics computed per the pinned definitions \u2014 gated sends excluded from the human-avoidance numerator",
         "API tests cover both gate states and metric math"
       ],
-      "verify": "pytest backend/tests/portal -q",
-      "scope": ["backend/src/portal/**", "backend/tests/portal/**"],
-      "depends_on": ["T-5", "T-6"],
-      "non_goals": ["No UI (T-9)", "No real auth/multi-user"],
+      "verify": "uv run pytest backend/tests/portal -q",
+      "scope": [
+        "backend/src/portal/**",
+        "backend/tests/portal/**"
+      ],
+      "depends_on": [
+        "T-5",
+        "T-6"
+      ],
+      "non_goals": [
+        "No UI (T-9)",
+        "No real auth/multi-user"
+      ],
       "parallel_safe": true
     },
     {
       "id": "T-9",
       "title": "Portal UI",
-      "objective": "The reviewer-facing React surface (R10–R12) and demo centerpiece.",
-      "refs": ["R10", "R11", "R12", "DESIGN#portal-api"],
+      "objective": "The reviewer-facing React surface (R10\u2013R12) and demo centerpiece.",
+      "refs": [
+        "R10",
+        "R11",
+        "R12",
+        "DESIGN#portal-api"
+      ],
       "acceptance": [
         "feed view with route/confidence/reason/trace link",
         "draft detail with editable body, approve/reject",
@@ -173,16 +299,26 @@
         "builds clean; component tests for gate and edit-approve flows against a mocked API"
       ],
       "verify": "cd portal && npm run build && npm test",
-      "scope": ["portal/**"],
-      "depends_on": ["T-8"],
-      "non_goals": ["No styling beyond clean-and-readable", "No websockets — polling is fine"],
+      "scope": [
+        "portal/**"
+      ],
+      "depends_on": [
+        "T-8"
+      ],
+      "non_goals": [
+        "No styling beyond clean-and-readable",
+        "No websockets \u2014 polling is fine"
+      ],
       "parallel_safe": true
     },
     {
       "id": "T-10",
       "title": "Scenario runner and live e2e",
       "objective": "Prove the system against real Zendesk and measure R8.",
-      "refs": ["R8", "SPEC#success-criteria"],
+      "refs": [
+        "R8",
+        "SPEC#success-criteria"
+      ],
       "acceptance": [
         "runner seeds the four canonical scenarios + adversarial unknown-case via Zendesk API (respecting rate limits)",
         "asserts UI-visible effects by API read-back (reply present, note on escalation, tags, status)",
@@ -190,17 +326,28 @@
         "p95 < 5 min against the deployed or tunneled instance",
         "marked -m live, excluded from CI; requires the runbook completed by the human first"
       ],
-      "verify": "pytest -m live -q",
-      "scope": ["backend/tests/live/**", "scripts/scenario_runner.py"],
-      "depends_on": ["T-4", "T-6"],
-      "non_goals": ["No load testing beyond demo volume"],
+      "verify": "uv run pytest -m live -q",
+      "scope": [
+        "backend/tests/live/**",
+        "scripts/scenario_runner.py"
+      ],
+      "depends_on": [
+        "T-4",
+        "T-6"
+      ],
+      "non_goals": [
+        "No load testing beyond demo volume"
+      ],
       "parallel_safe": true
     },
     {
       "id": "T-11",
       "title": "Deploy, demo assets, technical documentation",
-      "objective": "Everything the grader touches (SPEC success criteria 5–7).",
-      "refs": ["SPEC#constraints", "SPEC#success-criteria"],
+      "objective": "Everything the grader touches (SPEC success criteria 5\u20137).",
+      "refs": [
+        "SPEC#constraints",
+        "SPEC#success-criteria"
+      ],
       "acceptance": [
         "docker-compose deploy on a DigitalOcean droplet, reachable, env documented",
         "docs/ assembled: architecture (+ diagram), grounding design, escalation methodology with the T-7 report, portability section (port + both adapters, naming Gorgias/Intercom/Front as future adapters), runbook",
@@ -208,9 +355,21 @@
         "README quickstart verified from clean clone"
       ],
       "verify": "bash scripts/verify_deploy.sh",
-      "scope": ["docs/**", "deploy/**", "scripts/verify_deploy.sh", "README.md"],
-      "depends_on": ["T-3", "T-7", "T-9", "T-10"],
-      "non_goals": ["No video editing tooling — recording is a human step"],
+      "scope": [
+        "docs/**",
+        "deploy/**",
+        "scripts/verify_deploy.sh",
+        "README.md"
+      ],
+      "depends_on": [
+        "T-3",
+        "T-7",
+        "T-9",
+        "T-10"
+      ],
+      "non_goals": [
+        "No video editing tooling \u2014 recording is a human step"
+      ],
       "parallel_safe": false
     }
   ]
