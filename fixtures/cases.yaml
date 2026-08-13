@@ -1,0 +1,326 @@
+# Meridian Forensic Genomics — case fixture data
+#
+# Entirely fictional. Generated for the othram-support-agent build (T-1).
+# No real laboratory, case, or person is represented. See fixtures/README.md.
+#
+# stage_enum: intake | extraction | sequencing | genealogy | complete
+# eta_weeks: estimated weeks remaining in the CURRENT stage (0 once complete).
+#   Windows are documented in fixtures/kb/turnaround-times.md and every value
+#   below falls inside the published window for its stage.
+
+cases:
+  # --- intake (5) ---------------------------------------------------------
+  # Edge case (a): just-submitted, no DNA profile yet.
+  - case_id: "MFG-2026-0158"
+    requester_email: "j.okafor@example.com"
+    requester_name: "Jordan Okafor"
+    stage: "intake"
+    stage_entered_at: "2026-08-11"
+    last_updated: "2026-08-11"
+    eta_weeks: 2
+    dna_profile_available: false
+    photos_available: true
+
+  # Edge case (a) + edge case (e): just-submitted, no DNA profile, no photos.
+  - case_id: "MFG-2026-0161"
+    requester_email: "i.marsh@example.org"
+    requester_name: "Isabel Marsh"
+    stage: "intake"
+    stage_entered_at: "2026-08-09"
+    last_updated: "2026-08-10"
+    eta_weeks: 2
+    dna_profile_available: false
+    photos_available: false
+
+  # Edge case (d): requester with multiple cases (1 of 2).
+  - case_id: "MFG-2025-0980"
+    requester_email: "m.webb@example.org"
+    requester_name: "Marcus Webb"
+    stage: "intake"
+    stage_entered_at: "2026-07-20"
+    last_updated: "2026-07-29"
+    eta_weeks: 1
+    dna_profile_available: false
+    photos_available: true
+
+  - case_id: "MFG-2025-1102"
+    requester_email: "r.silva@example.com"
+    requester_name: "Renata Silva"
+    stage: "intake"
+    stage_entered_at: "2026-07-25"
+    last_updated: "2026-08-05"
+    eta_weeks: 2
+    dna_profile_available: false
+    photos_available: true
+
+  # Edge case (e): no DNA profile, no photos on file.
+  - case_id: "MFG-2025-1140"
+    requester_email: "t.nguyen@example.org"
+    requester_name: "Thomas Nguyen"
+    stage: "intake"
+    stage_entered_at: "2026-08-01"
+    last_updated: "2026-08-08"
+    eta_weeks: 1
+    dna_profile_available: false
+    photos_available: false
+
+  # --- extraction (6) ------------------------------------------------------
+  # Edge case (d): requester with multiple cases (1 of 2).
+  - case_id: "MFG-2025-0734"
+    requester_email: "p.chandra@example.com"
+    requester_name: "Priya Chandrasekaran"
+    stage: "extraction"
+    stage_entered_at: "2026-06-01"
+    last_updated: "2026-06-20"
+    eta_weeks: 3
+    dna_profile_available: false
+    photos_available: true
+
+  # Edge case (d): requester with multiple cases (2 of 2).
+  - case_id: "MFG-2025-0755"
+    requester_email: "m.webb@example.org"
+    requester_name: "Marcus Webb"
+    stage: "extraction"
+    stage_entered_at: "2026-06-10"
+    last_updated: "2026-06-28"
+    eta_weeks: 4
+    dna_profile_available: false
+    photos_available: true
+
+  - case_id: "MFG-2025-0810"
+    requester_email: "b.ortiz@example.com"
+    requester_name: "Ben Ortiz"
+    stage: "extraction"
+    stage_entered_at: "2026-06-15"
+    last_updated: "2026-07-02"
+    eta_weeks: 3
+    dna_profile_available: false
+    photos_available: true
+
+  # Edge case (c): stale, mid-pipeline (last_updated > 120 days before 2026-08-13).
+  - case_id: "MFG-2025-0822"
+    requester_email: "g.whitfield@example.org"
+    requester_name: "Grace Whitfield"
+    stage: "extraction"
+    stage_entered_at: "2026-02-01"
+    last_updated: "2026-03-05"
+    eta_weeks: 4
+    dna_profile_available: false
+    photos_available: true
+
+  - case_id: "MFG-2025-0865"
+    requester_email: "h.tanaka@example.com"
+    requester_name: "Hiro Tanaka"
+    stage: "extraction"
+    stage_entered_at: "2026-06-25"
+    last_updated: "2026-07-15"
+    eta_weeks: 3
+    dna_profile_available: false
+    photos_available: true
+
+  - case_id: "MFG-2025-0890"
+    requester_email: "c.dubois@example.org"
+    requester_name: "Colette Dubois"
+    stage: "extraction"
+    stage_entered_at: "2026-07-05"
+    last_updated: "2026-07-25"
+    eta_weeks: 5
+    dna_profile_available: false
+    photos_available: true
+
+  # --- sequencing (7) -------------------------------------------------------
+  # Edge case (d): requester with multiple cases (2 of 2).
+  - case_id: "MFG-2025-0512"
+    requester_email: "p.chandra@example.com"
+    requester_name: "Priya Chandrasekaran"
+    stage: "sequencing"
+    stage_entered_at: "2026-05-01"
+    last_updated: "2026-06-10"
+    eta_weeks: 5
+    dna_profile_available: false
+    photos_available: true
+
+  - case_id: "MFG-2025-0530"
+    requester_email: "o.fairweather@example.com"
+    requester_name: "Owen Fairweather"
+    stage: "sequencing"
+    stage_entered_at: "2026-05-10"
+    last_updated: "2026-06-15"
+    eta_weeks: 6
+    dna_profile_available: false
+    photos_available: true
+
+  # Edge case (c): stale, mid-pipeline.
+  - case_id: "MFG-2025-0545"
+    requester_email: "n.kessler@example.org"
+    requester_name: "Naomi Kessler"
+    stage: "sequencing"
+    stage_entered_at: "2026-01-15"
+    last_updated: "2026-02-20"
+    eta_weeks: 8
+    dna_profile_available: false
+    photos_available: true
+
+  - case_id: "MFG-2025-0560"
+    requester_email: "d.alvarez@example.com"
+    requester_name: "Diego Alvarez"
+    stage: "sequencing"
+    stage_entered_at: "2026-05-20"
+    last_updated: "2026-06-30"
+    eta_weeks: 4
+    dna_profile_available: false
+    photos_available: false
+
+  - case_id: "MFG-2025-0578"
+    requester_email: "e.marchetti@example.org"
+    requester_name: "Elena Marchetti"
+    stage: "sequencing"
+    stage_entered_at: "2026-06-01"
+    last_updated: "2026-07-10"
+    eta_weeks: 3
+    dna_profile_available: false
+    photos_available: true
+
+  - case_id: "MFG-2025-0590"
+    requester_email: "s.osei@example.com"
+    requester_name: "Samuel Osei"
+    stage: "sequencing"
+    stage_entered_at: "2026-06-10"
+    last_updated: "2026-07-18"
+    eta_weeks: 5
+    dna_profile_available: false
+    photos_available: true
+
+  - case_id: "MFG-2025-0601"
+    requester_email: "i.halvorsen@example.org"
+    requester_name: "Ingrid Halvorsen"
+    stage: "sequencing"
+    stage_entered_at: "2026-06-20"
+    last_updated: "2026-08-01"
+    eta_weeks: 4
+    dna_profile_available: false
+    photos_available: true
+
+  # --- genealogy (6) ---------------------------------------------------------
+  - case_id: "MFG-2025-0301"
+    requester_email: "w.park@example.com"
+    requester_name: "Winston Park"
+    stage: "genealogy"
+    stage_entered_at: "2026-04-01"
+    last_updated: "2026-06-01"
+    eta_weeks: 6
+    dna_profile_available: true
+    photos_available: true
+
+  - case_id: "MFG-2025-0318"
+    requester_email: "f.rahman@example.org"
+    requester_name: "Fatima Rahman"
+    stage: "genealogy"
+    stage_entered_at: "2026-04-10"
+    last_updated: "2026-06-15"
+    eta_weeks: 8
+    dna_profile_available: true
+    photos_available: true
+
+  # Edge case (c): stale, mid-pipeline.
+  - case_id: "MFG-2025-0325"
+    requester_email: "c.bellamy@example.com"
+    requester_name: "Chuck Bellamy"
+    stage: "genealogy"
+    stage_entered_at: "2025-12-01"
+    last_updated: "2026-01-10"
+    eta_weeks: 10
+    dna_profile_available: true
+    photos_available: true
+
+  - case_id: "MFG-2025-0340"
+    requester_email: "a.bello@example.org"
+    requester_name: "Aisha Bello"
+    stage: "genealogy"
+    stage_entered_at: "2026-05-01"
+    last_updated: "2026-07-05"
+    eta_weeks: 5
+    dna_profile_available: true
+    photos_available: false
+
+  - case_id: "MFG-2025-0355"
+    requester_email: "l.fontaine@example.com"
+    requester_name: "Louis Fontaine"
+    stage: "genealogy"
+    stage_entered_at: "2026-05-15"
+    last_updated: "2026-07-20"
+    eta_weeks: 4
+    dna_profile_available: true
+    photos_available: true
+
+  - case_id: "MFG-2025-0370"
+    requester_email: "m.iyer@example.org"
+    requester_name: "Meera Iyer"
+    stage: "genealogy"
+    stage_entered_at: "2026-06-01"
+    last_updated: "2026-08-02"
+    eta_weeks: 3
+    dna_profile_available: true
+    photos_available: true
+
+  # --- complete (6) ------------------------------------------------------
+  # Edge case (b): complete, eta_weeks 0, DNA profile available.
+  - case_id: "MFG-2025-0102"
+    requester_email: "b.cross@example.com"
+    requester_name: "Bethany Cross"
+    stage: "complete"
+    stage_entered_at: "2026-05-01"
+    last_updated: "2026-05-01"
+    eta_weeks: 0
+    dna_profile_available: true
+    photos_available: true
+
+  - case_id: "MFG-2025-0110"
+    requester_email: "a.molina@example.org"
+    requester_name: "Andres Molina"
+    stage: "complete"
+    stage_entered_at: "2026-05-10"
+    last_updated: "2026-05-12"
+    eta_weeks: 0
+    dna_profile_available: true
+    photos_available: true
+
+  - case_id: "MFG-2025-0125"
+    requester_email: "s.petrov@example.com"
+    requester_name: "Sofia Petrov"
+    stage: "complete"
+    stage_entered_at: "2026-05-25"
+    last_updated: "2026-05-27"
+    eta_weeks: 0
+    dna_profile_available: true
+    photos_available: true
+
+  - case_id: "MFG-2025-0140"
+    requester_email: "k.asante@example.org"
+    requester_name: "Kwame Asante"
+    stage: "complete"
+    stage_entered_at: "2026-06-10"
+    last_updated: "2026-06-11"
+    eta_weeks: 0
+    dna_profile_available: true
+    photos_available: true
+
+  - case_id: "MFG-2025-0150"
+    requester_email: "l.voss@example.com"
+    requester_name: "Liliana Voss"
+    stage: "complete"
+    stage_entered_at: "2026-06-25"
+    last_updated: "2026-06-26"
+    eta_weeks: 0
+    dna_profile_available: true
+    photos_available: true
+
+  - case_id: "MFG-2025-0165"
+    requester_email: "g.okonkwo@example.org"
+    requester_name: "Gerald Okonkwo"
+    stage: "complete"
+    stage_entered_at: "2026-07-15"
+    last_updated: "2026-07-16"
+    eta_weeks: 0
+    dna_profile_available: true
+    photos_available: true
