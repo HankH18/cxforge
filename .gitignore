@@ -19,3 +19,6 @@ portal/dist/
 
 # OS
 .DS_Store
+
+# Agent worktrees (transient)
+.claude/worktrees/
