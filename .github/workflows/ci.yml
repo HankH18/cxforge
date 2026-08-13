@@ -2,6 +2,12 @@ name: CI
 
 # Cost-constrained by design (SPEC §Constraints): lint, type-check and the
 # non-live test markers only. Promptfoo evals and live e2e never run here.
+#
+# The Postgres service below is a deliberate addition to that budget. Without
+# it CI set SKIP_DB_TESTS=1, and as the build grew that silently skipped 34 of
+# 153 tests — every data-layer, ingress and grounding test — so a green CI run
+# was evidence of far less than it appeared. One service container costs a few
+# seconds per run; a green tick that does not cover the data layer costs more.
 on:
   push:
     branches: [main, master]
@@ -10,10 +16,29 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: othram
+          POSTGRES_PASSWORD: othram
+          POSTGRES_DB: othram
+        ports:
+          - 5432:5432
+        # The job does not start until this reports healthy, so the test
+        # suite never races the container's startup.
+        options: >-
+          --health-cmd "pg_isready -U othram -d othram"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
     env:
-      # No docker-compose Postgres in CI — the db test opts out explicitly
-      # rather than silently passing.
-      SKIP_DB_TESTS: "1"
+      DATABASE_URL: postgresql://othram:othram@localhost:5432/othram
+      # Deliberately NOT setting SKIP_DB_TESTS: the database-backed tests
+      # must actually run here.
+
     steps:
       - uses: actions/checkout@v4
 
@@ -31,5 +56,18 @@ jobs:
       - name: Type-check
         run: uv run mypy backend
 
+      # Single run — `-rs` reports skip reasons so the guard below can read
+      # them without paying for a second full pass of the suite.
       - name: Test
-        run: uv run pytest -m "not live"
+        run: |
+          set -o pipefail
+          uv run pytest -m "not live" -rs 2>&1 | tee /tmp/pytest.out
+
+      # A skip is not a pass. If the database-backed tests ever start skipping
+      # in CI again, fail loudly rather than shipping a hollow green tick.
+      - name: Assert database tests actually ran
+        run: |
+          if grep -qi "SKIP_DB_TESTS" /tmp/pytest.out; then
+            echo "::error::Database-backed tests were skipped — the Postgres service is not reachable."
+            exit 1
+          fi

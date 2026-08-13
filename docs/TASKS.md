@@ -137,7 +137,10 @@ marked `parallel_safe`.
   contains summary, grounded facts, reason enum; customer notice posted; 5)
   wired into T-5's `decide`/`act`.
 - **Verify**: `uv run pytest backend/tests/escalation -q`
-- **Scope**: `backend/src/escalation/**`, `backend/tests/escalation/**`
+- **Scope**: `backend/src/escalation/**`, `backend/tests/escalation/**`,
+  `backend/src/agent/**`, `backend/tests/graph/**`, `backend/tests/grounding/**`
+  (the two test dirs were added by amendment: wiring the classifier into the
+  live graph requires registering `EscalationCall` in T-5's fakes)
 - **Depends on**: T-5
 - **Non-goals**: no threshold tuning (T-7 owns it); no sentiment model beyond
   the classifier prompt.
@@ -155,7 +158,9 @@ marked `parallel_safe`.
   hard-trigger subset at the committed threshold; threshold written to
   config; 5) report lands in `docs/eval-report/`.
 - **Verify**: `uv run python -m evals.report && uv run pytest backend/tests/evals -q`
-- **Scope**: `evals/**`, `docs/eval-report/**`, escalation threshold config
+- **Scope**: `evals/**`, `backend/tests/evals/**`, `backend/src/escalation/**`
+  (the report is written into `docs/eval-report/`; the scope guard exempts
+  `docs/` for every ticket)
 - **Depends on**: T-6
 - **Non-goals**: no expanding the set past ~60; no synthetic label approval —
   the human sign-off is external ground truth, not skippable.

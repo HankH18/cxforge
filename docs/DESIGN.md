@@ -45,12 +45,21 @@ live inside `ZendeskAdapter` only. The contract test suite is written once
 against the Protocol and parametrized over adapters.
 
 ### Webhook ingress — T-4 boundary
-`POST /webhooks/zendesk`, HMAC-SHA256 verified. Trigger payload (JSON via
-placeholders): `{ticket_id, comment_id, requester_email, subject, latest_comment_text}`.
+`POST /webhooks/zendesk`, HMAC-SHA256 verified over the RAW request body.
+Trigger payload (JSON via placeholders): `{ticket_id, comment_id,
+requester_email, subject, latest_comment_text, comment_author_id}`.
 Idempotency key `(ticket_id, comment_id)` persisted in `tickets_seen`.
 Loop guard: agent adds tag `ai-processed` on every write; the Zendesk trigger
 carries the nullifying condition `tags not include ai-processed` per the
 runbook, and ingress additionally drops events authored by the AI user.
+
+`comment_author_id` (fed by the `{{current_user.id}}` placeholder) was added
+during T-4: the original pinned payload carried no author field, so the
+self-event drop this same paragraph requires was not implementable from it.
+The field name is load-bearing in two places at once — `ingress.models` and
+the trigger body in `docs/zendesk-runbook.md` — so renaming it requires
+changing both in the same commit or the loop guard's second line silently
+stops working.
 
 ### LLMClient isolation — T-5 boundary (provider swap layer)
 ```python
