@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+portal/dist/
+
+# Secrets — .env.example is committed, .env never is
+.env
+.env.local
+
+# Build protocol state (hook-written verification timestamps)
+.claude/evidence/
+
+# OS
+.DS_Store

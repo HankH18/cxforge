@@ -1,0 +1,35 @@
+name: CI
+
+# Cost-constrained by design (SPEC §Constraints): lint, type-check and the
+# non-live test markers only. Promptfoo evals and live e2e never run here.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      # No docker-compose Postgres in CI — the db test opts out explicitly
+      # rather than silently passing.
+      SKIP_DB_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type-check
+        run: uv run mypy backend
+
+      - name: Test
+        run: uv run pytest -m "not live"

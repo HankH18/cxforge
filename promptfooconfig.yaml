@@ -1,0 +1,14 @@
+# Promptfoo stub — the escalation eval is built in T-7 against
+# evals/labeled_set.yaml (human-approved labels). Run locally / pre-push only;
+# per SPEC constraints this never runs in GitHub Actions.
+description: Escalation classifier evaluation (T-7)
+
+prompts:
+  - "Placeholder — T-7 supplies the escalation classifier prompt."
+
+providers:
+  - id: openai:chat:gpt-4o-mini
+    config:
+      temperature: 0
+
+tests: []
