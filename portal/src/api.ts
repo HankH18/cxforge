@@ -1,56 +1,22 @@
-// Portal API client — backend/src/portal/routes.py + schemas.py are the
-// source of truth for these shapes (DESIGN §Portal API). Every request
-// carries the X-Portal-Token shared secret; the token comes from build-time
-// env (VITE_PORTAL_TOKEN), never a literal in source.
+// Portal API client — request/response types are GENERATED from
+// backend/src/portal/schemas.py via backend/src/portal/codegen.py (T-19).
+// See portal/src/api-types.ts (generated, do not edit) for the source; this
+// file keeps only the hand-written fetch logic below. Every request carries
+// the X-Portal-Token shared secret; the token comes from build-time env
+// (VITE_PORTAL_TOKEN), never a literal in source.
 
-export type DraftStatus = 'pending' | 'approved' | 'rejected' | 'auto_sent'
-export type RunOutcome = 'auto_sent' | 'gated_sent' | 'rejected' | 'escalated' | 'off_topic'
+import type { DraftResponse, DraftStatus, FeedResponse, GateSetting, MetricsResponse } from './api-types'
 
-// One `runs` row joined to its `drafts` row — schemas.FeedItem.
-export interface FeedItem {
-  run_id: number
-  ticket_id: string
-  route: string | null
-  confidence: number | null
-  outcome: RunOutcome | null
-  draft_id: number | null
-  draft_status: DraftStatus | null
-  draft_body: string | null
-  edited_body: string | null
-  sent_body: string | null
-  escalation_reason: string | null
-  trace_url: string | null
-  received_at: string | null
-  replied_at: string | null
-}
-
-export interface FeedResponse {
-  runs: FeedItem[]
-}
-
-// Returned by edit/approve/reject — schemas.DraftResponse.
-export interface DraftResponse {
-  draft_id: number
-  run_id: number
-  ticket_id: string
-  status: DraftStatus
-  body: string
-  edited_body: string | null
-  sent_body?: string | null
-}
-
-// GET|PUT /api/settings/gate, pinned verbatim in DESIGN.
-export interface GateSetting {
-  enabled: boolean
-}
-
-// GET /api/metrics, pinned verbatim in DESIGN.
-export interface MetricsResponse {
-  human_avoidance_rate: number
-  latency_p50_s: number
-  latency_p95_s: number
-  escalations_by_reason: Record<string, number>
-}
+export type {
+  DraftEditRequest,
+  DraftResponse,
+  DraftStatus,
+  FeedItem,
+  FeedResponse,
+  GateSetting,
+  MetricsResponse,
+  RunOutcome,
+} from './api-types'
 
 const PORTAL_TOKEN: string = import.meta.env.VITE_PORTAL_TOKEN ?? ''
 
