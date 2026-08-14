@@ -25,7 +25,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REAL_LABELED_SET = REPO_ROOT / "evals" / "labeled_set.yaml"
-REAL_OUTPUT_DIR = REPO_ROOT / "docs" / "eval-report"
 
 
 def _run_report(*extra_args: str) -> subprocess.CompletedProcess[str]:
@@ -99,16 +98,21 @@ def test_report_generator_runs_end_to_end_and_exits_zero(tmp_path: Path) -> None
     assert (output_dir / "metrics.json").exists()
 
 
-def test_pr_curve_image_is_a_real_png() -> None:
-    _run_report()
-    png_bytes = (REAL_OUTPUT_DIR / "pr_curve.png").read_bytes()
+def test_pr_curve_image_is_a_real_png(tmp_path: Path) -> None:
+    """Reads the real, committed labeled set/cases (via report.py's own
+    defaults — no ``--labeled-set``/``--cases`` override) but generates
+    into ``tmp_path``, never ``docs/eval-report/`` (T-16 acceptance 2)."""
+    output_dir = tmp_path / "out"
+    _run_report("--output-dir", str(output_dir))
+    png_bytes = (output_dir / "pr_curve.png").read_bytes()
     assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n"
     assert len(png_bytes) > 1000  # not an empty/placeholder file
 
 
-def test_metrics_json_has_the_expected_shape() -> None:
-    _run_report()
-    metrics = json.loads((REAL_OUTPUT_DIR / "metrics.json").read_text())
+def test_metrics_json_has_the_expected_shape(tmp_path: Path) -> None:
+    output_dir = tmp_path / "out"
+    _run_report("--output-dir", str(output_dir))
+    metrics = json.loads((output_dir / "metrics.json").read_text())
     for key in (
         "approved",
         "approval_status",
@@ -134,19 +138,20 @@ def test_metrics_json_has_the_expected_shape() -> None:
     assert 0.0 <= metrics["recommended_threshold"] <= 1.0
 
 
-def test_report_refuses_a_final_report_while_labels_are_unapproved() -> None:
+def test_report_refuses_a_final_report_while_labels_are_unapproved(tmp_path: Path) -> None:
     """The core "refuse" requirement: against the real (unapproved) fixture,
     the generator must produce a DRAFT-watermarked report, not one that
     reads as an authoritative measurement — and must still exit 0 (this is
     expected, correct behavior, not a failure)."""
-    result = _run_report()
+    output_dir = tmp_path / "out"
+    result = _run_report("--output-dir", str(output_dir))
     assert result.returncode != 0
 
-    metrics = json.loads((REAL_OUTPUT_DIR / "metrics.json").read_text())
+    metrics = json.loads((output_dir / "metrics.json").read_text())
     assert metrics["approved"] is False
     assert metrics["approval_status"] == "PROPOSED_AWAITING_HUMAN_REVIEW"
 
-    report_text = (REAL_OUTPUT_DIR / "report.md").read_text()
+    report_text = (output_dir / "report.md").read_text()
     assert "DRAFT" in report_text
     assert "NOT YET APPROVED" in report_text
     assert "FINAL —" not in report_text  # the approved-only banner text
@@ -382,15 +387,16 @@ def test_report_still_refuses_when_approved_date_is_empty_but_status_and_by_are_
     assert "DRAFT" in report_text
 
 
-def test_hard_trigger_recall_is_perfect_for_the_real_hard_rule_signals() -> None:
+def test_hard_trigger_recall_is_perfect_for_the_real_hard_rule_signals(tmp_path: Path) -> None:
     """Under DESIGN's OR combinator a fired hard rule is threshold-
     independent by construction, so the report's own hard_trigger_recall
     should be 1.0 against the real labeled set — this also transitively
     confirms the REAL billing/human_request/unknown_case detectors agree
     with every hard-trigger label in evals/labeled_set.yaml (a regression
     here would mean either rules.py changed behavior or a label is wrong)."""
-    _run_report()
-    metrics = json.loads((REAL_OUTPUT_DIR / "metrics.json").read_text())
+    output_dir = tmp_path / "out"
+    _run_report("--output-dir", str(output_dir))
+    metrics = json.loads((output_dir / "metrics.json").read_text())
     assert metrics["hard_trigger_recall"] == 1.0
     assert metrics["hard_trigger_subset_size"] > 0
 

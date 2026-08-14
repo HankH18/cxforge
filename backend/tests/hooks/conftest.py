@@ -143,6 +143,7 @@ def run_hook(
         at_path.parent.mkdir(parents=True, exist_ok=True)
         at_path.write_text(active_ticket)
 
+    tool_input: dict[str, Any]
     if tool_name == "Write":
         content = "synthetic-content" if isinstance(write_content, _Unset) else write_content
         tool_input = {"file_path": file_path, "content": content}

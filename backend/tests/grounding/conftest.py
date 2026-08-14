@@ -4,8 +4,11 @@ generation — the only way 'zero hallucinated case facts' becomes testable").
 
 Real Postgres (same rationale as ``backend/tests/graph/conftest.py``), a
 fake ``LLMClient``, and ``EmailAdapter`` reused as the ``HelpdeskPort``
-fake. Skips itself when ``SKIP_DB_TESTS=1``, mirroring every other
-DB-backed suite in this repo.
+fake. Skipped as a whole when ``SKIP_DB_TESTS=1`` via the root
+``backend/tests/conftest.py``'s ``pytest_collection_modifyitems`` hook — a
+conftest-level ``pytestmark`` here would not apply to the sibling test
+modules in this directory (T-16), so the skip is applied at collection
+time instead.
 
 The structural extractors below (``extract_case_ids``/``extract_stage_
 mentions``/``assert_case_facts_trace_to``/``assert_no_case_facts_present``)
@@ -21,7 +24,6 @@ support for is automatically also a form these assertions catch.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import pytest
@@ -37,11 +39,6 @@ from agent.grounding_guard import (
 from data import Case, get_connection
 from data.seed import DEFAULT_CASES_PATH, SeedResult, seed_all
 from helpdesk.email_adapter import EmailAdapter
-
-pytestmark = pytest.mark.skipif(
-    os.getenv("SKIP_DB_TESTS") == "1",
-    reason="requires the docker-compose db service (CI sets SKIP_DB_TESTS=1)",
-)
 
 
 @pytest.fixture(scope="session")

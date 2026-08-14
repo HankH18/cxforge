@@ -137,8 +137,26 @@ def _node_identity(py_file: Path) -> str | None:
     backend/src/<pkg>/**   -> "<pkg>"        (a first-party package)
     backend/src/main.py    -> "main"
     backend/tests/<dir>/** -> "test:<dir>"   (a test suite directory)
+    backend/tests/<file>.py (bare, top-level) -> "test:<file>.py", EXCEPT
+        conftest.py (see below)
     evals/**               -> "evals"
     anything else          -> None (not part of the graph)
+
+    A bare top-level file under backend/tests/ (e.g. test_bootstrap.py) is
+    intentionally treated as its own one-file "suite" node, matching
+    ``analyze_verify``'s handling of a verify command that names it
+    directly (e.g. T-1's "... backend/tests/test_bootstrap.py ..."):
+    ``covered_test_dirs`` gains the literal "test_bootstrap.py" string in
+    exactly that case, so the two sides of the coverage comparison agree.
+
+    ``conftest.py`` at this same top level is deliberately excluded from
+    that rule (returns None -- not part of the graph at all): unlike a
+    ``test_*.py`` module, pytest never collects any test *from* conftest.py
+    itself, so no verify command could ever legitimately name
+    "backend/tests/conftest.py" as a target the way T-1 names
+    test_bootstrap.py -- treating it as a coverable "suite" would demand
+    blast-radius coverage that is structurally impossible to satisfy,
+    regardless of what the root conftest imports (T-16).
     """
     rel = py_file.relative_to(REPO_ROOT)
     parts = rel.parts
@@ -149,6 +167,8 @@ def _node_identity(py_file: Path) -> str | None:
             return parts[2]
         return None
     if parts[0:2] == ("backend", "tests"):
+        if len(parts) == 3 and parts[2] == "conftest.py":
+            return None
         if len(parts) >= 3:
             return f"test:{parts[2]}"
         return None

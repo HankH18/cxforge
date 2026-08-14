@@ -71,3 +71,18 @@ jobs:
             echo "::error::Database-backed tests were skipped — the Postgres service is not reachable."
             exit 1
           fi
+
+      # A near-empty collected count is not a pass either — a broken
+      # testpaths config or a conftest import error can silently collect
+      # (and "pass") almost nothing while still exiting 0. 200 is comfortably
+      # below the real count at the time this floor was added (467 tests),
+      # leaving headroom for normal fluctuation while still catching a
+      # catastrophic collection failure.
+      - name: Assert a healthy number of tests actually ran
+        run: |
+          count=$(grep -oE '[0-9]+ passed' /tmp/pytest.out | tail -1 | grep -oE '[0-9]+')
+          echo "Collected/passed count: ${count:-0}"
+          if [ -z "$count" ] || [ "$count" -lt 200 ]; then
+            echo "::error::Only ${count:-0} tests passed — expected at least 200. Collection may be broken."
+            exit 1
+          fi

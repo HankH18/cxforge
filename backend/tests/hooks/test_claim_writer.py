@@ -28,7 +28,15 @@ def _at_path(project_dir: Path) -> Path:
 
 def _owned(claims_file: Path, session: str) -> str:
     result = subprocess.run(
-        ["python3", str(CLAIM_LOOKUP_PATH), str(claims_file), "--mode", "owned", "--session", session],
+        [
+            "python3",
+            str(CLAIM_LOOKUP_PATH),
+            str(claims_file),
+            "--mode",
+            "owned",
+            "--session",
+            session,
+        ],
         capture_output=True,
         text=True,
         timeout=10,
@@ -57,9 +65,9 @@ def test_timestamp_is_a_real_parseable_utc_iso8601_string(project: Path) -> None
     assert ts.endswith("Z"), f"expected a UTC 'Z'-suffixed timestamp, got {ts!r}"
     # Must actually parse as a real point in time close to "now".
     parsed = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
-        tzinfo=datetime.timezone.utc
+        tzinfo=datetime.UTC
     )
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     assert abs((now - parsed).total_seconds()) < 60
 
 

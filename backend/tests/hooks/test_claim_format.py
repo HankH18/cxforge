@@ -370,7 +370,9 @@ def test_active_ticket_path_is_not_gitignored() -> None:
         timeout=10,
     )
     # git check-ignore exits 0 if the path IS ignored, 1 if it is NOT.
-    assert result.returncode == 1, ".claude/active-ticket must not be gitignored (T-13 acceptance 3)"
+    assert result.returncode == 1, (
+        ".claude/active-ticket must not be gitignored (T-13 acceptance 3)"
+    )
 
 
 def test_active_ticket_path_is_tracked_in_git() -> None:

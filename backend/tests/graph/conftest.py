@@ -8,13 +8,14 @@ the two external services (OpenAI, Zendesk) are faked; the data layer this
 ticket doesn't own is exercised for real, exactly as
 ``backend/tests/data``'s own suite does.
 
-Skips itself when ``SKIP_DB_TESTS=1`` (CI has no db service), mirroring
-``backend/tests/data/conftest.py``'s convention.
+Skipped as a whole when ``SKIP_DB_TESTS=1`` (CI has no db service) via the
+root ``backend/tests/conftest.py``'s ``pytest_collection_modifyitems`` hook
+— a conftest-level ``pytestmark`` here would not apply to the sibling test
+modules in this directory (T-16), so the skip is applied at collection time
+instead.
 """
 
 from __future__ import annotations
-
-import os
 
 import pytest
 
@@ -22,11 +23,6 @@ from agent.config import GATE_SETTING_KEY
 from data import get_connection
 from data.seed import SeedResult, seed_all
 from helpdesk.email_adapter import EmailAdapter
-
-pytestmark = pytest.mark.skipif(
-    os.getenv("SKIP_DB_TESTS") == "1",
-    reason="requires the docker-compose db service (CI sets SKIP_DB_TESTS=1)",
-)
 
 
 @pytest.fixture(scope="session")

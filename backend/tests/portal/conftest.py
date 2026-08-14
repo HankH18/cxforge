@@ -2,17 +2,19 @@
 §Metric definitions, SPEC R10-R13).
 
 Every test here needs the docker-compose Postgres (``runs``/``drafts``/
-``settings``), so the whole suite skips itself when ``SKIP_DB_TESTS=1``
-(CI has no db service), mirroring ``backend/tests/graph/conftest.py``'s
-convention. Every test posts through the real FastAPI app (``main.app``)
-via ``TestClient`` and the real ``X-Portal-Token`` auth dependency —
-``PORTAL_TOKEN`` is monkeypatched to a fixed value so tests never depend on
-whatever (if anything) the host's real ``.env`` has.
+``settings``), so the whole suite is skipped when ``SKIP_DB_TESTS=1`` (CI
+has no db service) via the root ``backend/tests/conftest.py``'s
+``pytest_collection_modifyitems`` hook — a conftest-level ``pytestmark``
+here would not apply to the sibling test modules in this directory (T-16),
+so the skip is applied at collection time instead. Every test posts
+through the real FastAPI app (``main.app``) via ``TestClient`` and the
+real ``X-Portal-Token`` auth dependency — ``PORTAL_TOKEN`` is
+monkeypatched to a fixed value so tests never depend on whatever (if
+anything) the host's real ``.env`` has.
 """
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 
 import pytest
@@ -23,11 +25,6 @@ from main import app
 from portal.deps import get_helpdesk_port
 
 from ._fake_port import FakeHelpdeskPort
-
-pytestmark = pytest.mark.skipif(
-    os.getenv("SKIP_DB_TESTS") == "1",
-    reason="requires the docker-compose db service (CI sets SKIP_DB_TESTS=1)",
-)
 
 TEST_PORTAL_TOKEN = "portal-test-token-do-not-use-in-prod"
 AUTH_HEADERS = {"X-Portal-Token": TEST_PORTAL_TOKEN}
