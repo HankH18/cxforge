@@ -4,7 +4,7 @@
 
 > This report is generated end-to-end from `evals/labeled_set.yaml`, but that file's `approval.status` is `'PROPOSED_AWAITING_HUMAN_REVIEW'`, not `APPROVED`. Every number below is a DRAFT — proof the pipeline runs, not a real measurement. See `evals/REVIEW.md` for what the project owner needs to review before this can become a final report.
 
-Generated: 2026-08-14T06:00:59.047406+00:00
+Generated: 2026-08-14T06:10:25.623930+00:00
 Labeled tickets: 51
 
 ## Methodology — what is REAL vs STUBBED
