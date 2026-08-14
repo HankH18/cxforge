@@ -399,7 +399,7 @@ committed script (`scripts/render_tasks_md.py`).
   - NOT parallel-safe with T-11: both declare scripts/verify_deploy.sh. T-11 is currently open (blocked on the droplet), so these two must not run concurrently
 - **Parallel safe**: yes
 - **Priority**: next
-- **Status**: in_progress
+- **Status**: closed
 
 ### T-18: Classifier errors stop masquerading as escalations
 - **Objective**: run_classifier catches bare Exception and returns None, which is the pinned abstention condition and therefore a hard escalation trigger — so any bug in that path becomes a plausible-looking escalation, silently and unlogged.
@@ -419,7 +419,7 @@ committed script (`scripts/render_tasks_md.py`).
   - NOT parallel-safe with T-7: both declare backend/src/escalation/**. T-7 is currently open (blocked on label approval), so these two must not run concurrently
 - **Parallel safe**: yes
 - **Priority**: next
-- **Status**: open
+- **Status**: in_progress
 
 ### T-19: Bind the portal API contract
 - **Objective**: portal/src/api.ts and backend/src/portal/schemas.py agree today purely by hand; nothing — no test, codegen step or CI job — fails if they drift, so a renamed field breaks only the live UI.
