@@ -32,6 +32,7 @@ from agent.graph import run_agent
 from agent.schemas import Classification, GroundednessJudgment, KBAnswerDraft
 from data import Case, get_case
 from data.seed import SeedResult
+from escalation.classifier import EscalationCall
 from helpdesk.email_adapter import EmailAdapter
 
 from .conftest import assert_no_case_facts_present, seed_conversation
@@ -230,6 +231,7 @@ def test_legitimate_kb_answer_with_no_case_facts_still_sends_normally(
 
     result = run_agent(ticket_id, port=port, llm=llm)
 
+    llm.assert_consulted(EscalationCall)
     assert result["route"] == "kb"
     assert result["escalation"] is None
     assert result["verifier_score"] == 0.9

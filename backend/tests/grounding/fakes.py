@@ -59,3 +59,18 @@ class FakeLLMClient:
         if isinstance(response, BaseModel):
             return response
         return response(messages)
+
+    def assert_consulted(self, schema: type[BaseModel]) -> None:
+        """Assert ``schema`` was actually sent to ``.structured`` — not just
+        defaulted away (the ``EscalationCall`` default set in
+        ``__post_init__`` above makes that distinction easy to lose). Fails
+        loudly if an expected call site (e.g. the escalation classifier)
+        was silently never reached, catching a regression that removes/
+        short-circuits it before it runs (T-18, guarding against a repeat
+        of the R6 "classifier unreachable from the live graph" defect)."""
+        called = [s for s, _ in self.calls]
+        assert schema in called, (
+            f"{schema.__name__} was never consulted (calls made: "
+            f"{[s.__name__ for s in called]}) — an expected call site may "
+            "have gone silently unreached."
+        )

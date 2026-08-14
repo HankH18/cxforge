@@ -6,12 +6,21 @@ scope is ``backend/tests/escalation/**`` alone — a directory with no shared
 import target in either sibling suite — so duplicating a ~20-line fake
 beats a fragile cross-package import).
 
-``RefusingLLMClient`` and ``RecordingHelpdeskPort`` are new to this suite:
+``RefusingLLMClient``, ``AbstainingLLMClient``, and ``RecordingHelpdeskPort``
+are new to this suite:
 
 - ``RefusingLLMClient`` raises on every call, so a test using it proves a
   decision was reached WITHOUT ever consulting the model — the strongest
   form of "hard rules are not overridable by the model" (not just "the
   classifier would have said no," but "the classifier was never asked").
+  Its ``AssertionError`` is a programming-error tripwire, not a model
+  failure — ``run_classifier`` (T-18) lets that propagate rather than
+  absorbing it, so it can only be used where ``.structured`` is never
+  actually expected to be called.
+- ``AbstainingLLMClient`` raises a genuine, absorbable model-failure
+  exception (``ValueError``, mirroring ``OpenAILLMClient``'s own refusal/
+  truncation error) on every call — use it wherever a test wants
+  ``run_classifier`` to actually run its except clause and abstain.
 - ``RecordingHelpdeskPort`` is a minimal ``HelpdeskPort`` double that
   appends every call, in order, to one flat list — so a test can assert
   the exact SEQUENCE and completeness of an escalation run's port calls.
@@ -57,6 +66,20 @@ class FakeLLMClient:
             return response
         return response(messages)
 
+    def assert_consulted(self, schema: type[BaseModel]) -> None:
+        """Assert ``schema`` was actually sent to ``.structured`` — not just
+        defaulted away. Fails loudly if an expected call site (e.g. the
+        escalation classifier) was silently never reached, catching a
+        regression that removes/short-circuits it before it runs (T-18,
+        guarding against a repeat of the R6 "classifier unreachable from
+        the live graph" defect)."""
+        called = [s for s, _ in self.calls]
+        assert schema in called, (
+            f"{schema.__name__} was never consulted (calls made: "
+            f"{[s.__name__ for s in called]}) — an expected call site may "
+            "have gone silently unreached."
+        )
+
 
 @dataclass
 class RefusingLLMClient:
@@ -73,6 +96,28 @@ class RefusingLLMClient:
             f"RefusingLLMClient.structured({schema.__name__}) called — the caller should have "
             "short-circuited on a hard rule before ever consulting the model."
         )
+
+
+@dataclass
+class AbstainingLLMClient:
+    """An ``LLMClient`` that raises a real "the model produced no usable
+    output" failure on every ``.structured`` call — one of the exception
+    types ``run_classifier`` narrows its ``except`` to (T-18), so a test
+    using this exercises genuine abstention semantics.
+
+    Deliberately distinct from ``RefusingLLMClient``, whose
+    ``AssertionError`` is a *programming*-error tripwire ("you should never
+    have called me") that ``run_classifier`` must now let propagate rather
+    than absorb into abstention — so it can no longer stand in for "the
+    classifier fails and abstains" once the except clause is narrowed."""
+
+    calls: int = 0
+
+    def structured(
+        self, schema: type[BaseModel], messages: list[dict[str, Any]], temperature: float = 0.0
+    ) -> BaseModel:
+        self.calls += 1
+        raise ValueError(f"{schema.__name__}: synthetic model refusal/truncation")
 
 
 @dataclass

@@ -14,6 +14,7 @@ from agent.graph import run_agent
 from agent.schemas import Classification, GroundednessJudgment, KBAnswerDraft, PermissionMatch
 from data import Case, get_case
 from data.seed import SeedResult
+from escalation.classifier import EscalationCall
 from helpdesk.email_adapter import EmailAdapter
 
 from .conftest import seed_conversation
@@ -47,6 +48,7 @@ def test_case_status_question_resolves_to_public_reply_with_real_case_facts(
 
     result = run_agent(ticket_id, port=port, llm=llm)
 
+    llm.assert_consulted(EscalationCall)
     assert result["route"] == "case_status"
     assert result["escalation"] is None
     draft = result["draft"]

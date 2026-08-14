@@ -105,6 +105,7 @@ def test_ordinary_message_no_hard_rule_consults_classifier_leaves_route_untouche
     assert result["tool_results"]["decision"] == {"gate_enabled": False}
     assert len(llm.calls) == 1
     assert llm.calls[0][0] is EscalationCall  # exactly the classifier, nothing else
+    llm.assert_consulted(EscalationCall)
 
 
 def test_already_escalated_route_is_not_re_swept() -> None:

@@ -12,7 +12,7 @@ from escalation.classifier import EscalationCall
 from escalation.engine import EscalationEngine
 
 from .conftest import make_conversation, make_ticket
-from .fakes import FakeLLMClient, RefusingLLMClient
+from .fakes import AbstainingLLMClient, FakeLLMClient, RefusingLLMClient
 
 THRESHOLD = 0.6
 
@@ -141,7 +141,10 @@ def test_neither_hard_rule_nor_classifier_does_not_escalate() -> None:
 
 
 def test_classifier_abstention_hard_escalates() -> None:
-    llm = RefusingLLMClient()  # every call raises -> run_classifier returns None -> abstention
+    # A genuine, absorbable model failure (not RefusingLLMClient's
+    # programming-error tripwire, which T-18's narrowed except no longer
+    # catches) -> run_classifier's except fires -> returns None -> abstention.
+    llm = AbstainingLLMClient()
     engine = _engine(llm)
     decision = engine.evaluate(
         ticket=make_ticket(),

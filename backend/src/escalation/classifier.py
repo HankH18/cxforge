@@ -8,11 +8,16 @@ sentiment model beyond the classifier prompt").
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+import openai
 
 from agent.llm import LLMClient
 from escalation.schemas import EscalationCall
 from helpdesk.models import Message
+
+logger = logging.getLogger(__name__)
 
 # The prompt deliberately narrows the model's job to exactly the two
 # reasons DESIGN assigns the classifier (frustration, complexity) — every
@@ -47,12 +52,21 @@ def _transcript(conversation: list[Message]) -> str:
 def run_classifier(
     llm: LLMClient, *, conversation: list[Message], topic: str
 ) -> EscalationCall | None:
-    """Run the escalation classifier, or return ``None`` on any failure to
-    produce a usable verdict — a refusal, a truncated response, or any
-    other exception the underlying ``LLMClient`` raises. ``None`` is
-    exactly DESIGN's "classifier abstention" hard-rule condition (see
+    """Run the escalation classifier, or return ``None`` on any *absorbable*
+    failure to produce a usable verdict — an OpenAI SDK API/connection/
+    timeout/refusal-shaped error, or the ``ValueError``
+    ``OpenAILLMClient.structured`` itself raises on a refusal or truncated
+    response (see ``agent/llm.py``). ``None`` is exactly DESIGN's
+    "classifier abstention" hard-rule condition (see
     ``escalation.rules.is_classifier_abstention``); callers must treat it
     as a hard escalation trigger, never as "no opinion, proceed normally."
+
+    Deliberately NOT caught here: anything else — a ``TypeError``,
+    ``AttributeError``, ``KeyError``, an unregistered-schema
+    ``AssertionError`` from a test double, or any other programming error.
+    Those are bugs, not model-shaped failures; swallowing them into
+    abstention would silently turn a defect in this path into a plausible-
+    looking escalation instead of a loud crash (T-18). They propagate.
     """
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": ESCALATION_CLASSIFIER_SYSTEM},
@@ -63,8 +77,15 @@ def run_classifier(
     ]
     try:
         result = llm.structured(EscalationCall, messages)
-    except Exception:
+    except (openai.OpenAIError, ValueError) as exc:
+        logger.warning(
+            "Escalation classifier abstained after %s: %s", type(exc).__name__, exc
+        )
         return None
     if not isinstance(result, EscalationCall):
+        logger.warning(
+            "Escalation classifier abstained: structured() returned %s, not EscalationCall",
+            type(result).__name__,
+        )
         return None
     return result

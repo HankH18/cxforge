@@ -83,6 +83,7 @@ def test_frustrated_customer_no_hard_rule_classifier_above_threshold_escalates(
 
     result = run_agent(ticket_id, port=port, llm=llm)
 
+    llm.assert_consulted(EscalationCall)
     assert result["route"] == "escalate"
     decision = result["escalation"]
     assert decision is not None
@@ -141,6 +142,7 @@ def test_frustrated_customer_no_hard_rule_classifier_below_threshold_does_not_es
 
     result = run_agent(ticket_id, port=port, llm=llm)
 
+    llm.assert_consulted(EscalationCall)
     assert result["route"] == "case_status"
     assert result["escalation"] is None
     draft = result["draft"]
