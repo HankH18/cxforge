@@ -37,10 +37,15 @@ TIMESTAMP_HEADER = "X-Zendesk-Webhook-Signature-Timestamp"
 
 
 def _sign(raw_body: bytes, *, timestamp: str = TIMESTAMP, secret: str = TEST_SIGNING_SECRET) -> str:
-    """Independent reimplementation of Zendesk's signing scheme: base64
-    signing secret decoded to raw key bytes, HMAC-SHA256 over
-    `timestamp + raw_body`, base64-encoded."""
-    key = base64.b64decode(secret)
+    """Independent reimplementation of Zendesk's signing scheme.
+
+    The secret's OWN BYTES are the HMAC key — it is not base64-decoded
+    first. Only the resulting digest is base64-encoded. Verified against a
+    live Zendesk webhook; the previous decode-the-secret version of this
+    helper matched a bug in the implementation rather than reality, so both
+    agreed with each other and neither agreed with Zendesk.
+    """
+    key = secret.encode("utf-8")
     digest = hmac.new(key, timestamp.encode("utf-8") + raw_body, hashlib.sha256).digest()
     return base64.b64encode(digest).decode("utf-8")
 

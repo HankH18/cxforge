@@ -11,7 +11,6 @@ service), rather than this conftest special-casing anything.
 
 from __future__ import annotations
 
-import base64
 import uuid
 from collections.abc import Iterator
 
@@ -21,10 +20,16 @@ from fastapi.testclient import TestClient
 from data import get_connection, init_schema
 from main import app
 
-# A fixed, valid-base64 signing secret used by every test in this suite —
-# independent of whatever (if anything) is in the host's real .env, so this
-# suite never depends on real Zendesk credentials existing.
-TEST_SIGNING_SECRET = base64.b64encode(b"ingress-test-signing-secret").decode("utf-8")
+# Shaped like a REAL Zendesk signing secret: a 44-character opaque string
+# that is deliberately NOT valid base64.
+#
+# The previous fixture was `base64.b64encode(...)`, which let a bug survive
+# to production: the implementation base64-decoded the secret before using
+# it as the HMAC key, so every genuine Zendesk request failed closed with
+# 401 "signing secret is not valid base64" — while this suite stayed green,
+# because a base64-derived fixture decodes happily. A fixture that cannot
+# be decoded keeps the test honest about what Zendesk actually sends.
+TEST_SIGNING_SECRET = "zEnDeskT3stSigningS3cret_notBase64_44charsXY"
 TEST_AI_USER_ID = "ingress-test-ai-user-999"
 
 

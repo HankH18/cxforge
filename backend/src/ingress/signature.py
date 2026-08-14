@@ -8,14 +8,21 @@ against a real webhook the moment Zendesk's wire format doesn't match
 whatever `json.dumps` would produce, so every caller here MUST pass the
 exact bytes read off the request body.
 
-The signing secret Zendesk issues when the webhook is created is itself
-base64-encoded and must be base64-decoded before use as the HMAC key.
+The signing secret is used DIRECTLY as the HMAC key — it is NOT
+base64-decoded first. An earlier revision decoded it, which made every
+real request fail closed with 401 ("signing secret is not valid base64")
+before the signature was even compared: Zendesk's actual secret is a
+44-character string that is not valid base64. The unit tests did not catch
+this because they minted their own base64-valid fake secret; only first
+contact with a real webhook exposed it. Zendesk's docs specify only
+"sign the body and signature timestamp with the webhook secret key using
+SHA256, then base64 encoding the resulting digest" — the base64 applies to
+the digest, not the key.
 """
 
 from __future__ import annotations
 
 import base64
-import binascii
 import hashlib
 import hmac
 
@@ -26,12 +33,9 @@ class SignatureVerificationError(Exception):
 
 def compute_signature(secret: str, timestamp: str, raw_body: bytes) -> str:
     """Return the base64-encoded HMAC-SHA256 signature for `timestamp +
-    raw_body`, keyed by the base64-encoded signing secret Zendesk issued.
+    raw_body`, keyed by the signing secret's own bytes.
     """
-    try:
-        key = base64.b64decode(secret, validate=True)
-    except (binascii.Error, ValueError) as exc:
-        raise SignatureVerificationError("signing secret is not valid base64") from exc
+    key = secret.encode("utf-8")
     message = timestamp.encode("utf-8") + raw_body
     digest = hmac.new(key, message, hashlib.sha256).digest()
     return base64.b64encode(digest).decode("utf-8")
