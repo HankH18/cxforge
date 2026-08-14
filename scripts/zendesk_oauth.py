@@ -34,9 +34,12 @@ The token value is written to .env and never printed.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import http.server
 import json
 import re
+import secrets
 import socket
 import sys
 import threading
@@ -49,6 +52,24 @@ DEFAULT_REDIRECT_URI = "http://localhost:8129/callback"
 SCOPE = "read write"
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 CALLBACK_TIMEOUT_S = 300
+# Where the PKCE verifier is parked between --url and the code exchange, since
+# those are two separate processes. Deleted after use.
+VERIFIER_PATH = Path(__file__).resolve().parent.parent / ".zendesk_pkce_verifier"
+
+
+def make_pkce() -> tuple[str, str]:
+    """Return (verifier, challenge) for PKCE S256.
+
+    Zendesk reports `kind: "public"` for this OAuth client. Public clients
+    cannot hold a secret, so PKCE is REQUIRED, not optional: without
+    code_challenge the authorize endpoint rejects the request as
+    `invalid_request - missing a required parameter`, which is exactly the
+    error this flow hit.
+    """
+    verifier = secrets.token_urlsafe(64)[:128]
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    return verifier, challenge
 
 
 def redirect_uri(env: dict[str, str]) -> str:
@@ -101,7 +122,7 @@ def require(env: dict[str, str], *keys: str) -> list[str]:
     return [env[k] for k in keys]
 
 
-def authorize_url(subdomain: str, client_id: str, redirect: str) -> str:
+def authorize_url(subdomain: str, client_id: str, redirect: str, challenge: str) -> str:
     # quote_via=quote so the space in "read write" encodes as %20, matching
     # Zendesk's own documented example, rather than urlencode's default '+'.
     query = urllib.parse.urlencode(
@@ -110,13 +131,17 @@ def authorize_url(subdomain: str, client_id: str, redirect: str) -> str:
             "redirect_uri": redirect,
             "client_id": client_id,
             "scope": SCOPE,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
         },
         quote_via=urllib.parse.quote,
     )
     return f"https://{subdomain}.zendesk.com/oauth/authorizations/new?{query}"
 
 
-def exchange(subdomain: str, client_id: str, client_secret: str, code: str, redirect: str) -> str:
+def exchange(
+    subdomain: str, client_id: str, client_secret: str, code: str, redirect: str, verifier: str
+) -> str:
     body = json.dumps(
         {
             "grant_type": "authorization_code",
@@ -125,6 +150,7 @@ def exchange(subdomain: str, client_id: str, client_secret: str, code: str, redi
             "client_secret": client_secret,
             "redirect_uri": redirect,
             "scope": SCOPE,
+            "code_verifier": verifier,
         }
     ).encode()
     request = urllib.request.Request(
@@ -235,16 +261,20 @@ def main(argv: list[str]) -> None:
 
     if mode in {"--url", "-u"}:
         subdomain, client_id = require(env, "ZENDESK_SUBDOMAIN", "ZENDESK_OAUTH_CLIENT_ID")
+        verifier, challenge = make_pkce()
+        VERIFIER_PATH.write_text(verifier)
         print(f"This exact string must be in the OAuth client's Redirect URLs:\n  {redirect}\n")
         print("Then open this, click Allow, and copy the `code=` value from the")
         print("address bar of the 'cannot connect' page you land on:\n")
-        print(authorize_url(subdomain, client_id, redirect))
+        print(authorize_url(subdomain, client_id, redirect, challenge))
         print(f"\nThen:  uv run python scripts/{Path(__file__).name} <code>")
         return
 
     subdomain, client_id, client_secret = require(
         env, "ZENDESK_SUBDOMAIN", "ZENDESK_OAUTH_CLIENT_ID", "ZENDESK_OAUTH_CLIENT_SECRET"
     )
+    verifier, challenge = make_pkce()
+
     if mode in {"--serve", "-s"}:
         port = callback_port(redirect)
         if port is None:
@@ -252,12 +282,22 @@ def main(argv: list[str]) -> None:
                 f"error: {redirect} is not a localhost URL, so no local listener can\n"
                 "receive it. Use the manual flow: --url, then pass the code."
             )
-        code = serve_and_capture(authorize_url(subdomain, client_id, redirect), port, redirect)
+        code = serve_and_capture(
+            authorize_url(subdomain, client_id, redirect, challenge), port, redirect
+        )
         print("Code captured. Exchanging ...")
     else:
         code = mode.strip()
+        if not VERIFIER_PATH.exists():
+            sys.exit(
+                "error: no PKCE verifier on disk. This client is a PUBLIC OAuth\n"
+                "client, so the code is bound to the challenge sent at authorize\n"
+                "time. Run --url (or --serve) first, then exchange."
+            )
+        verifier = VERIFIER_PATH.read_text().strip()
 
-    token = exchange(subdomain, client_id, client_secret, code, redirect)
+    token = exchange(subdomain, client_id, client_secret, code, redirect, verifier)
+    VERIFIER_PATH.unlink(missing_ok=True)
     write_token(token)
     print(f"Success. ZENDESK_OAUTH_TOKEN written to .env ({len(token)} chars, not printed).")
     print("Next: docs/zendesk-runbook.md step 3 for ZENDESK_AI_USER_ID.")

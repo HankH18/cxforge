@@ -59,6 +59,17 @@ authenticates as an OAuth 2.0 app instead.
    - **Unique identifier**: leave the auto-filled value, or set your own
      (e.g. `othram_support_agent`) — this is `ZENDESK_OAUTH_CLIENT_ID`.
    - **Redirect URLs**: `http://localhost:8129/callback` — exactly this.
+   - **Client kind**: Zendesk creates these as `kind: "public"`. A public
+     client cannot hold a secret, so **PKCE is mandatory**, not optional.
+     `scripts/zendesk_oauth.py` sends `code_challenge` +
+     `code_challenge_method=S256` and the matching `code_verifier` at
+     exchange. Omitting them makes `/oauth/authorizations/new` fail with
+     `invalid_request — The request is missing a required parameter`, even
+     when the client id, secret and redirect URL are all correct. That
+     error was hit for real during this build and cost several rounds of
+     misdiagnosis; check `kind` before blaming the credentials. You can
+     read the client's true config from a logged-in browser with:
+     `fetch('/api/v2/oauth/clients/<id>.json',{credentials:'include'})`.
 
      > **Do not use `urn:ietf:wg:oauth:2.0:oob`.** An earlier revision of
      > this runbook said to, and it does not work: Zendesk requires redirect

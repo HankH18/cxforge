@@ -22,3 +22,6 @@ portal/dist/
 
 # Agent worktrees (transient)
 .claude/worktrees/
+
+# Transient PKCE verifier (scripts/zendesk_oauth.py)
+.zendesk_pkce_verifier
