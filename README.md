@@ -6,23 +6,129 @@ lab: answers routine inquiries grounded in a knowledge base and a live
 case-management system, and escalates to a human only when necessary. A
 React review portal (draft feed + approval gate) ships alongside it.
 
-Full documentation — architecture, grounding design, escalation
-methodology, deployment — lands under `docs/` as later tickets complete
-(see `docs/SPEC.md`, `docs/DESIGN.md`, and `docs/tickets.json` for the
-build plan this repo is executing against). This README stays intentionally
-brief; T-11 owns the complete write-up.
+Built by executing an approved task graph (`docs/tickets.json`, mirrored
+for humans at `docs/TASKS.md`) against a fixed spec (`docs/SPEC.md`) and
+design (`docs/DESIGN.md`) — see those files for the full intent and
+contracts. This README is the entry point: quickstart, where the rest of
+the documentation lives, and an honest account of what's actually been
+verified versus what's still outstanding.
 
-## Quickstart
+## Quickstart (verified from a clean clone)
+
+Every command below was run end to end on a clean checkout while writing
+this section — including bringing up the production `deploy/` stack in a
+separate terminal at the same time, to confirm the two never collide (see
+`deploy/docker-compose.yml`'s header comment for how).
 
 ```bash
-cp .env.example .env          # fill in as each ticket's docs/*-runbook.md requires
-docker compose up -d db       # Postgres 16 + pgvector
+cp .env.example .env            # fill in as each ticket's docs/*-runbook.md requires;
+                                 # empty Zendesk/OpenAI values are fine to start —
+                                 # see "Status" below for what that does and doesn't unlock
+
+# 1. Dev database (Postgres 16 + pgvector) — the root docker-compose.yml
+#    is dev-only, a single `db` service the test suite points at.
+docker compose up -d db
+
+# 2. Python deps
 uv sync
-uv run pytest                 # full suite
-uv run pytest -m contract -q  # HelpdeskPort contract suite only
+
+# 3. Full test suite (222 tests as of this writing)
+uv run pytest
+uv run pytest -m contract -q    # HelpdeskPort contract suite only — both adapters
 uv run ruff check .
 uv run mypy backend
+
+# 4. Run the backend app (dev mode — for the production image, see
+#    deploy/Dockerfile.backend and docs/deploy.md instead)
+PYTHONPATH=backend/src uv run uvicorn main:app --reload --port 8000
+# -> GET http://localhost:8000/health  ==>  {"status": "ok"}
+
+# 5. Run the portal (separate terminal; proxies /api to :8000 automatically
+#    — see portal/vite.config.ts)
+cd portal
+npm install
+npm run dev
+# -> http://localhost:5173
 ```
+
+Seeding the case/KB fixture data the portal and grounding logic read
+(`data.seed.seed_all`, offline — no `OPENAI_API_KEY` needed, see
+`backend/src/data/embeddings.py`'s `HashingEmbedder`):
+
+```bash
+uv run python -c "from data.seed import seed_all; print(seed_all())"
+```
+
+## Documentation
+
+- `docs/SPEC.md` — intent: requirements, constraints, success criteria.
+- `docs/DESIGN.md` — contracts: data models, agent graph, HelpdeskPort,
+  portal API, metric definitions.
+- `docs/tickets.json` / `docs/TASKS.md` — the task graph this repo was
+  built from (JSON is authoritative; the `.md` is its human-readable
+  mirror).
+- `docs/zendesk-runbook.md` — the human steps to stand up a real Zendesk
+  trial: OAuth app, AI agent user, trigger, webhook + signing secret,
+  `cloudflared` tunnel for local dev.
+- `docs/deploy.md` — how to put this on a DigitalOcean droplet: sizing,
+  install steps, getting the repo there, supplying `.env` safely, running
+  the stack, pointing the Zendesk webhook at it, running
+  `scripts/verify_deploy.sh` against it.
+- `docs/eval-report/` — the escalation precision/recall report generated
+  from `evals/labeled_set.yaml` (`uv run python -m evals.report`). **Draft**
+  — see Status below.
+- `docs/architecture.md`, `docs/grounding.md`, `docs/portability.md`,
+  `docs/demo-script.md` — system architecture (+ diagram), grounding
+  design, the HelpdeskPort portability story, and the demo shot list,
+  each written directly to the acceptance criteria in `docs/tickets.json`'s
+  `T-11` entry.
+
+## Status — what's actually verified here, and what isn't
+
+Said plainly, not overstated:
+
+**Live-verified, on this machine, as part of building this:**
+- `uv run pytest` (222 tests), `uv run pytest -m contract -q` (both
+  `HelpdeskPort` adapters), `uv run ruff check .`, `uv run mypy backend` —
+  all green.
+- `cd portal && npm run build` (typechecks + builds) and `npm test`
+  (5 component tests) — both green.
+- The production stack (`deploy/docker-compose.yml`): built, brought up,
+  and torn down locally with `bash scripts/verify_deploy.sh`, which
+  asserts `GET /health` is 200, the portal serves its built index,
+  `GET /api/metrics` is 401 with no token and 200 with the right
+  `X-Portal-Token` — all through the portal's nginx reverse proxy, the
+  same single entry point a deployed droplet would expose. The backend
+  image bootstraps its own schema and seeds 30 fixture cases / 44 KB
+  chunks on first start (`deploy/backend/bootstrap.py`).
+- The dev Postgres container (`othram-db`) was left completely undisturbed
+  by all of the above — confirmed by checking its status before and after.
+
+**Not verified — stated honestly rather than glossed over:**
+- **No droplet exists.** `docs/deploy.md` is the procedure to create one;
+  `scripts/verify_deploy.sh` supports pointing at one (`DEPLOY_HOST`) once
+  it does, but that path has not been exercised here.
+- **Zendesk live e2e is unrun.** `ZENDESK_OAUTH_TOKEN`,
+  `ZENDESK_WEBHOOK_SIGNING_SECRET`, `ZENDESK_AI_USER_ID`, and
+  `ZENDESK_OAUTH_CLIENT_ID` are all empty in this environment — no trial
+  account has been signed up for (`docs/zendesk-runbook.md` is a human
+  step, not yet done). The app is designed to degrade honestly without
+  them (every read of a Zendesk env var happens at request time, never at
+  import/startup — see `backend/src/ingress/__init__.py` and
+  `backend/src/helpdesk/zendesk_adapter.py`), and that degrade behavior
+  itself IS verified (the production image starts and serves `/health`
+  with zero Zendesk credentials set), but the real trigger→webhook→
+  reply round trip against a live Zendesk instance is not.
+- **The escalation eval report is a DRAFT.** `docs/eval-report/report.md`
+  says so at the top: `evals/labeled_set.yaml`'s `approval.status` is
+  `PROPOSED_AWAITING_HUMAN_REVIEW`, not `APPROVED` — per T-7's own rule,
+  only the project owner may flip that, after reviewing `evals/REVIEW.md`.
+  Every number in that report is proof the measurement pipeline runs
+  correctly, not yet a real, human-approved measurement.
+- **`OPENAI_API_KEY` is empty.** The agent graph's LLM-backed nodes have
+  never been exercised against the real OpenAI API in this environment —
+  every graph/grounding test runs against a fake `LLMClient`
+  (`backend/tests/graph/fakes.py`).
 
 ## Portability: the HelpdeskPort boundary
 

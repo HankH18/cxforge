@@ -1,0 +1,150 @@
+# Production stack for the Othram AI Support Agent (T-11).
+#
+# Self-contained under deploy/ per SPEC#constraints: the root
+# docker-compose.yml (T-0) is dev-only — a bare Postgres container the
+# test suite points at — and out of this ticket's edit scope. This file
+# is the whole production stack: Postgres 16 + pgvector, the FastAPI
+# backend, and the portal (built to static files, served by nginx).
+#
+# --- Isolation from the dev stack (T-0's docker-compose.yml) ---
+# - `name:` below pins the compose PROJECT name to `othram-deploy`
+#   regardless of the directory this is invoked from, so its network,
+#   default volume names, and `docker compose down` scope never collide
+#   with the dev stack's project (whatever directory-derived name that
+#   resolves to).
+# - Every `container_name` is `othram-deploy-*`, distinct from the dev
+#   stack's `othram-db`.
+# - The `db` service here has no `ports:` mapping at all — it is reachable
+#   only from `backend` over the internal `othram-deploy` network, at
+#   hostname `db`. The dev stack's Postgres keeps host port 5432 to
+#   itself; this stack never binds it, so the two can run at the same
+#   time without a port conflict.
+# - `deploy_pgdata` is a project-scoped named volume (fully distinct from
+#   the dev stack's `pgdata`), so bringing this stack up/down can never
+#   read or clobber dev data.
+#
+# --- Env vars ---
+# Every `${VAR}` below is read from the shell environment `docker compose`
+# runs in — NOT baked into any image (no secrets in `deploy/Dockerfile.*`).
+# Populate them by sourcing the repo-root `.env` before running compose,
+# the same idiom `.env.example` already documents for `doctl`:
+#
+#     set -a; source .env; set +a
+#     docker compose -f deploy/docker-compose.yml up -d --build
+#
+# See docs/deploy.md for the full list of vars, what each one does, and
+# how to supply them safely on a droplet (never committed, never baked
+# into an image layer).
+name: othram-deploy
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: othram-deploy-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-othram}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-othram}
+      POSTGRES_DB: ${POSTGRES_DB:-othram}
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-othram} -d ${POSTGRES_DB:-othram}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    volumes:
+      - deploy_pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - othram-deploy
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    container_name: othram-deploy-backend
+    environment:
+      # Internal service DNS name (`db`), not `localhost` — the dev
+      # stack's own `DATABASE_URL` (root .env, pointed at
+      # localhost:5432 for `docker compose up -d db`) would resolve to
+      # this CONTAINER's own loopback, not the host's dev Postgres, so it
+      # is deliberately never referenced here; this is built fresh from
+      # the POSTGRES_* parts against the `db` service above instead.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-othram}:${POSTGRES_PASSWORD:-othram}@db:5432/${POSTGRES_DB:-othram}
+      PORTAL_TOKEN: ${PORTAL_TOKEN:-dev-portal-token}
+      # Zendesk OAuth — all four may be empty (as they are in this
+      # environment: no live Zendesk trial). Every read of these
+      # (backend/src/ingress/__init__.py, backend/src/helpdesk/
+      # zendesk_adapter.py) happens at REQUEST time, never at import/
+      # startup, so the app starts and serves /health with none of them
+      # set — it just 500s the specific endpoints that need a given var
+      # (e.g. the webhook needs ZENDESK_WEBHOOK_SIGNING_SECRET) until
+      # docs/zendesk-runbook.md has been completed by a human.
+      ZENDESK_SUBDOMAIN: ${ZENDESK_SUBDOMAIN:-}
+      ZENDESK_OAUTH_TOKEN: ${ZENDESK_OAUTH_TOKEN:-}
+      ZENDESK_AI_USER_ID: ${ZENDESK_AI_USER_ID:-}
+      ZENDESK_WEBHOOK_SIGNING_SECRET: ${ZENDESK_WEBHOOK_SIGNING_SECRET:-}
+      # Also unused/empty in this environment (no OPENAI_API_KEY) — the
+      # agent graph (backend/src/agent/llm.py's OpenAILLMClient) is
+      # constructed lazily and never touches the network until a real
+      # `.structured()` call, which nothing on the ingress path triggers
+      # yet (see backend/src/ingress/__init__.py's module docstring).
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      # deploy/backend/bootstrap.py — see that file's docstring.
+      SEED_ON_START: ${SEED_ON_START:-true}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - othram-deploy
+
+  portal:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.portal
+      args:
+        # Build-time only — see deploy/Dockerfile.portal's header comment
+        # for why this can't be a runtime `environment:` entry and the
+        # security implication of it landing in the shipped JS bundle.
+        VITE_PORTAL_TOKEN: ${PORTAL_TOKEN:-dev-portal-token}
+    container_name: othram-deploy-portal
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${PORTAL_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - othram-deploy
+
+volumes:
+  deploy_pgdata:
+    name: othram-deploy-pgdata
+
+networks:
+  othram-deploy:
+    name: othram-deploy

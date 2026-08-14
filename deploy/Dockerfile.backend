@@ -1,0 +1,82 @@
+# syntax=docker/dockerfile:1
+#
+# Production image for the FastAPI backend (T-11). Self-contained under
+# deploy/ per SPEC#constraints — the root docker-compose.yml (T-0) is
+# dev-only (Postgres alone) and out of this ticket's edit scope, so this
+# stack brings its own Dockerfiles.
+#
+# Build context is the REPO ROOT (see deploy/docker-compose.yml:
+# `build.context: ..`), not `deploy/`, because this image needs three
+# things that live in three different places: pyproject.toml + uv.lock
+# (repo root — T-0 owns pyproject.toml; uv.lock is committed so `--frozen`
+# below reproduces exactly what CI resolved, never a fresh resolve),
+# backend/src (T-1..T-10's application code), and fixtures/ (the seed
+# data deploy/backend/bootstrap.py loads at container start). Docker
+# forbids COPY-ing anything outside the build context, so a context
+# narrower than the repo root can't reach all three without duplicating
+# files into deploy/. deploy/Dockerfile.backend.dockerignore trims that
+# wide context back down to just what's copied below.
+#
+# The app is NOT installed as a distribution — [tool.uv] package = false
+# in pyproject.toml (T-0's own comment: "components are imported from
+# backend/src via pythonpath, not installed as a distribution"). This
+# Dockerfile mirrors that: `uv sync` only ever resolves/installs
+# dependencies into a venv, and PYTHONPATH (set below) is what makes
+# `backend/src`'s packages (`main`, `ingress`, `portal`, `data`,
+# `helpdesk`, `agent`, `escalation`) importable — exactly like
+# [tool.pytest.ini_options].pythonpath does for the test suite.
+
+FROM python:3.12-slim AS builder
+
+# uv from PyPI (not the ghcr.io/astral-sh/uv image) — one fewer external
+# registry to depend on; a released wheel is exactly as reproducible.
+RUN pip install --no-cache-dir --root-user-action=ignore uv==0.5.11
+
+WORKDIR /app
+ENV UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_PROJECT_ENVIRONMENT=/app/.venv
+
+# Dependency resolution first, isolated from source changes, so editing
+# backend/src doesn't invalidate this (slow) layer.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Everything the running app needs at import/runtime: source + fixture
+# data (`data.seed.seed_all`'s DEFAULT_CASES_PATH/DEFAULT_KB_DIR resolve
+# to <repo-root>/fixtures — see backend/src/data/seed.py).
+COPY backend/src ./backend/src
+COPY fixtures ./fixtures
+
+FROM python:3.12-slim AS runtime
+
+RUN groupadd --system --gid 1000 app \
+    && useradd --system --uid 1000 --gid app --home-dir /app --shell /usr/sbin/nologin app
+
+WORKDIR /app
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/backend/src /app/backend/src
+COPY --from=builder /app/fixtures /app/fixtures
+COPY deploy/backend/bootstrap.py /app/deploy_bootstrap.py
+COPY deploy/backend/entrypoint.sh /app/entrypoint.sh
+
+RUN chmod +x /app/entrypoint.sh \
+    && chown -R app:app /app
+
+ENV PATH=/app/.venv/bin:$PATH \
+    PYTHONPATH=/app/backend/src \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+USER app
+EXPOSE 8000
+
+HEALTHCHECK --interval=5s --timeout=3s --retries=20 --start-period=10s \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)" || exit 1
+
+# entrypoint.sh runs the deploy-time DB bootstrap (schema + optional seed)
+# then execs uvicorn — see deploy/backend/entrypoint.sh and
+# deploy/backend/bootstrap.py for exactly what that does and why it's
+# allowed to live under deploy/ rather than backend/**.
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

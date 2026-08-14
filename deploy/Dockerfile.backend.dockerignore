@@ -1,0 +1,43 @@
+# Build-context trim for deploy/Dockerfile.backend (T-11).
+#
+# The build context is the repo root (`..` from this file — see
+# deploy/docker-compose.yml's `build.context`) because the backend image
+# needs pyproject.toml/uv.lock (repo root) AND backend/src/** AND
+# fixtures/** (the seed data `data.seed.seed_all` reads at container
+# start — see deploy/backend/bootstrap.py). BuildKit honors a
+# `<Dockerfile-name>.dockerignore` file colocated with the Dockerfile
+# itself (verified against this Docker install), so this trims the
+# context without needing a root-level .dockerignore, which is outside
+# T-11's edit scope (backend/**, portal/**, and root files belong to
+# other tickets).
+#
+# Everything not listed here IS sent to the daemon — this is an
+# exclude-list, not an include-list. An earlier `* ` + `!keep/me`
+# include-list approach was tried and discarded: dockerignore (like
+# gitignore) cannot re-include a path whose parent directory was already
+# excluded by a broader pattern, so `*` followed by `!backend/src` sends
+# nothing. Enumerating what NOT to send avoids that trap.
+.claude
+.codegraph
+.deepeval
+.env
+.env.local
+.git
+.github
+.gitignore
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.venv
+CLAUDE.md
+README.md
+backend/tests
+docker-compose.yml
+docs
+evals
+portal
+promptfooconfig.yaml
+scripts
+**/__pycache__
+**/*.py[cod]
+**/.DS_Store

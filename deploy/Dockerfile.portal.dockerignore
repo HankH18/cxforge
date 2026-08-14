@@ -1,0 +1,32 @@
+# Build-context trim for deploy/Dockerfile.portal (T-11). Same mechanism
+# and rationale as Dockerfile.backend.dockerignore — see that file's
+# header comment. The portal image only needs portal/** (minus its own
+# node_modules/dist) plus deploy/portal/nginx.conf.
+.claude
+.codegraph
+.deepeval
+.env
+.env.local
+.git
+.github
+.gitignore
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.venv
+CLAUDE.md
+README.md
+backend
+docker-compose.yml
+docs
+evals
+fixtures
+promptfooconfig.yaml
+pyproject.toml
+uv.lock
+scripts
+portal/node_modules
+portal/dist
+**/__pycache__
+**/*.py[cod]
+**/.DS_Store
