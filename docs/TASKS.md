@@ -339,7 +339,7 @@ committed script (`scripts/render_tasks_md.py`).
   - Runs after T-15 because it rewrites verify commands, including the one T-15 installs; the two otherwise contend on docs/tickets.json
 - **Parallel safe**: no
 - **Priority**: next
-- **Status**: in_progress
+- **Status**: closed
 
 ### T-15: Machine-enforce the human approval gate
 - **Objective**: evals.report main() returns 0 unconditionally, so T-7's verify passes green with labels no human has approved; the project's one inviolable rule is its only unenforced one.
@@ -379,7 +379,7 @@ committed script (`scripts/render_tasks_md.py`).
   - No weakening of any existing assertion to make a suite parallel-safe
 - **Parallel safe**: no
 - **Priority**: next
-- **Status**: open
+- **Status**: in_progress
 
 ### T-17: Deploy verifier honours an exported DEPLOY_HOST
 - **Objective**: verify_deploy.sh sources .env with set -a before reading DEPLOY_HOST, and .env defines it as an empty assignment, so an exported value is silently clobbered and the run falls to LOCAL mode while printing PASS.
