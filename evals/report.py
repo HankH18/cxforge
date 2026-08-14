@@ -760,7 +760,7 @@ def main(argv: list[str] | None = None) -> int:
     (args.output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
 
     print(report_md)
-    return 0
+    return 0 if approved else 1
 
 
 if __name__ == "__main__":

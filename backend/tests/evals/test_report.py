@@ -9,7 +9,10 @@ a package outside that path.
 Also covers the one behavior this ticket is built around: the report
 generator must REFUSE to emit a final/authoritative report while
 ``evals/labeled_set.yaml``'s ``approval.status`` is not ``APPROVED`` —
-instead emitting a clearly DRAFT-watermarked report and still exiting 0.
+emitting a clearly DRAFT-watermarked report AND exiting non-zero (T-15:
+the approval gate is machine-enforced via ``evals.report.main``'s exit
+code, routed through ``is_approved()`` alone — see
+``test_report_refuses_a_final_report_while_labels_are_unapproved``).
 """
 
 from __future__ import annotations
@@ -46,12 +49,54 @@ def test_labeled_set_yaml_is_actually_not_approved_right_now() -> None:
     assert raw["approval"]["status"] != "APPROVED"
 
 
-def test_report_generator_runs_end_to_end_and_exits_zero() -> None:
-    result = _run_report()
+def test_report_generator_runs_end_to_end_and_exits_zero(tmp_path: Path) -> None:
+    """Exit 0 is only true for genuinely approved input now that
+    ``evals.report.main`` routes its exit code through ``is_approved()``
+    (see ``test_report_refuses_a_final_report_while_labels_are_unapproved``
+    for the unapproved case, which exits non-zero). This test's own name
+    asserts the exit-zero behavior, so it targets a synthetic, fully-
+    approved fixture in ``tmp_path`` — never the real, still-unapproved
+    ``evals/labeled_set.yaml`` — mirroring the fixture pattern used by
+    ``test_report_would_render_differently_once_labels_are_approved``."""
+    synthetic_labeled_set = tmp_path / "labeled_set.yaml"
+    synthetic_labeled_set.write_text(
+        textwrap.dedent(
+            """\
+            approval:
+              status: APPROVED
+              approved_by: "Test Reviewer"
+              approved_date: "2026-08-13"
+            meta: {}
+            tickets:
+              - id: t-1
+                subject: "Routine question"
+                body: "How long does extraction usually take?"
+                expected_route: kb
+                expected_escalate: false
+                expected_reasons: []
+              - id: t-2
+                subject: "Billing problem"
+                body: "I was charged twice for my extraction fee, this is a billing error."
+                expected_route: escalate
+                expected_escalate: true
+                expected_reasons: [billing]
+            """
+        )
+    )
+    output_dir = tmp_path / "out"
+
+    result = _run_report(
+        "--labeled-set",
+        str(synthetic_labeled_set),
+        "--cases",
+        str(REPO_ROOT / "fixtures" / "cases.yaml"),
+        "--output-dir",
+        str(output_dir),
+    )
     assert result.returncode == 0, result.stderr
-    assert (REAL_OUTPUT_DIR / "report.md").exists()
-    assert (REAL_OUTPUT_DIR / "pr_curve.png").exists()
-    assert (REAL_OUTPUT_DIR / "metrics.json").exists()
+    assert (output_dir / "report.md").exists()
+    assert (output_dir / "pr_curve.png").exists()
+    assert (output_dir / "metrics.json").exists()
 
 
 def test_pr_curve_image_is_a_real_png() -> None:
@@ -95,7 +140,7 @@ def test_report_refuses_a_final_report_while_labels_are_unapproved() -> None:
     reads as an authoritative measurement — and must still exit 0 (this is
     expected, correct behavior, not a failure)."""
     result = _run_report()
-    assert result.returncode == 0
+    assert result.returncode != 0
 
     metrics = json.loads((REAL_OUTPUT_DIR / "metrics.json").read_text())
     assert metrics["approved"] is False
@@ -196,7 +241,140 @@ def test_report_still_refuses_when_status_is_approved_but_signoff_fields_are_emp
         "--output-dir",
         str(output_dir),
     )
-    assert result.returncode == 0, result.stderr
+    assert result.returncode != 0, result.stderr
+    metrics = json.loads((output_dir / "metrics.json").read_text())
+    assert metrics["approved"] is False
+
+    report_text = (output_dir / "report.md").read_text()
+    assert "DRAFT" in report_text
+
+
+def test_report_still_refuses_when_status_is_wrong_but_signoff_fields_are_filled(
+    tmp_path: Path,
+) -> None:
+    """Isolates the ``status == "APPROVED"`` clause of ``is_approved()``:
+    a name and date alone (with the status left at its default,
+    not-yet-reviewed value) must not be treated as approval — otherwise
+    someone could pre-fill signoff fields ahead of an actual review and
+    have the gate open regardless of status."""
+    synthetic_labeled_set = tmp_path / "labeled_set.yaml"
+    synthetic_labeled_set.write_text(
+        textwrap.dedent(
+            """\
+            approval:
+              status: PROPOSED_AWAITING_HUMAN_REVIEW
+              approved_by: "Test Reviewer"
+              approved_date: "2026-08-13"
+            meta: {}
+            tickets:
+              - id: t-1
+                subject: "Routine question"
+                body: "How long does extraction usually take?"
+                expected_route: kb
+                expected_escalate: false
+                expected_reasons: []
+            """
+        )
+    )
+    output_dir = tmp_path / "out"
+
+    result = _run_report(
+        "--labeled-set",
+        str(synthetic_labeled_set),
+        "--cases",
+        str(REPO_ROOT / "fixtures" / "cases.yaml"),
+        "--output-dir",
+        str(output_dir),
+    )
+    assert result.returncode != 0, result.stderr
+    metrics = json.loads((output_dir / "metrics.json").read_text())
+    assert metrics["approved"] is False
+
+    report_text = (output_dir / "report.md").read_text()
+    assert "DRAFT" in report_text
+
+
+def test_report_still_refuses_when_approved_by_is_empty_but_status_and_date_are_correct(
+    tmp_path: Path,
+) -> None:
+    """Isolates the ``bool(approval.get("approved_by"))`` clause of
+    ``is_approved()``: status flipped to APPROVED and a date recorded, but
+    no reviewer name, must still not count as approval — an attributable
+    human has to be on record, not just a status and a timestamp."""
+    synthetic_labeled_set = tmp_path / "labeled_set.yaml"
+    synthetic_labeled_set.write_text(
+        textwrap.dedent(
+            """\
+            approval:
+              status: APPROVED
+              approved_by: ""
+              approved_date: "2026-08-13"
+            meta: {}
+            tickets:
+              - id: t-1
+                subject: "Routine question"
+                body: "How long does extraction usually take?"
+                expected_route: kb
+                expected_escalate: false
+                expected_reasons: []
+            """
+        )
+    )
+    output_dir = tmp_path / "out"
+
+    result = _run_report(
+        "--labeled-set",
+        str(synthetic_labeled_set),
+        "--cases",
+        str(REPO_ROOT / "fixtures" / "cases.yaml"),
+        "--output-dir",
+        str(output_dir),
+    )
+    assert result.returncode != 0, result.stderr
+    metrics = json.loads((output_dir / "metrics.json").read_text())
+    assert metrics["approved"] is False
+
+    report_text = (output_dir / "report.md").read_text()
+    assert "DRAFT" in report_text
+
+
+def test_report_still_refuses_when_approved_date_is_empty_but_status_and_by_are_correct(
+    tmp_path: Path,
+) -> None:
+    """Isolates the ``bool(approval.get("approved_date"))`` clause of
+    ``is_approved()``: status flipped to APPROVED and a reviewer name
+    recorded, but no date, must still not count as approval — approval
+    has to be timestamped, not just attributed."""
+    synthetic_labeled_set = tmp_path / "labeled_set.yaml"
+    synthetic_labeled_set.write_text(
+        textwrap.dedent(
+            """\
+            approval:
+              status: APPROVED
+              approved_by: "Test Reviewer"
+              approved_date: ""
+            meta: {}
+            tickets:
+              - id: t-1
+                subject: "Routine question"
+                body: "How long does extraction usually take?"
+                expected_route: kb
+                expected_escalate: false
+                expected_reasons: []
+            """
+        )
+    )
+    output_dir = tmp_path / "out"
+
+    result = _run_report(
+        "--labeled-set",
+        str(synthetic_labeled_set),
+        "--cases",
+        str(REPO_ROOT / "fixtures" / "cases.yaml"),
+        "--output-dir",
+        str(output_dir),
+    )
+    assert result.returncode != 0, result.stderr
     metrics = json.loads((output_dir / "metrics.json").read_text())
     assert metrics["approved"] is False
 

@@ -238,7 +238,7 @@
         "recall >= 0.95 on the hard-trigger subset at the committed threshold; threshold written to escalation config",
         "report lands in docs/eval-report/"
       ],
-      "verify": "uv run python -m evals.report && uv run pytest backend/tests/evals -q",
+      "verify": "uv run python -c \"import yaml; a=yaml.safe_load(open('evals/labeled_set.yaml'))['approval']; import sys; sys.exit(0 if a.get('status')=='APPROVED' and a.get('approved_by') and a.get('approved_date') else 1)\" && uv run python -m evals.report && uv run pytest backend/tests/evals -q",
       "scope": [
         "evals/**",
         "backend/tests/evals/**",

@@ -174,6 +174,43 @@ here is a silent bug in the eval, not just a debatable one. Full text is in
 
 ---
 
+## What happens to the test suite once you approve
+
+Flipping `evals/labeled_set.yaml`'s `approval:` block to `APPROVED` (with
+your name and date) is expected to turn three tests in
+`backend/tests/evals/` **red** — that is by design, not a regression. Each
+one currently asserts "not approved yet"; once you've approved for real,
+that assertion is now testing the wrong thing and needs to be updated to
+assert the *approved* state instead. Do not treat a failure here as
+something to silently patch — each one names exactly what changed and why.
+
+1. **`backend/tests/evals/test_labeled_set.py::test_labels_are_not_self_approved`**
+   (asserts `approval["status"] != "APPROVED"` and that
+   `approved_by`/`approved_date` are empty) — once you've approved, replace
+   its three assertions with the mirror image: `status == "APPROVED"` and
+   `approved_by`/`approved_date` are non-empty and, ideally, assert
+   `approved_by` is *not* the string used by the coding agent's commits
+   (i.e. confirms a human name, not a re-run of automation).
+2. **`backend/tests/evals/test_report.py::test_labeled_set_yaml_is_actually_not_approved_right_now`**
+   (asserts `raw["approval"]["status"] != "APPROVED"`) — flip to
+   `== "APPROVED"`; consider renaming to
+   `..._is_actually_approved_right_now` so the name matches the assertion.
+3. **`backend/tests/evals/test_report.py::test_report_refuses_a_final_report_while_labels_are_unapproved`**
+   — once real, this test's entire premise (that the real fixture is
+   unapproved) is gone, not just its exit-code line. Rewrite its body to
+   match `test_report_would_render_differently_once_labels_are_approved`'s
+   assertions but against the **real** fixture (no `--labeled-set`
+   override): `result.returncode == 0`, `metrics["approved"] is True`,
+   `"FINAL — "` in the report text, `"DRAFT"` not in it. Renaming to
+   something like `test_report_produces_a_final_report_once_labels_are_approved`
+   is recommended so the name stops describing refusal.
+
+None of the other tests in this suite need to change at approval time —
+they either never touch the real fixture's approval state (the synthetic-
+fixture tests) or don't assert the real fixture's status at all.
+
+---
+
 ## A note on independence
 
 If anything in this file or in `evals/labeled_set.yaml` looks like it was
