@@ -419,7 +419,7 @@ committed script (`scripts/render_tasks_md.py`).
   - NOT parallel-safe with T-7: both declare backend/src/escalation/**. T-7 is currently open (blocked on label approval), so these two must not run concurrently
 - **Parallel safe**: yes
 - **Priority**: next
-- **Status**: in_progress
+- **Status**: closed
 
 ### T-19: Bind the portal API contract
 - **Objective**: portal/src/api.ts and backend/src/portal/schemas.py agree today purely by hand; nothing — no test, codegen step or CI job — fails if they drift, so a renamed field breaks only the live UI.
@@ -439,7 +439,7 @@ committed script (`scripts/render_tasks_md.py`).
   - parallel_safe only holds once T-16 lands per-process DB isolation; before that, concurrent runs share one database
 - **Parallel safe**: yes
 - **Priority**: next
-- **Status**: open
+- **Status**: in_progress
 
 ### T-20: Versioned schema migrations
 - **Objective**: A single ad-hoc _MIGRATIONS string now re-executes in full on every production container start, with no record of what has been applied; it survives only because its one statement happens to be idempotent.

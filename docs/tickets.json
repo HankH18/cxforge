@@ -629,7 +629,7 @@
       ],
       "parallel_safe": true,
       "priority": "next",
-      "status": "in_progress"
+      "status": "closed"
     },
     {
       "id": "T-19",
@@ -663,7 +663,7 @@
       ],
       "parallel_safe": true,
       "priority": "next",
-      "status": "open"
+      "status": "in_progress"
     },
     {
       "id": "T-20",
