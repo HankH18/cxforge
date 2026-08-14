@@ -85,8 +85,9 @@ _NAMED_ENUMS: dict[tuple[str, ...], str] = {
 _HEADER = """// GENERATED FILE — DO NOT EDIT BY HAND.
 // Source of truth: backend/src/portal/schemas.py, via FastAPI's OpenAPI
 // schema (`app.openapi()`).
-// Regenerate: uv run python backend/src/portal/codegen.py --out portal/src/api-types.ts
-// Verify (no write): uv run python backend/src/portal/codegen.py --out portal/src/api-types.ts --check
+// Regenerate:
+//   uv run python backend/src/portal/codegen.py --out portal/src/api-types.ts
+// Verify (no write): same command with --check
 """
 
 
