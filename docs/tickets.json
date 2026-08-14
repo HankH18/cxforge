@@ -16,7 +16,7 @@
         "GitHub Actions workflow runs ruff + mypy + pytest -m 'not live' only",
         "promptfoo config stub and .env.example present"
       ],
-      "verify": "docker compose up -d db && uv run pytest && uv run ruff check . && uv run mypy backend",
+      "verify": "docker compose up -d db && uv run pytest -m \"not live\" && uv run ruff check . && uv run mypy backend && cd portal && npm run build && npm test",
       "scope": [
         "backend/**",
         "portal/**",
@@ -34,7 +34,8 @@
         "No business logic",
         "No portal components beyond scaffold"
       ],
-      "parallel_safe": false
+      "parallel_safe": false,
+      "status": "closed"
     },
     {
       "id": "T-1",
@@ -52,7 +53,7 @@
         "typed lookup functions (by case_id, by requester_email) with miss returning a typed NotFound",
         "retrieval smoke test returns the relevant chunk for 5 sample queries"
       ],
-      "verify": "uv run pytest backend/tests/data -q",
+      "verify": "uv run pytest -m \"not live\" backend/tests/data backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q",
       "scope": [
         "backend/src/data/**",
         "fixtures/**",
@@ -65,7 +66,8 @@
         "No ingestion pipeline",
         "No real-lab content"
       ],
-      "parallel_safe": true
+      "parallel_safe": true,
+      "status": "closed"
     },
     {
       "id": "T-2",
@@ -82,7 +84,7 @@
         "contract suite written against the Protocol, parametrized by adapter, passing over mocked Zendesk HTTP",
         "scripts/live_smoke.py exercising each op against a real trial (manual run, env-gated)"
       ],
-      "verify": "uv run pytest -m contract -q",
+      "verify": "uv run pytest -m \"not live\" backend/tests/contract backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q",
       "scope": [
         "backend/src/helpdesk/**",
         "backend/tests/contract/**",
@@ -95,7 +97,8 @@
         "No macros",
         "No email adapter (T-3)"
       ],
-      "parallel_safe": true
+      "parallel_safe": true,
+      "status": "closed"
     },
     {
       "id": "T-3",
@@ -109,7 +112,7 @@
         "EmailAdapter over an in-memory fake transport passes the identical parametrized contract suite",
         "README section stating exactly what a production email channel would add (IMAP polling, threading via Message-ID) without implementing it"
       ],
-      "verify": "uv run pytest -m contract -q",
+      "verify": "uv run pytest -m \"not live\" -q",
       "scope": [
         "backend/src/helpdesk/email_adapter.py",
         "backend/tests/contract/**",
@@ -121,7 +124,8 @@
       "non_goals": [
         "No real SMTP/IMAP \u2014 the stub stays a stub"
       ],
-      "parallel_safe": true
+      "parallel_safe": true,
+      "status": "closed"
     },
     {
       "id": "T-4",
@@ -138,7 +142,7 @@
         "docs/zendesk-runbook.md covers the human steps: trial signup, OAuth app, AI agent user, trigger with 'tags not include ai-processed' nullifier, webhook + signing secret, cloudflared",
         "unit tests for HMAC reject/accept, dedupe, self-event drop"
       ],
-      "verify": "uv run pytest backend/tests/ingress -q",
+      "verify": "uv run pytest -m \"not live\" backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q",
       "scope": [
         "backend/src/ingress/**",
         "backend/tests/ingress/**",
@@ -150,7 +154,8 @@
       "non_goals": [
         "No polling fallback unless the trial blocks webhooks \u2014 if it does, STOP and tell the human (plan defect)"
       ],
-      "parallel_safe": true
+      "parallel_safe": true,
+      "status": "closed"
     },
     {
       "id": "T-5",
@@ -175,7 +180,7 @@
         "graph tests with a fake LLMClient cover the four canonical scenarios end-to-end in-process",
         "grounding suite: adversarial unknown-case and false-premise inputs produce escalation or refusal, never invented facts"
       ],
-      "verify": "uv run pytest backend/tests/graph -q && uv run pytest -m grounding -q",
+      "verify": "uv run pytest -m \"not live\" backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q",
       "scope": [
         "backend/src/agent/**",
         "backend/tests/graph/**",
@@ -189,7 +194,8 @@
         "No checkpointing/interrupts/subgraphs",
         "No escalation rule logic beyond calling T-6's interface (stub until T-6 lands)"
       ],
-      "parallel_safe": false
+      "parallel_safe": false,
+      "status": "closed"
     },
     {
       "id": "T-6",
@@ -206,7 +212,7 @@
         "internal note contains summary, grounded facts, reason enum; customer notice posted",
         "wired into T-5's decide/act"
       ],
-      "verify": "uv run pytest backend/tests/escalation -q",
+      "verify": "uv run pytest -m \"not live\" backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q",
       "scope": [
         "backend/src/escalation/**",
         "backend/tests/escalation/**",
@@ -221,7 +227,8 @@
         "No threshold tuning (T-7 owns it)",
         "No sentiment model beyond the classifier prompt"
       ],
-      "parallel_safe": false
+      "parallel_safe": false,
+      "status": "closed"
     },
     {
       "id": "T-7",
@@ -238,7 +245,7 @@
         "recall >= 0.95 on the hard-trigger subset at the committed threshold; threshold written to escalation config",
         "report lands in docs/eval-report/"
       ],
-      "verify": "uv run python -c \"import yaml; a=yaml.safe_load(open('evals/labeled_set.yaml'))['approval']; import sys; sys.exit(0 if a.get('status')=='APPROVED' and a.get('approved_by') and a.get('approved_date') else 1)\" && uv run python -m evals.report && uv run pytest backend/tests/evals -q",
+      "verify": "uv run python -c \"import yaml; a=yaml.safe_load(open('evals/labeled_set.yaml'))['approval']; import sys; sys.exit(0 if a.get('status')=='APPROVED' and a.get('approved_by') and a.get('approved_date') else 1)\" && uv run python -m evals.report && uv run pytest -m \"not live\" backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q",
       "scope": [
         "evals/**",
         "backend/tests/evals/**",
@@ -251,7 +258,8 @@
         "No expanding the set past ~60",
         "No synthetic label approval \u2014 human sign-off is external ground truth"
       ],
-      "parallel_safe": true
+      "parallel_safe": true,
+      "status": "open"
     },
     {
       "id": "T-8",
@@ -271,7 +279,7 @@
         "metrics computed per the pinned definitions \u2014 gated sends excluded from the human-avoidance numerator",
         "API tests cover both gate states and metric math"
       ],
-      "verify": "uv run pytest backend/tests/portal -q",
+      "verify": "uv run pytest -m \"not live\" backend/tests/data backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q",
       "scope": [
         "backend/src/portal/**",
         "backend/tests/portal/**",
@@ -286,7 +294,8 @@
         "No UI (T-9)",
         "No real auth/multi-user"
       ],
-      "parallel_safe": true
+      "parallel_safe": true,
+      "status": "closed"
     },
     {
       "id": "T-9",
@@ -316,7 +325,8 @@
         "No styling beyond clean-and-readable",
         "No websockets \u2014 polling is fine"
       ],
-      "parallel_safe": true
+      "parallel_safe": true,
+      "status": "closed"
     },
     {
       "id": "T-10",
@@ -345,7 +355,8 @@
       "non_goals": [
         "No load testing beyond demo volume"
       ],
-      "parallel_safe": true
+      "parallel_safe": true,
+      "status": "open"
     },
     {
       "id": "T-11",
@@ -361,7 +372,7 @@
         "demo script/shot list: five live scenarios, gate flip + edited-approve on camera, metrics panel, one Langfuse trace showing tool result to templated reply",
         "README quickstart verified from clean clone"
       ],
-      "verify": "bash scripts/verify_deploy.sh",
+      "verify": "uv run pytest backend/tests/deploy backend/tests/hooks -q",
       "scope": [
         "docs/**",
         "deploy/**",
@@ -372,12 +383,14 @@
         "T-3",
         "T-7",
         "T-9",
-        "T-10"
+        "T-10",
+        "T-17"
       ],
       "non_goals": [
         "No video editing tooling \u2014 recording is a human step"
       ],
-      "parallel_safe": false
+      "parallel_safe": false,
+      "status": "open"
     },
     {
       "id": "T-12",
@@ -408,7 +421,8 @@
         "No change to stop_guard/verify_gate session behaviour (T-13 owns that)"
       ],
       "parallel_safe": false,
-      "priority": "next"
+      "priority": "next",
+      "status": "closed"
     },
     {
       "id": "T-13",
@@ -438,7 +452,8 @@
         "Worktree lifecycle (orphaned locked worktrees) is NOT fixed here \u2014 it lives outside .claude/hooks/**; raise it separately rather than widening this scope mid-ticket"
       ],
       "parallel_safe": false,
-      "priority": "next"
+      "priority": "next",
+      "status": "closed"
     },
     {
       "id": "T-14",
@@ -458,7 +473,7 @@
         "docs/TASKS.md is regenerated FROM docs/tickets.json by a committed script, and a test asserts the two agree field-by-field \u2014 the mirror has already drifted on T-3, T-7 and T-8 and hand-editing is what caused it",
         "the plan invariants are demonstrated failing against current docs/tickets.json before any verify command is rewritten"
       ],
-      "verify": "uv run pytest backend/tests/plan -q",
+      "verify": "uv run pytest backend/tests/plan backend/tests/hooks -q",
       "scope": [
         "docs/tickets.json",
         "docs/TASKS.md",
@@ -474,7 +489,8 @@
         "Runs after T-15 because it rewrites verify commands, including the one T-15 installs; the two otherwise contend on docs/tickets.json"
       ],
       "parallel_safe": false,
-      "priority": "next"
+      "priority": "next",
+      "status": "in_progress"
     },
     {
       "id": "T-15",
@@ -494,7 +510,7 @@
         "evals/REVIEW.md gains a section naming the exact assertions a human must update at approval time, so the post-approval edit is pre-authorised and legible rather than improvised",
         "docs/tickets.json T-7 verify updated to assert approval"
       ],
-      "verify": "uv run pytest backend/tests/evals -q",
+      "verify": "uv run pytest backend/tests/evals backend/tests/hooks -q",
       "scope": [
         "evals/report.py",
         "evals/REVIEW.md",
@@ -508,7 +524,8 @@
         "No threshold tuning and no change to the labeled set's contents"
       ],
       "parallel_safe": false,
-      "priority": "next"
+      "priority": "next",
+      "status": "closed"
     },
     {
       "id": "T-16",
@@ -528,7 +545,7 @@
         "the CI workflow file contains the no-skip guard and a collected-count floor, asserted by reading .github/workflows/ci.yml in a test rather than by inspection",
         "two concurrent full-suite runs both pass, demonstrated by running them simultaneously and showing neither reports a truncation-induced failure"
       ],
-      "verify": "uv run pytest -q",
+      "verify": "uv run pytest -m \"not live\" -q",
       "scope": [
         "backend/tests/**",
         "backend/src/data/**",
@@ -542,7 +559,8 @@
         "No weakening of any existing assertion to make a suite parallel-safe"
       ],
       "parallel_safe": false,
-      "priority": "next"
+      "priority": "next",
+      "status": "open"
     },
     {
       "id": "T-17",
@@ -575,7 +593,8 @@
         "NOT parallel-safe with T-11: both declare scripts/verify_deploy.sh. T-11 is currently open (blocked on the droplet), so these two must not run concurrently"
       ],
       "parallel_safe": true,
-      "priority": "next"
+      "priority": "next",
+      "status": "open"
     },
     {
       "id": "T-18",
@@ -592,7 +611,7 @@
         "genuine abstention semantics are unchanged \u2014 a refusal or unparseable verdict still escalates, and every existing escalation test stays green",
         "the three duplicated FakeLLMClient copies assert the classifier was consulted rather than only defaulting its response away, so an unanticipated call site is loud again"
       ],
-      "verify": "uv run pytest backend/tests/escalation backend/tests/graph backend/tests/grounding -q",
+      "verify": "uv run pytest -m \"not live\" backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q",
       "scope": [
         "backend/src/escalation/**",
         "backend/tests/escalation/**",
@@ -609,7 +628,8 @@
         "NOT parallel-safe with T-7: both declare backend/src/escalation/**. T-7 is currently open (blocked on label approval), so these two must not run concurrently"
       ],
       "parallel_safe": true,
-      "priority": "next"
+      "priority": "next",
+      "status": "open"
     },
     {
       "id": "T-19",
@@ -626,7 +646,7 @@
         "the parity check is wired into .github/workflows/ci.yml, asserted by a test that reads the workflow file",
         "the parity check is demonstrated FAILING against a deliberately renamed backend field before being wired into CI"
       ],
-      "verify": "uv run pytest backend/tests/portal -q && cd portal && npm run build && npm test",
+      "verify": "uv run pytest -m \"not live\" backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q && cd portal && npm run build && npm test",
       "scope": [
         "portal/**",
         "backend/src/portal/**",
@@ -642,7 +662,8 @@
         "parallel_safe only holds once T-16 lands per-process DB isolation; before that, concurrent runs share one database"
       ],
       "parallel_safe": true,
-      "priority": "next"
+      "priority": "next",
+      "status": "open"
     },
     {
       "id": "T-20",
@@ -659,7 +680,7 @@
         "a deliberately non-idempotent migration is applied exactly once across repeated init_schema calls (test)",
         "a test proves a pre-existing database created WITHOUT runs.reasons is upgraded in place, run against a database built from the pre-T-8 schema"
       ],
-      "verify": "uv run pytest backend/tests/data -q",
+      "verify": "uv run pytest -m \"not live\" backend/tests/data backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q",
       "scope": [
         "backend/src/data/**",
         "backend/tests/data/**",
@@ -673,7 +694,8 @@
         "No ORM adoption \u2014 this is migration bookkeeping only"
       ],
       "parallel_safe": false,
-      "priority": "next"
+      "priority": "next",
+      "status": "open"
     },
     {
       "id": "T-21",
@@ -707,7 +729,8 @@
         "Does not obtain or install OPENAI_API_KEY \u2014 that credential is a human-provided prerequisite, and without it this ticket cannot start"
       ],
       "parallel_safe": false,
-      "priority": "next"
+      "priority": "next",
+      "status": "open"
     }
   ]
 }
