@@ -458,7 +458,7 @@ committed script (`scripts/render_tasks_md.py`).
   - No ORM adoption — this is migration bookkeeping only
 - **Parallel safe**: no
 - **Priority**: next
-- **Status**: in_progress
+- **Status**: closed
 
 ### T-21: Escalation eval measures the real engine
 - **Objective**: evals/report.py never imports EscalationEngine or run_classifier — it reimplements the precedence and fills the rest from three hand-authored replay tables, so its 1.0 scores grade a parallel implementation rather than the shipped engine. Requires a human-provided OPENAI_API_KEY and human-approved labels (T-7) before it can start.

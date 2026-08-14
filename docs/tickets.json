@@ -695,7 +695,7 @@
       ],
       "parallel_safe": false,
       "priority": "next",
-      "status": "in_progress"
+      "status": "closed"
     },
     {
       "id": "T-21",
