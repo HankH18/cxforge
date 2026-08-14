@@ -1,0 +1,11 @@
+-- T-20 migration 1: upgrade a ``runs`` table created before the ``reasons``
+-- column existed (see ``schema.py``'s module docstring for why
+-- ``_TABLES``'s ``CREATE TABLE IF NOT EXISTS`` alone can never carry this
+-- change to a database where ``runs`` already exists).
+--
+-- Applied through the ``schema_migrations`` ledger (see ``schema.py``), so
+-- this file's SQL is only ever executed once per database/schema -- the
+-- ``ADD COLUMN IF NOT EXISTS`` guard here is a courtesy for a database
+-- built by ``_TABLES`` fresh (where the column already exists), not the
+-- mechanism that prevents re-execution.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS reasons text[] NOT NULL DEFAULT '{}'::text[];
