@@ -391,9 +391,11 @@
       "acceptance": [
         "glob-to-regex match is anchored at BOTH ends; with scope portal/** the path backend/src/portal/routes.py is DENIED (regression test, this exact pair)",
         "a path that does not resolve under CLAUDE_PROJECT_DIR exits 0 (out-of-repo scratch is never the scope guard's business), compared after realpath so ../ traversal cannot escape scope",
-        "a missing or empty .claude/active-ticket fails CLOSED (deny) rather than open, with an explicit documented sentinel for deliberate unclaimed work",
+        "a missing or empty .claude/active-ticket fails CLOSED (deny). There is no bypass token, sentinel or env var an agent can issue itself \u2014 unclaimed work is authorised by a human editing the claim record, nothing else",
+        "the blanket `.claude/*|docs/*` allow-everything branch is removed or narrowed to the specific paths the protocol needs (the claim record and evidence dir); today it means every ticket's docs/** and .claude/** scope declaration is unenforced, which is why scope collisions in those trees are invisible",
         "backend/tests/hooks/ drives the real hook with synthetic PreToolUse JSON over a table of (ticket, path, expect) pairs covering every ticket's scope in docs/tickets.json",
-        "each new hook test is written FIRST and demonstrated FAILING against current HEAD (the portal/** vs backend/src/portal/routes.py pair, the out-of-repo path, and the missing-claim case) before the hook is changed \u2014 this ticket authors its own gate, so a recorded red-then-green transition is what makes that gate meaningful"
+        "the guard's coverage gap is documented and narrowed where feasible: it is wired to Edit|Write only, so a shell redirect or `git checkout` performs an unguarded write. At minimum record this limitation in the hook header so no one mistakes the guard for a sandbox",
+        ".claude/evidence/ is not writable by the ticket being verified \u2014 only verify_gate.sh writes it, so a ticket cannot forge its own completion evidence"
       ],
       "verify": "uv run pytest backend/tests/hooks -q",
       "scope": [
@@ -421,9 +423,7 @@
         "a claim records ticket id + CLAUDE_SESSION_ID + UTC timestamp; stop_guard and verify_gate act ONLY on a claim owned by the current session",
         "a second session in the same working directory is never blocked by another session's claim (fixture test asserting the observer case that fired on T-8, T-9 and T-11)",
         "claim records are append-only and tracked in git, restoring the per-claim audit trail lost when .claude/active-ticket was untracked",
-        "guards refuse to honour a claim whose ticket already has a passing .claude/evidence/<id>.pass",
-        "worktree setup creates the checkout BEFORE the venv, and unlocks/prunes on exit; an unborn-HEAD worktree is treated as a setup failure to retry, not a reusable target",
-        "the cross-session test is demonstrated FAILING against current HEAD (a second session blocked by another session's claim) before the guards are changed, for the same reason as T-12"
+        "guards refuse to honour a claim whose ticket already has a passing .claude/evidence/<id>.pass"
       ],
       "verify": "uv run pytest backend/tests/hooks -q",
       "scope": [
@@ -434,7 +434,8 @@
         "T-12"
       ],
       "non_goals": [
-        "No multi-agent scheduling or lock arbitration \u2014 this makes claims legible, it does not coordinate them"
+        "No multi-agent scheduling or lock arbitration \u2014 this makes claims legible, it does not coordinate them",
+        "Worktree lifecycle (orphaned locked worktrees) is NOT fixed here \u2014 it lives outside .claude/hooks/**; raise it separately rather than widening this scope mid-ticket"
       ],
       "parallel_safe": false,
       "priority": "next"
@@ -451,22 +452,26 @@
       ],
       "acceptance": [
         "every ticket's verify runs its own suite plus every suite that imports from its scope paths (a reverse-dependency set), or the full suite where that is simpler",
-        "no ticket's verify command references a path inside that same ticket's scope \u2014 a gate is never authored by the work it gates",
-        "backend/tests/plan/ asserts both invariants above hold for EVERY ticket in docs/tickets.json, so a future ticket cannot reintroduce either",
+        "no ticket's verify invokes a script the same ticket authors. Decidable rule for the test: tokenise the verify command, take every token that is a repo-relative path or is an argument to bash/sh, and fail if any such path matches that ticket's own scope globs. Test-runner invocations (pytest/npm/uv run pytest) with a directory argument are explicitly exempt \u2014 a ticket authoring the suite that gates it is normal TDD; a ticket authoring the gate ITSELF (the T-11 / verify_deploy.sh shape) is what this forbids",
+        "backend/tests/plan/ asserts both invariants above hold for EVERY ticket in docs/tickets.json, including this batch, so a future ticket cannot reintroduce either",
         "docs/tickets.json gains a status field the hooks maintain, so ticket progress is readable across sessions instead of inferred from evidence files",
-        "docs/TASKS.md re-synced to docs/tickets.json",
-        "the two plan invariants are demonstrated FAILING against current docs/tickets.json before any verify command is rewritten \u2014 including on this batch's own tickets, which must end compliant"
+        "docs/TASKS.md is regenerated FROM docs/tickets.json by a committed script, and a test asserts the two agree field-by-field \u2014 the mirror has already drifted on T-3, T-7 and T-8 and hand-editing is what caused it",
+        "the plan invariants are demonstrated failing against current docs/tickets.json before any verify command is rewritten"
       ],
       "verify": "uv run pytest backend/tests/plan -q",
       "scope": [
-        "docs/**",
+        "docs/tickets.json",
+        "docs/TASKS.md",
         "backend/tests/plan/**",
-        ".claude/hooks/**"
+        "scripts/render_tasks_md.py"
       ],
-      "depends_on": [],
+      "depends_on": [
+        "T-15"
+      ],
       "non_goals": [
         "No widening or narrowing of any ticket's scope globs",
-        "No retroactive re-verification of already-closed tickets"
+        "No retroactive re-verification of already-closed tickets",
+        "Runs after T-15 because it rewrites verify commands, including the one T-15 installs; the two otherwise contend on docs/tickets.json"
       ],
       "parallel_safe": false,
       "priority": "next"
@@ -483,23 +488,26 @@
       ],
       "acceptance": [
         "python -m evals.report exits NON-ZERO while approval.status != APPROVED or approved_by/approved_date are empty",
-        "an explicit opt-in flag permits a draft run for development; T-7's verify command does not pass that flag",
-        "tests cover both directions: real unapproved fixture exits non-zero; a synthetic fully-approved fixture in tmp_path exits zero",
-        "the three existing not-yet-approved tripwire assertions are rewritten to assert the APPROVED invariants (report renders FINAL, metrics.approved is True, signoff fields non-empty) so a genuine human approval turns the suite green rather than red",
+        "the non-zero path is reached via is_approved() only; no flag, env var or argument may bypass it \u2014 a draft render is obtained by pointing --output-dir at a scratch path, never by disabling the gate",
+        "tests cover both directions using a SYNTHETIC fully-approved fixture in tmp_path: real (unapproved) fixture exits non-zero, synthetic approved fixture exits zero. The real evals/labeled_set.yaml is never modified",
+        "the three existing not-approved tripwires keep their INTENT and still fail if a human approves (test_labels_are_not_self_approved, test_labeled_set_yaml_is_actually_not_approved_right_now, test_report_refuses_a_final_report_while_labels_are_unapproved). The single assertion inside the third that expects the report's exit code to be 0 is updated to expect non-zero as a direct consequence of acceptance 1 \u2014 that is the only permitted edit to any of the three",
+        "evals/REVIEW.md gains a section naming the exact assertions a human must update at approval time, so the post-approval edit is pre-authorised and legible rather than improvised",
         "docs/tickets.json T-7 verify updated to assert approval"
       ],
       "verify": "uv run pytest backend/tests/evals -q",
       "scope": [
-        "evals/**",
+        "evals/report.py",
+        "evals/REVIEW.md",
         "backend/tests/evals/**",
-        "docs/**"
+        "docs/tickets.json"
       ],
       "depends_on": [],
       "non_goals": [
-        "NEVER approves labels or fills signoff fields \u2014 that is the human step this ticket exists to protect",
+        "NEVER sets approval.status, approved_by or approved_date, and never edits evals/labeled_set.yaml at all \u2014 this ticket exists to protect that gate, not to pass through it",
+        "Does not pre-emptively rewrite the tripwires to assert the approved state: that edit belongs to the human approval event, not to this ticket",
         "No threshold tuning and no change to the labeled set's contents"
       ],
-      "parallel_safe": true,
+      "parallel_safe": false,
       "priority": "next"
     },
     {
@@ -514,10 +522,11 @@
         "CLAUDE.md#rule-9"
       ],
       "acceptance": [
-        "each pytest process gets its own database or Postgres schema, derived from the xdist worker / worktree identity, so two concurrent full runs both pass (demonstrate by running two simultaneously)",
+        "each pytest process gets its own Postgres SCHEMA, derived from an existing env signal (worktree path / PYTEST_XDIST_WORKER if already set / PID) with NO new dependency \u2014 pyproject.toml is T-0's scope alone and must not be edited; the schema override is readable ONLY from a test-time signal and must be inert in production \u2014 a test asserts data.db.get_connection() outside pytest uses the default schema",
         "no test writes into docs/ \u2014 the unapproved-report test reads committed artefacts read-only and generates into tmp_path; git status is clean after a full run, asserted by a test",
         "the pytestmark skip guards in the graph, grounding and portal conftest.py files are moved somewhere they actually take effect (a pytest_collection_modifyitems hook, or per-module pytestmark) \u2014 pytest ignores conftest-level pytestmark for sibling test modules, so today they never fire",
-        "CI keeps its no-skip guard and gains a collected-count floor, so a suite that silently stops running is caught by number"
+        "the CI workflow file contains the no-skip guard and a collected-count floor, asserted by reading .github/workflows/ci.yml in a test rather than by inspection",
+        "two concurrent full-suite runs both pass, demonstrated by running them simultaneously and showing neither reports a truncation-induced failure"
       ],
       "verify": "uv run pytest -q",
       "scope": [
@@ -546,21 +555,24 @@
       "acceptance": [
         "DEPLOY_HOST=<host> bash scripts/verify_deploy.sh takes the REMOTE branch; an exported value is never overwritten by sourcing .env (regression test with a fake env file reproducing the clobber)",
         "local mode requires an explicit opt-in flag and can never be mistaken for droplet evidence; without it, an empty DEPLOY_HOST is a hard failure rather than a silent local PASS",
-        "T-11's acceptance criterion 1 can only be satisfied by a remote-mode run against a real droplet",
-        "docs/deploy.md and .env.example updated to match the corrected precedence",
-        "the clobber is reproduced FAILING against current HEAD (DEPLOY_HOST exported, run takes LOCAL and exits 0) before scripts/verify_deploy.sh is touched"
+        "local mode is opt-in via an explicit flag and prints no PASS without it; an empty DEPLOY_HOST with no flag is a hard non-zero failure, so T-11's droplet criterion can only be met by a remote-mode run",
+        "docs/deploy.md and .env.example updated to match the corrected precedence"
       ],
       "verify": "uv run pytest backend/tests/deploy -q",
       "scope": [
         "scripts/verify_deploy.sh",
         "backend/tests/deploy/**",
-        "docs/**",
+        "docs/deploy.md",
         ".env.example"
       ],
-      "depends_on": [],
+      "depends_on": [
+        "T-16"
+      ],
       "non_goals": [
         "Does not create a droplet or perform a deploy \u2014 provisioning stays a human-authorised step",
-        "No change to the deploy stack itself (deploy/**)"
+        "No change to the deploy stack itself (deploy/**)",
+        "parallel_safe only holds once T-16 lands per-process DB isolation; before that, concurrent runs share one database",
+        "NOT parallel-safe with T-11: both declare scripts/verify_deploy.sh. T-11 is currently open (blocked on the droplet), so these two must not run concurrently"
       ],
       "parallel_safe": true,
       "priority": "next"
@@ -587,10 +599,14 @@
         "backend/tests/graph/**",
         "backend/tests/grounding/**"
       ],
-      "depends_on": [],
+      "depends_on": [
+        "T-16"
+      ],
       "non_goals": [
         "No change to the hard-rule set, the combinator, or the confidence threshold",
-        "No change to which conditions escalate \u2014 only to which FAILURES are allowed to look like them"
+        "No change to which conditions escalate \u2014 only to which FAILURES are allowed to look like them",
+        "parallel_safe only holds once T-16 lands per-process DB isolation; before that, concurrent runs share one database",
+        "NOT parallel-safe with T-7: both declare backend/src/escalation/**. T-7 is currently open (blocked on label approval), so these two must not run concurrently"
       ],
       "parallel_safe": true,
       "priority": "next"
@@ -604,10 +620,10 @@
         "DESIGN#portal-api"
       ],
       "acceptance": [
-        "the TypeScript request/response types are generated from the FastAPI OpenAPI schema, or a check asserts field-name, order and nullability parity between the two",
+        "the TypeScript request/response types are GENERATED from the FastAPI OpenAPI schema by a committed script \u2014 a hand-written parity assertion is explicitly not acceptable, since re-deriving the duplication by hand is the defect",
         "regenerating against the current backend produces types byte-identical to what is committed",
         "a deliberate backend field rename FAILS the check (demonstrate in the test, not by hand)",
-        "the check runs in CI on every push, not only when a human remembers",
+        "the parity check is wired into .github/workflows/ci.yml, asserted by a test that reads the workflow file",
         "the parity check is demonstrated FAILING against a deliberately renamed backend field before being wired into CI"
       ],
       "verify": "uv run pytest backend/tests/portal -q && cd portal && npm run build && npm test",
@@ -617,10 +633,13 @@
         "backend/tests/portal/**",
         ".github/**"
       ],
-      "depends_on": [],
+      "depends_on": [
+        "T-16"
+      ],
       "non_goals": [
         "No redesign of the API shape or the portal UI",
-        "No new endpoints"
+        "No new endpoints",
+        "parallel_safe only holds once T-16 lands per-process DB isolation; before that, concurrent runs share one database"
       ],
       "parallel_safe": true,
       "priority": "next"
@@ -646,7 +665,9 @@
         "backend/tests/data/**",
         "deploy/backend/**"
       ],
-      "depends_on": [],
+      "depends_on": [
+        "T-16"
+      ],
       "non_goals": [
         "No schema changes beyond formalising the existing runs.reasons migration",
         "No ORM adoption \u2014 this is migration bookkeeping only"
@@ -657,10 +678,9 @@
     {
       "id": "T-21",
       "title": "Escalation eval measures the real engine",
-      "objective": "evals/report.py never imports EscalationEngine or run_classifier \u2014 it reimplements the precedence and fills the rest from three hand-authored replay tables, so its 1.0 scores grade a parallel implementation rather than the shipped engine.",
+      "objective": "evals/report.py never imports EscalationEngine or run_classifier \u2014 it reimplements the precedence and fills the rest from three hand-authored replay tables, so its 1.0 scores grade a parallel implementation rather than the shipped engine. Requires a human-provided OPENAI_API_KEY and human-approved labels (T-7) before it can start.",
       "refs": [
         "OBS#G1",
-        "OBS#A2",
         "SPEC#R6",
         "DESIGN#escalation-contract"
       ],
@@ -668,12 +688,12 @@
         "the report calls escalation.engine.EscalationEngine.evaluate directly; STUB_CLASSIFIER_VERDICTS, STUB_STRUCTURAL_REASON and STUB_ABSTENTION_IDS are deleted, not merely bypassed",
         "the classifier half runs against a live LLMClient when OPENAI_API_KEY is present; without it the report FAILS rather than silently substituting fabricated verdicts",
         "a test asserts the report and the engine cannot diverge \u2014 the report has no escalation decision logic of its own",
-        "the recommended threshold is swept over real classifier confidences, and the report states the sample size and date of the run that produced it",
+        "the recommended threshold, the sample size, and the UTC timestamp of the run that produced it are written as fields in docs/eval-report/metrics.json \u2014 not prose in report.md \u2014 so they are machine-checkable",
         "recall >= 0.95 on the hard-trigger subset is measured against the real engine, per T-7 acceptance 4"
       ],
       "verify": "uv run pytest backend/tests/evals -q",
       "scope": [
-        "evals/**",
+        "evals/report.py",
         "backend/tests/evals/**",
         "docs/eval-report/**"
       ],
@@ -682,8 +702,9 @@
         "T-15"
       ],
       "non_goals": [
-        "Does not approve the labeled set \u2014 T-7's human gate still governs whether any number here is publishable",
-        "No relaxing of the >= 0.95 hard-trigger recall bar to make a real measurement pass"
+        "NEVER edits evals/labeled_set.yaml at all, and never sets approval.status, approved_by or approved_date \u2014 same file-level prohibition as T-15, for the same reason",
+        "No relaxing of the >= 0.95 hard-trigger recall bar to make a real measurement pass; if the real engine misses it, that is a finding to report, not a number to adjust",
+        "Does not obtain or install OPENAI_API_KEY \u2014 that credential is a human-provided prerequisite, and without it this ticket cannot start"
       ],
       "parallel_safe": false,
       "priority": "next"

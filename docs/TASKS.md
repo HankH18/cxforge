@@ -37,13 +37,11 @@ graph TD
 
     subgraph remediation["Priority batch — claimed first"]
         T12[T-12 Scope guard matching] --> T13[T-13 Session-scoped claims]
-        T14[T-14 Verify blast radius]
-        T15[T-15 Enforce human gate]
-        T16[T-16 Test isolation]
-        T17[T-17 Deploy verifier bug]
-        T18[T-18 Classifier errors]
-        T19[T-19 API contract binding]
-        T20[T-20 Versioned migrations]
+        T15[T-15 Enforce human gate] --> T14[T-14 Verify blast radius]
+        T16[T-16 Test isolation] --> T17[T-17 Deploy verifier bug]
+        T16 --> T18[T-18 Classifier errors]
+        T16 --> T19[T-19 API contract binding]
+        T16 --> T20[T-20 Versioned migrations]
         T21[T-21 Eval measures real engine]
     end
     T7 --> T21
@@ -246,9 +244,11 @@ marked `parallel_safe`.
 
 ## Priority batch — remediation (T-12–T-21)
 
-Raised from defects observed during the T-0–T-11 build and verified against
-  the repository. These carry `"priority": "next"` in `docs/tickets.json`
-  and are claimed before the ascending-ID default.
+Raised from defects observed during the T-0–T-11 build, verified against the
+  repository, revised, and re-verified. These carry `"priority": "next"` in
+  `docs/tickets.json` and are claimed before the ascending-ID default.
+  GENERATED FROM tickets.json — do not hand-edit; T-14 makes this rendering
+  a committed script.
 
 ### T-12: Scope guard matches only intended paths
 - **Objective**: scope_guard.sh admits paths it should deny and denies paths
@@ -259,16 +259,22 @@ Raised from defects observed during the T-0–T-11 build and verified against
   (regression test, this exact pair); 2) a path that does not resolve under
   CLAUDE_PROJECT_DIR exits 0 (out-of-repo scratch is never the scope guard's
   business), compared after realpath so ../ traversal cannot escape scope;
-  3) a missing or empty .claude/active-ticket fails CLOSED (deny) rather
-  than open, with an explicit documented sentinel for deliberate unclaimed
-  work; 4) backend/tests/hooks/ drives the real hook with synthetic
+  3) a missing or empty .claude/active-ticket fails CLOSED (deny). There is
+  no bypass token, sentinel or env var an agent can issue itself — unclaimed
+  work is authorised by a human editing the claim record, nothing else; 4)
+  the blanket `.claude/*|docs/*` allow-everything branch is removed or
+  narrowed to the specific paths the protocol needs (the claim record and
+  evidence dir); today it means every ticket's docs/** and .claude/** scope
+  declaration is unenforced, which is why scope collisions in those trees
+  are invisible; 5) backend/tests/hooks/ drives the real hook with synthetic
   PreToolUse JSON over a table of (ticket, path, expect) pairs covering
-  every ticket's scope in docs/tickets.json; 5) each new hook test is
-  written FIRST and demonstrated FAILING against current HEAD (the portal/**
-  vs backend/src/portal/routes.py pair, the out-of-repo path, and the
-  missing-claim case) before the hook is changed — this ticket authors its
-  own gate, so a recorded red-then-green transition is what makes that gate
-  meaningful.
+  every ticket's scope in docs/tickets.json; 6) the guard's coverage gap is
+  documented and narrowed where feasible: it is wired to Edit|Write only, so
+  a shell redirect or `git checkout` performs an unguarded write. At minimum
+  record this limitation in the hook header so no one mistakes the guard for
+  a sandbox; 7) .claude/evidence/ is not writable by the ticket being
+  verified — only verify_gate.sh writes it, so a ticket cannot forge its own
+  completion evidence.
 - **Verify**: `uv run pytest backend/tests/hooks -q`
 - **Scope**: `.claude/hooks/**`, `backend/tests/hooks/**`
 - **Depends on**: none
@@ -288,17 +294,15 @@ Raised from defects observed during the T-0–T-11 build and verified against
   observer case that fired on T-8, T-9 and T-11); 3) claim records are
   append-only and tracked in git, restoring the per-claim audit trail lost
   when .claude/active-ticket was untracked; 4) guards refuse to honour a
-  claim whose ticket already has a passing .claude/evidence/<id>.pass; 5)
-  worktree setup creates the checkout BEFORE the venv, and unlocks/prunes on
-  exit; an unborn-HEAD worktree is treated as a setup failure to retry, not
-  a reusable target; 6) the cross-session test is demonstrated FAILING
-  against current HEAD (a second session blocked by another session's claim)
-  before the guards are changed, for the same reason as T-12.
+  claim whose ticket already has a passing .claude/evidence/<id>.pass.
 - **Verify**: `uv run pytest backend/tests/hooks -q`
 - **Scope**: `.claude/hooks/**`, `backend/tests/hooks/**`
 - **Depends on**: T-12
 - **Non-goals**: No multi-agent scheduling or lock arbitration — this makes
-  claims legible, it does not coordinate them. Not `parallel_safe`.
+  claims legible, it does not coordinate them; Worktree lifecycle (orphaned
+  locked worktrees) is NOT fixed here — it lives outside .claude/hooks/**;
+  raise it separately rather than widening this scope mid-ticket. Not
+  `parallel_safe`.
 
 ### T-14: Verify commands cover their blast radius
 - **Objective**: A ticket's verify runs only that ticket's own suite while
@@ -307,22 +311,31 @@ Raised from defects observed during the T-0–T-11 build and verified against
 - **Refs**: OBS#W4, OBS#W5, OBS#W9, CLAUDE.md#rule-5
 - **Acceptance**: 1) every ticket's verify runs its own suite plus every
   suite that imports from its scope paths (a reverse-dependency set), or the
-  full suite where that is simpler; 2) no ticket's verify command references
-  a path inside that same ticket's scope — a gate is never authored by the
-  work it gates; 3) backend/tests/plan/ asserts both invariants above hold
-  for EVERY ticket in docs/tickets.json, so a future ticket cannot
-  reintroduce either; 4) docs/tickets.json gains a status field the hooks
-  maintain, so ticket progress is readable across sessions instead of
-  inferred from evidence files; 5) docs/TASKS.md re-synced to
-  docs/tickets.json; 6) the two plan invariants are demonstrated FAILING
-  against current docs/tickets.json before any verify command is rewritten —
-  including on this batch's own tickets, which must end compliant.
+  full suite where that is simpler; 2) no ticket's verify invokes a script
+  the same ticket authors. Decidable rule for the test: tokenise the verify
+  command, take every token that is a repo-relative path or is an argument
+  to bash/sh, and fail if any such path matches that ticket's own scope
+  globs. Test-runner invocations (pytest/npm/uv run pytest) with a directory
+  argument are explicitly exempt — a ticket authoring the suite that gates
+  it is normal TDD; a ticket authoring the gate ITSELF (the T-11 /
+  verify_deploy.sh shape) is what this forbids; 3) backend/tests/plan/
+  asserts both invariants above hold for EVERY ticket in docs/tickets.json,
+  including this batch, so a future ticket cannot reintroduce either; 4)
+  docs/tickets.json gains a status field the hooks maintain, so ticket
+  progress is readable across sessions instead of inferred from evidence
+  files; 5) docs/TASKS.md is regenerated FROM docs/tickets.json by a
+  committed script, and a test asserts the two agree field-by-field — the
+  mirror has already drifted on T-3, T-7 and T-8 and hand-editing is what
+  caused it; 6) the plan invariants are demonstrated failing against current
+  docs/tickets.json before any verify command is rewritten.
 - **Verify**: `uv run pytest backend/tests/plan -q`
-- **Scope**: `docs/**`, `backend/tests/plan/**`, `.claude/hooks/**`
-- **Depends on**: none
+- **Scope**: `docs/tickets.json`, `docs/TASKS.md`, `backend/tests/plan/**`,
+  `scripts/render_tasks_md.py`
+- **Depends on**: T-15
 - **Non-goals**: No widening or narrowing of any ticket's scope globs; No
-  retroactive re-verification of already-closed tickets. Not
-  `parallel_safe`.
+  retroactive re-verification of already-closed tickets; Runs after T-15
+  because it rewrites verify commands, including the one T-15 installs; the
+  two otherwise contend on docs/tickets.json. Not `parallel_safe`.
 
 ### T-15: Machine-enforce the human approval gate
 - **Objective**: evals.report main() returns 0 unconditionally, so T-7's
@@ -330,39 +343,57 @@ Raised from defects observed during the T-0–T-11 build and verified against
   inviolable rule is its only unenforced one.
 - **Refs**: OBS#W6, OBS#G7, SPEC#T-7-human-gate, CLAUDE.md#human-only-steps
 - **Acceptance**: 1) python -m evals.report exits NON-ZERO while
-  approval.status != APPROVED or approved_by/approved_date are empty; 2) an
-  explicit opt-in flag permits a draft run for development; T-7's verify
-  command does not pass that flag; 3) tests cover both directions: real
-  unapproved fixture exits non-zero; a synthetic fully-approved fixture in
-  tmp_path exits zero; 4) the three existing not-yet-approved tripwire
-  assertions are rewritten to assert the APPROVED invariants (report renders
-  FINAL, metrics.approved is True, signoff fields non-empty) so a genuine
-  human approval turns the suite green rather than red; 5) docs/tickets.json
-  T-7 verify updated to assert approval.
+  approval.status != APPROVED or approved_by/approved_date are empty; 2) the
+  non-zero path is reached via is_approved() only; no flag, env var or
+  argument may bypass it — a draft render is obtained by pointing
+  --output-dir at a scratch path, never by disabling the gate; 3) tests
+  cover both directions using a SYNTHETIC fully-approved fixture in
+  tmp_path: real (unapproved) fixture exits non-zero, synthetic approved
+  fixture exits zero. The real evals/labeled_set.yaml is never modified; 4)
+  the three existing not-approved tripwires keep their INTENT and still fail
+  if a human approves (test_labels_are_not_self_approved,
+  test_labeled_set_yaml_is_actually_not_approved_right_now,
+  test_report_refuses_a_final_report_while_labels_are_unapproved). The
+  single assertion inside the third that expects the report's exit code to
+  be 0 is updated to expect non-zero as a direct consequence of acceptance 1
+  — that is the only permitted edit to any of the three; 5) evals/REVIEW.md
+  gains a section naming the exact assertions a human must update at
+  approval time, so the post-approval edit is pre-authorised and legible
+  rather than improvised; 6) docs/tickets.json T-7 verify updated to assert
+  approval.
 - **Verify**: `uv run pytest backend/tests/evals -q`
-- **Scope**: `evals/**`, `backend/tests/evals/**`, `docs/**`
+- **Scope**: `evals/report.py`, `evals/REVIEW.md`, `backend/tests/evals/**`,
+  `docs/tickets.json`
 - **Depends on**: none
-- **Non-goals**: NEVER approves labels or fills signoff fields — that is the
-  human step this ticket exists to protect; No threshold tuning and no
-  change to the labeled set's contents. `parallel_safe`.
+- **Non-goals**: NEVER sets approval.status, approved_by or approved_date,
+  and never edits evals/labeled_set.yaml at all — this ticket exists to
+  protect that gate, not to pass through it; Does not pre-emptively rewrite
+  the tripwires to assert the approved state: that edit belongs to the human
+  approval event, not to this ticket; No threshold tuning and no change to
+  the labeled set's contents. Not `parallel_safe`.
 
 ### T-16: Test isolation and suite hygiene
 - **Objective**: One shared database with per-test TRUNCATE means concurrent
   runs corrupt each other; the suite also rewrites a tracked file, and three
   conftest skip guards silently do nothing.
 - **Refs**: OBS#G4, OBS#G8, OBS#W10, OBS#W12, CLAUDE.md#rule-9
-- **Acceptance**: 1) each pytest process gets its own database or Postgres
-  schema, derived from the xdist worker / worktree identity, so two
-  concurrent full runs both pass (demonstrate by running two
-  simultaneously); 2) no test writes into docs/ — the unapproved-report test
-  reads committed artefacts read-only and generates into tmp_path; git
-  status is clean after a full run, asserted by a test; 3) the pytestmark
-  skip guards in the graph, grounding and portal conftest.py files are moved
-  somewhere they actually take effect (a pytest_collection_modifyitems hook,
-  or per-module pytestmark) — pytest ignores conftest-level pytestmark for
-  sibling test modules, so today they never fire; 4) CI keeps its no-skip
-  guard and gains a collected-count floor, so a suite that silently stops
-  running is caught by number.
+- **Acceptance**: 1) each pytest process gets its own Postgres SCHEMA,
+  derived from an existing env signal (worktree path / PYTEST_XDIST_WORKER
+  if already set / PID) with NO new dependency — pyproject.toml is T-0's
+  scope alone and must not be edited; the schema override is readable ONLY
+  from a test-time signal and must be inert in production — a test asserts
+  data.db.get_connection() outside pytest uses the default schema; 2) no
+  test writes into docs/ — the unapproved-report test reads committed
+  artefacts read-only and generates into tmp_path; git status is clean after
+  a full run, asserted by a test; 3) the pytestmark skip guards in the
+  graph, grounding and portal conftest.py files are moved somewhere they
+  actually take effect (a pytest_collection_modifyitems hook, or per-module
+  pytestmark) — pytest ignores conftest-level pytestmark for sibling test
+  modules, so today they never fire; 4) the CI workflow file contains the
+  no-skip guard and a collected-count floor, asserted by reading
+  .github/workflows/ci.yml in a test rather than by inspection; 5) two
+  concurrent full-suite runs both pass, demonstrated by running them
+  simultaneously and showing neither reports a truncation-induced failure.
 - **Verify**: `uv run pytest -q`
 - **Scope**: `backend/tests/**`, `backend/src/data/**`, `evals/report.py`,
   `docker-compose.yml`, `.github/**`
@@ -382,19 +413,22 @@ Raised from defects observed during the T-0–T-11 build and verified against
   (regression test with a fake env file reproducing the clobber); 2) local
   mode requires an explicit opt-in flag and can never be mistaken for
   droplet evidence; without it, an empty DEPLOY_HOST is a hard failure
-  rather than a silent local PASS; 3) T-11's acceptance criterion 1 can only
-  be satisfied by a remote-mode run against a real droplet; 4)
-  docs/deploy.md and .env.example updated to match the corrected precedence;
-  5) the clobber is reproduced FAILING against current HEAD (DEPLOY_HOST
-  exported, run takes LOCAL and exits 0) before scripts/verify_deploy.sh is
-  touched.
+  rather than a silent local PASS; 3) local mode is opt-in via an explicit
+  flag and prints no PASS without it; an empty DEPLOY_HOST with no flag is a
+  hard non-zero failure, so T-11's droplet criterion can only be met by a
+  remote-mode run; 4) docs/deploy.md and .env.example updated to match the
+  corrected precedence.
 - **Verify**: `uv run pytest backend/tests/deploy -q`
 - **Scope**: `scripts/verify_deploy.sh`, `backend/tests/deploy/**`,
-  `docs/**`, `.env.example`
-- **Depends on**: none
+  `docs/deploy.md`, `.env.example`
+- **Depends on**: T-16
 - **Non-goals**: Does not create a droplet or perform a deploy —
   provisioning stays a human-authorised step; No change to the deploy stack
-  itself (deploy/**). `parallel_safe`.
+  itself (deploy/**); parallel_safe only holds once T-16 lands per-process
+  DB isolation; before that, concurrent runs share one database; NOT
+  parallel-safe with T-11: both declare scripts/verify_deploy.sh. T-11 is
+  currently open (blocked on the droplet), so these two must not run
+  concurrently. `parallel_safe`.
 
 ### T-18: Classifier errors stop masquerading as escalations
 - **Objective**: run_classifier catches bare Exception and returns None,
@@ -415,30 +449,38 @@ Raised from defects observed during the T-0–T-11 build and verified against
 - **Verify**: `uv run pytest backend/tests/escalation backend/tests/graph backend/tests/grounding -q`
 - **Scope**: `backend/src/escalation/**`, `backend/tests/escalation/**`,
   `backend/tests/graph/**`, `backend/tests/grounding/**`
-- **Depends on**: none
+- **Depends on**: T-16
 - **Non-goals**: No change to the hard-rule set, the combinator, or the
   confidence threshold; No change to which conditions escalate — only to
-  which FAILURES are allowed to look like them. `parallel_safe`.
+  which FAILURES are allowed to look like them; parallel_safe only holds
+  once T-16 lands per-process DB isolation; before that, concurrent runs
+  share one database; NOT parallel-safe with T-7: both declare
+  backend/src/escalation/**. T-7 is currently open (blocked on label
+  approval), so these two must not run concurrently. `parallel_safe`.
 
 ### T-19: Bind the portal API contract
 - **Objective**: portal/src/api.ts and backend/src/portal/schemas.py agree
   today purely by hand; nothing — no test, codegen step or CI job — fails if
   they drift, so a renamed field breaks only the live UI.
 - **Refs**: OBS#G6, DESIGN#portal-api
-- **Acceptance**: 1) the TypeScript request/response types are generated
-  from the FastAPI OpenAPI schema, or a check asserts field-name, order and
-  nullability parity between the two; 2) regenerating against the current
+- **Acceptance**: 1) the TypeScript request/response types are GENERATED
+  from the FastAPI OpenAPI schema by a committed script — a hand-written
+  parity assertion is explicitly not acceptable, since re-deriving the
+  duplication by hand is the defect; 2) regenerating against the current
   backend produces types byte-identical to what is committed; 3) a
   deliberate backend field rename FAILS the check (demonstrate in the test,
-  not by hand); 4) the check runs in CI on every push, not only when a human
-  remembers; 5) the parity check is demonstrated FAILING against a
-  deliberately renamed backend field before being wired into CI.
+  not by hand); 4) the parity check is wired into .github/workflows/ci.yml,
+  asserted by a test that reads the workflow file; 5) the parity check is
+  demonstrated FAILING against a deliberately renamed backend field before
+  being wired into CI.
 - **Verify**: `uv run pytest backend/tests/portal -q && cd portal && npm run build && npm test`
 - **Scope**: `portal/**`, `backend/src/portal/**`,
   `backend/tests/portal/**`, `.github/**`
-- **Depends on**: none
+- **Depends on**: T-16
 - **Non-goals**: No redesign of the API shape or the portal UI; No new
-  endpoints. `parallel_safe`.
+  endpoints; parallel_safe only holds once T-16 lands per-process DB
+  isolation; before that, concurrent runs share one database.
+  `parallel_safe`.
 
 ### T-20: Versioned schema migrations
 - **Objective**: A single ad-hoc _MIGRATIONS string now re-executes in full
@@ -460,7 +502,7 @@ Raised from defects observed during the T-0–T-11 build and verified against
 - **Verify**: `uv run pytest backend/tests/data -q`
 - **Scope**: `backend/src/data/**`, `backend/tests/data/**`,
   `deploy/backend/**`
-- **Depends on**: none
+- **Depends on**: T-16
 - **Non-goals**: No schema changes beyond formalising the existing
   runs.reasons migration; No ORM adoption — this is migration bookkeeping
   only. Not `parallel_safe`.
@@ -469,8 +511,9 @@ Raised from defects observed during the T-0–T-11 build and verified against
 - **Objective**: evals/report.py never imports EscalationEngine or
   run_classifier — it reimplements the precedence and fills the rest from
   three hand-authored replay tables, so its 1.0 scores grade a parallel
-  implementation rather than the shipped engine.
-- **Refs**: OBS#G1, OBS#A2, SPEC#R6, DESIGN#escalation-contract
+  implementation rather than the shipped engine. Requires a human-provided
+  OPENAI_API_KEY and human-approved labels (T-7) before it can start.
+- **Refs**: OBS#G1, SPEC#R6, DESIGN#escalation-contract
 - **Acceptance**: 1) the report calls
   escalation.engine.EscalationEngine.evaluate directly;
   STUB_CLASSIFIER_VERDICTS, STUB_STRUCTURAL_REASON and STUB_ABSTENTION_IDS
@@ -478,14 +521,20 @@ Raised from defects observed during the T-0–T-11 build and verified against
   live LLMClient when OPENAI_API_KEY is present; without it the report FAILS
   rather than silently substituting fabricated verdicts; 3) a test asserts
   the report and the engine cannot diverge — the report has no escalation
-  decision logic of its own; 4) the recommended threshold is swept over real
-  classifier confidences, and the report states the sample size and date of
-  the run that produced it; 5) recall >= 0.95 on the hard-trigger subset is
+  decision logic of its own; 4) the recommended threshold, the sample size,
+  and the UTC timestamp of the run that produced it are written as fields in
+  docs/eval-report/metrics.json — not prose in report.md — so they are
+  machine-checkable; 5) recall >= 0.95 on the hard-trigger subset is
   measured against the real engine, per T-7 acceptance 4.
 - **Verify**: `uv run pytest backend/tests/evals -q`
-- **Scope**: `evals/**`, `backend/tests/evals/**`, `docs/eval-report/**`
+- **Scope**: `evals/report.py`, `backend/tests/evals/**`,
+  `docs/eval-report/**`
 - **Depends on**: T-7, T-15
-- **Non-goals**: Does not approve the labeled set — T-7's human gate still
-  governs whether any number here is publishable; No relaxing of the >= 0.95
-  hard-trigger recall bar to make a real measurement pass. Not
+- **Non-goals**: NEVER edits evals/labeled_set.yaml at all, and never sets
+  approval.status, approved_by or approved_date — same file-level
+  prohibition as T-15, for the same reason; No relaxing of the >= 0.95
+  hard-trigger recall bar to make a real measurement pass; if the real
+  engine misses it, that is a finding to report, not a number to adjust;
+  Does not obtain or install OPENAI_API_KEY — that credential is a
+  human-provided prerequisite, and without it this ticket cannot start. Not
   `parallel_safe`.
