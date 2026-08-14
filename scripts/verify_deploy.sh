@@ -37,9 +37,41 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$REPO_ROOT/deploy/docker-compose.yml"
 CLEANUP_DONE=0
 
+# --- CLI flags -----------------------------------------------------------
+# Only one right now: --local, the explicit opt-in required to run the
+# LOCAL (docker-compose-on-this-machine) verification path. See the
+# entrypoint at the bottom of this file for why this can't default on.
+LOCAL_MODE_OPT_IN=0
+for arg in "$@"; do
+  case "$arg" in
+    --local)
+      LOCAL_MODE_OPT_IN=1
+      ;;
+    *)
+      echo "[verify_deploy] unrecognized argument: $arg" >&2
+      exit 1
+      ;;
+  esac
+done
+
 # --- source .env if present, so a human doesn't have to remember
 # `set -a; source .env; set +a` themselves (matches the idiom
 # .env.example already documents for doctl). ---
+#
+# Precedence: a DEPLOY_HOST the caller already exported before invoking
+# this script must ALWAYS win over whatever .env says — including when
+# .env defines DEPLOY_HOST as a bare empty assignment (the shape
+# .env.example ships by default). `set -a; source .env` auto-exports
+# every assignment .env makes, in THIS shell — so without this
+# capture/restore, .env's own `DEPLOY_HOST=` silently clobbers an
+# exported value before line 54's `${DEPLOY_HOST:-}` ever runs, because
+# by then the overwrite has already happened and there's nothing left to
+# fall back from. `${DEPLOY_HOST-sentinel}` (no colon) fires only when
+# DEPLOY_HOST is genuinely UNSET, not merely empty, so it distinguishes
+# "caller exported DEPLOY_HOST" (even as "") from "caller never touched
+# it" — the distinction that matters here.
+DEPLOY_HOST_PRE_ENV="${DEPLOY_HOST-__T17_UNSET__}"
+
 if [ -f "$REPO_ROOT/.env" ]; then
   set -a
   # shellcheck disable=SC1090
@@ -48,6 +80,11 @@ if [ -f "$REPO_ROOT/.env" ]; then
   echo "[verify_deploy] sourced $REPO_ROOT/.env"
 else
   echo "[verify_deploy] no .env at repo root — proceeding with whatever is already exported"
+fi
+
+# Restore precedence: an export from the caller always wins over .env.
+if [ "$DEPLOY_HOST_PRE_ENV" != "__T17_UNSET__" ]; then
+  DEPLOY_HOST="$DEPLOY_HOST_PRE_ENV"
 fi
 
 PORTAL_TOKEN="${PORTAL_TOKEN:-}"
@@ -161,11 +198,19 @@ verify_remote() {
 }
 
 # --- entrypoint --------------------------------------------------------
+#
+# An exported/`.env`-set DEPLOY_HOST always wins, regardless of --local.
+# LOCAL mode is explicit opt-in ONLY (--local): T-11's droplet criterion
+# can only be satisfied by a REMOTE-mode run, so an empty DEPLOY_HOST
+# with no --local flag must be a hard failure, not a silent fall-through
+# to LOCAL that still prints PASS.
 
-if [ -z "$DEPLOY_HOST" ]; then
-  verify_local
-else
+if [ -n "$DEPLOY_HOST" ]; then
   verify_remote
+  echo "[verify_deploy] PASS (REMOTE: verified droplet at $DEPLOY_HOST)"
+elif [ "$LOCAL_MODE_OPT_IN" -eq 1 ]; then
+  verify_local
+  echo "[verify_deploy] LOCAL-MODE PASS — this verified the stack on THIS machine only, NOT a droplet. It does not satisfy T-11's droplet criterion."
+else
+  fail "DEPLOY_HOST is empty and --local was not passed. This script verifies a REMOTE droplet by default (T-11's droplet criterion can only be met by a remote-mode run). Pass --local only if you intentionally want to check the LOCAL docker-compose stack on this machine — that is NOT droplet evidence."
 fi
-
-echo "[verify_deploy] PASS"

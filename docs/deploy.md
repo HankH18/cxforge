@@ -11,8 +11,10 @@ ready to create one** — not something that has already happened.
 
 What *has* been verified, on this machine, without any droplet: the whole
 production stack (`deploy/docker-compose.yml`) builds and runs, and
-`bash scripts/verify_deploy.sh` passes against it locally (`DEPLOY_HOST`
-empty → local path). See that script and `deploy/docker-compose.yml`'s own
+`bash scripts/verify_deploy.sh --local` passes against it locally
+(`DEPLOY_HOST` empty + explicit `--local` opt-in → local path — the flag
+is required; a bare invocation with an empty `DEPLOY_HOST` now hard-fails
+by design, see §7). See that script and `deploy/docker-compose.yml`'s own
 header comments for exactly what "local" proves and what it doesn't.
 
 ---
@@ -249,10 +251,31 @@ exactly what they are), over the network, against whatever's already
 running on the droplet — it never builds, starts, or stops anything
 remotely.
 
+**Precedence, exactly:** an already-exported `DEPLOY_HOST` in your shell
+always wins over `.env` — the script captures it before sourcing `.env`
+and restores it afterward, so `.env`'s own (often empty) `DEPLOY_HOST=`
+line can never silently clobber a value you exported. `.env`'s
+`DEPLOY_HOST=` line only takes effect when your shell does not already
+have `DEPLOY_HOST` exported — i.e. either export it yourself, or edit
+that line in `.env`, but an export always beats the file.
+
+**Local mode is opt-in, not a fallback.** A bare `bash
+scripts/verify_deploy.sh` with `DEPLOY_HOST` empty (the default —
+`.env.example` ships it empty) is now a **hard failure** (non-zero exit,
+`FAIL:` on stderr, no `PASS` printed) rather than a silent drop into the
+local docker-compose check — a droplet-verification script that could
+quietly "pass" against your own laptop was the exact bug T-17 closed. To
+run the local-only check on purpose, pass `--local` explicitly:
+`bash scripts/verify_deploy.sh --local`. Its success line is prefixed
+`LOCAL-MODE PASS` (never a bare `PASS`) precisely so it can't be mistaken
+for droplet evidence — only a REMOTE-mode run, with `DEPLOY_HOST` set,
+satisfies T-11's droplet criterion, and only remote mode's `PASS` line
+says `(REMOTE: verified droplet at ...)`.
+
 **This has not been run against a real droplet in this environment** —
 there is no droplet to point it at yet (see the status note at the top of
-this document). Only the local path (`DEPLOY_HOST` empty) has actually
-been executed and passed here.
+this document). Only the local path (`--local`, `DEPLOY_HOST` empty) has
+actually been executed and passed here.
 
 ## 8. Cost control
 
