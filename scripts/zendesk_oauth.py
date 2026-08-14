@@ -2,46 +2,61 @@
 
 Operational helper for docs/zendesk-runbook.md step 2. Not part of the
 ticket graph — it exists because the manual curl exchange has several
-silent failure modes (stale shell env, single-use codes, redirect_uri
-mismatch) that all surface as the same opaque `invalid_grant`.
+silent failure modes that all surface as one opaque error.
 
-Deliberately NON-interactive: it takes the code as an argument rather than
-prompting, because `input()` has no TTY when run through Claude Code's `!`
-prefix and dies with "unknown terminal".
+REDIRECT URI: Zendesk requires redirect URLs to be "absolute and not
+relative" and "secure (https) unless you're using localhost or 127.0.0.1".
+The out-of-band URN (urn:ietf:wg:oauth:2.0:oob) is NOT an http(s) URL and
+Zendesk rejects it at the authorize step with `invalid_request`. So this
+uses a localhost callback, which is explicitly permitted.
+
+    http://localhost:8129/callback
+
+That exact string must be registered in the OAuth client's "Redirect URLs"
+field (Admin Center -> Apps and integrations -> APIs -> Zendesk API ->
+OAuth Clients -> your client). Zendesk requires the redirect_uri parameter
+to match a registered URL.
 
 Usage, from the repo root:
 
-    # 1. print the authorization URL to open in a browser
-    uv run python scripts/zendesk_oauth.py --url
+    # easiest — starts a local listener, prints the URL, captures the code,
+    # exchanges it, and writes the token to .env. No copy-paste of codes.
+    uv run python scripts/zendesk_oauth.py --serve
 
-    # 2. paste the code from the redirected URL (use it immediately —
-    #    Zendesk codes are single-use and short-lived)
+    # manual fallback if you cannot run a listener: print the URL, approve
+    # in the browser, then copy the `code=` value out of the address bar of
+    # the "can't connect" page you land on.
+    uv run python scripts/zendesk_oauth.py --url
     uv run python scripts/zendesk_oauth.py <code>
 
-Step 2 writes ZENDESK_OAUTH_TOKEN into .env on success. The token value is
-never printed.
+The token value is written to .env and never printed.
 """
 
 from __future__ import annotations
 
+import http.server
 import json
 import re
+import socket
 import sys
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob"
+CALLBACK_PORT = 8129
+REDIRECT_URI = f"http://localhost:{CALLBACK_PORT}/callback"
 SCOPE = "read write"
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+CALLBACK_TIMEOUT_S = 300
 
 
 def load_env() -> dict[str, str]:
-    """Read .env directly — never rely on the caller's exported shell state.
+    """Read .env from disk — never trust the caller's exported shell state.
 
-    A stale shell (sourced before .env was filled in) is one of the failure
-    modes this script exists to remove.
+    A shell sourced before .env was filled in is one of the failure modes
+    this script exists to remove.
     """
     if not ENV_PATH.exists():
         sys.exit(f"error: {ENV_PATH} not found. Copy .env.example to .env first.")
@@ -67,9 +82,8 @@ def require(env: dict[str, str], *keys: str) -> list[str]:
 
 
 def authorize_url(subdomain: str, client_id: str) -> str:
-    # quote_via=quote so the space in "read write" encodes as %20 rather than
-    # urlencode's default '+'. The runbook and Zendesk's own examples use %20;
-    # not worth discovering the hard way whether their parser treats them alike.
+    # quote_via=quote so the space in "read write" encodes as %20, matching
+    # Zendesk's own documented example, rather than urlencode's default '+'.
     query = urllib.parse.urlencode(
         {
             "response_type": "code",
@@ -107,24 +121,17 @@ def exchange(subdomain: str, client_id: str, client_secret: str, code: str) -> s
         print(f"HTTP {exc.code}: {detail}\n", file=sys.stderr)
         if "invalid_client" in detail:
             sys.exit(
-                "The client_id or client_secret is wrong.\n"
-                "  Admin Center -> Apps and integrations -> APIs -> Zendesk API\n"
-                "  -> OAuth Clients -> your client. client_id is the UNIQUE\n"
-                "  IDENTIFIER field. The secret is shown only at creation; if\n"
-                "  it was lost, delete the client and recreate it."
+                "The client_id or client_secret is wrong. client_id is the\n"
+                "OAuth client's UNIQUE IDENTIFIER field, not its numeric id."
             )
         if "invalid_grant" in detail:
             sys.exit(
-                "The client credentials are FINE — the authorization code was\n"
-                "rejected. In order of likelihood:\n"
-                "  1. The code was already used, or expired. Codes are\n"
-                "     single-use and short-lived: re-run --url, approve, and\n"
-                "     exchange within a minute.\n"
-                f"  2. The OAuth client's 'Redirect URLs' field does not contain\n"
-                f"     exactly: {REDIRECT_URI}\n"
-                "     Zendesk reports a redirect_uri mismatch as invalid_grant\n"
-                "     too. Check that field before retrying.\n"
-                "  3. The code was truncated on paste (they are long)."
+                "Client credentials are FINE — the authorization code was rejected:\n"
+                "  1. The code was already used or expired (single-use, short-lived).\n"
+                f"  2. The OAuth client's 'Redirect URLs' must contain exactly:\n"
+                f"       {REDIRECT_URI}\n"
+                "     Zendesk reports a redirect mismatch as invalid_grant too.\n"
+                "  3. The code was truncated on paste."
             )
         raise
     if not token:
@@ -141,23 +148,88 @@ def write_token(token: str) -> None:
     ENV_PATH.write_text(text)
 
 
+class _CallbackHandler(http.server.BaseHTTPRequestHandler):
+    """Captures ?code=... from Zendesk's redirect, then tells the browser."""
+
+    code: str | None = None
+    error: str | None = None
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib naming
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        _CallbackHandler.code = (params.get("code") or [None])[0]
+        _CallbackHandler.error = (params.get("error") or [None])[0]
+        ok = _CallbackHandler.code is not None
+        message = (
+            "Authorization captured. You can close this tab and return to the terminal."
+            if ok
+            else f"No code in callback. Zendesk said: {_CallbackHandler.error or 'nothing'}"
+        )
+        self.send_response(200 if ok else 400)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(message.encode())
+
+    def log_message(self, *args: object) -> None:
+        """Silence the default stderr access log."""
+
+
+def serve_and_capture(url: str) -> str:
+    if _port_in_use(CALLBACK_PORT):
+        sys.exit(
+            f"error: port {CALLBACK_PORT} is already in use, so the callback\n"
+            "listener cannot start. Free it, or use the manual --url flow."
+        )
+    server = http.server.HTTPServer(("127.0.0.1", CALLBACK_PORT), _CallbackHandler)
+    server.timeout = CALLBACK_TIMEOUT_S
+    thread = threading.Thread(target=server.handle_request, daemon=True)
+    thread.start()
+
+    print("Open this in a browser logged into Zendesk and click Allow:\n")
+    print(url)
+    print(f"\nWaiting up to {CALLBACK_TIMEOUT_S}s for the redirect to {REDIRECT_URI} ...")
+    thread.join(timeout=CALLBACK_TIMEOUT_S)
+    server.server_close()
+
+    if _CallbackHandler.error:
+        sys.exit(f"Zendesk returned an error instead of a code: {_CallbackHandler.error}")
+    if not _CallbackHandler.code:
+        sys.exit(
+            "timed out with no callback received.\n"
+            f"Check that the OAuth client's 'Redirect URLs' contains exactly:\n  {REDIRECT_URI}"
+        )
+    return _CallbackHandler.code
+
+
+def _port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
 def main(argv: list[str]) -> None:
     env = load_env()
     if len(argv) != 1:
         sys.exit(__doc__)
+    mode = argv[0]
 
-    if argv[0] in {"--url", "-u"}:
+    if mode in {"--url", "-u"}:
         subdomain, client_id = require(env, "ZENDESK_SUBDOMAIN", "ZENDESK_OAUTH_CLIENT_ID")
-        print("Open this in a browser logged into Zendesk, approve, then copy the")
-        print("`code=` value out of the URL you land on:\n")
+        print(f"First register this exact Redirect URL on the OAuth client:\n  {REDIRECT_URI}\n")
+        print("Then open this, click Allow, and copy the `code=` value from the")
+        print("address bar of the 'cannot connect' page you land on:\n")
         print(authorize_url(subdomain, client_id))
-        print(f"\nThen immediately:  uv run python {Path(__file__).name} <code>")
+        print(f"\nThen:  uv run python scripts/{Path(__file__).name} <code>")
         return
 
     subdomain, client_id, client_secret = require(
         env, "ZENDESK_SUBDOMAIN", "ZENDESK_OAUTH_CLIENT_ID", "ZENDESK_OAUTH_CLIENT_SECRET"
     )
-    token = exchange(subdomain, client_id, client_secret, argv[0].strip())
+    if mode in {"--serve", "-s"}:
+        code = serve_and_capture(authorize_url(subdomain, client_id))
+        print("Code captured. Exchanging ...")
+    else:
+        code = mode.strip()
+
+    token = exchange(subdomain, client_id, client_secret, code)
     write_token(token)
     print(f"Success. ZENDESK_OAUTH_TOKEN written to .env ({len(token)} chars, not printed).")
     print("Next: docs/zendesk-runbook.md step 3 for ZENDESK_AI_USER_ID.")

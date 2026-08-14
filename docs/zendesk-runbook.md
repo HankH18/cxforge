@@ -58,40 +58,54 @@ authenticates as an OAuth 2.0 app instead.
    - **Client name**: `othram-support-agent`
    - **Unique identifier**: leave the auto-filled value, or set your own
      (e.g. `othram_support_agent`) — this is `ZENDESK_OAUTH_CLIENT_ID`.
-   - **Redirect URLs**: `urn:ietf:wg:oauth:2.0:oob` (out-of-band — lets you
-     complete the authorization-code flow without standing up a redirect
-     listener).
+   - **Redirect URLs**: `http://localhost:8129/callback` — exactly this.
+
+     > **Do not use `urn:ietf:wg:oauth:2.0:oob`.** An earlier revision of
+     > this runbook said to, and it does not work: Zendesk requires redirect
+     > URLs to be "absolute and not relative" and "secure (https) unless
+     > you're using localhost or 127.0.0.1". The out-of-band URN is neither,
+     > so `/oauth/authorizations/new` rejects the request with
+     > `invalid_request — The request is missing a required parameter,
+     > includes an unsupported parameter or parameter value, or is otherwise
+     > malformed`, before any code is issued. localhost is explicitly
+     > permitted, which is why the helper below uses it.
+
 3. Save. Zendesk shows the **Secret** exactly once — copy it now. This is
    `ZENDESK_OAUTH_CLIENT_SECRET`. If you lose it, delete and recreate the
    OAuth client.
-4. Get an authorization code: paste this URL into a browser you're logged
-   into Zendesk with (fill in your subdomain and client id), approve the
-   prompt, and Zendesk redirects you to a blank/error page whose URL
-   contains `?code=...` — copy that code (valid briefly, use it right
-   away):
-
-   ```
-   https://<subdomain>.zendesk.com/oauth/authorizations/new?response_type=code&redirect_uri=urn:ietf:wg:oauth:2.0:oob&client_id=<client_id>&scope=read%20write
-   ```
-
-5. Exchange the code for a bearer token:
+4. Put `ZENDESK_SUBDOMAIN` (the bare name — **not** the full
+   `*.zendesk.com` hostname, which would be doubled into the API base URL)
+   and `ZENDESK_OAUTH_CLIENT_ID` (the **Unique identifier** field, not the
+   numeric client id) into `.env`.
+5. Run the authorization-code flow. From the repo root:
 
    ```bash
-   curl -s https://<subdomain>.zendesk.com/oauth/tokens \
-     -H "Content-Type: application/json" \
-     -d '{
-       "grant_type": "authorization_code",
-       "code": "<code from step 4>",
-       "client_id": "<client id>",
-       "client_secret": "<client secret>",
-       "redirect_uri": "urn:ietf:wg:oauth:2.0:oob",
-       "scope": "read write"
-     }'
+   uv run python scripts/zendesk_oauth.py --serve
    ```
 
-   The response's `access_token` field is `ZENDESK_OAUTH_TOKEN`. It does
-   not expire on its own (Zendesk OAuth tokens are long-lived until
-   revoked), so you only need to do this once per trial.
+   It prints an authorization URL and starts a listener on
+   `localhost:8129`. Open the URL in a browser logged into Zendesk, click
+   **Allow**, and Zendesk redirects back to the listener, which captures
+   the code, exchanges it, and writes `ZENDESK_OAUTH_TOKEN` into `.env`
+   without printing it.
+
+   If you cannot run a listener, use the manual path instead — print the
+   URL, approve, then copy the `code=` value out of the address bar of the
+   "cannot connect" page you land on:
+
+   ```bash
+   uv run python scripts/zendesk_oauth.py --url
+   uv run python scripts/zendesk_oauth.py <code>
+   ```
+
+   Authorization codes are single-use and short-lived, so exchange
+   immediately. The resulting token does not expire on its own (Zendesk
+   OAuth tokens are long-lived until revoked), so this is once per trial.
+
+   **Reading the errors**: `invalid_client` means the client id or secret
+   is wrong. `invalid_grant` means the credentials were *accepted* and the
+   code was the problem — expired, already used, or the redirect URL you
+   registered does not match `http://localhost:8129/callback` exactly.
 
 ## Step 3 — Dedicated AI agent user (for attribution)
 
