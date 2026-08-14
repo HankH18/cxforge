@@ -19,22 +19,69 @@
 #   determined or buggy agent using Bash.
 #
 # FAIL-CLOSED CLAIM RULE (acceptance 3): .claude/active-ticket must exist,
-# have a non-blank first line, and that line must name a ticket id present
-# in docs/tickets.json. Any failure of that chain is a DENY of every
-# Edit/Write (other than the two unconditional protocol paths below). There
-# is no env var, flag, sentinel value or magic path that substitutes for a
-# real claim — unclaimed or unrecognised work is authorised only by a human
-# editing .claude/active-ticket.
+# be non-empty, and its LAST non-blank line (see T-13 below) must name a
+# ticket id present in docs/tickets.json. Any failure of that chain is a
+# DENY of every Edit/Write (other than the two unconditional protocol paths
+# below). There is no env var, flag, sentinel value or magic path that
+# substitutes for a real claim — unclaimed or unrecognised work is
+# authorised only by a human editing .claude/active-ticket.
+#
+# T-13 (session-scoped, append-only ticket claims) changed .claude/active-
+# ticket from a single mutable line to an APPEND-ONLY log (see
+# .claude/hooks/claim_lookup.py for the exact line format and the reasoning
+# below) — but left THIS hook deliberately session-BLIND. It reads
+# claim_lookup.py's `--mode last` (the log's last non-blank line, whoever
+# wrote it), never `--mode owned`. Do not "improve" this into a
+# session-scoped check. Reasons, from T-13's own recon:
+#   1. Different failure mode. The T-8/T-9/T-11 bug this hook's sibling
+#      guards (stop_guard.sh, verify_gate.sh) were fixed for is an
+#      OWNERSHIP/completion bug — a session told to "finish or revert"
+#      work it never claimed. This hook is a PATH/SCOPE check ("is this
+#      edit inside the claimed ticket's declared files") — it has never
+#      told anyone to finish or revert anything, so it isn't that bug.
+#   2. Blast radius. This hook fires on every single Edit/Write, live, in
+#      whatever session currently holds the floor — including the session
+#      implementing this very change. Subagents share their parent
+#      session's CLAUDE_CODE_SESSION_ID (confirmed empirically during T-13
+#      recon), so naive session-scoping would not even break subagent
+#      fan-out — but a bug in a hook this hot still bricks the live build
+#      immediately, versus a bug in Stop/TaskCompleted-only guards which is
+#      contained to two much rarer transition points.
+#   3. Ticket's own stated non-goal: "No multi-agent scheduling or lock
+#      arbitration — this makes claims legible, it does not coordinate
+#      them." Session-scoping this hook's allow/deny would turn a coarse
+#      legibility check into a per-edit ownership/coordination gate, which
+#      T-13 explicitly disclaims.
 #
 # UNCONDITIONAL PROTOCOL PATHS (acceptance 4 + 7), checked before any
 # per-ticket scope lookup, and before the claim-record is even consulted:
-#   .claude/active-ticket      -> ALLOW always (this is how a claim is made)
+#   .claude/active-ticket      -> ALLOW iff the call can only APPEND (see
+#                                  APPEND-ONLY ENFORCEMENT below); otherwise
+#                                  DENY.
 #   .claude/evidence/**        -> DENY always (only verify_gate.sh may write
 #                                  completion evidence; no ticket, including
 #                                  one whose scope is .claude/hooks/**, may
 #                                  write its own or another ticket's proof)
 # Everything else under .claude/** and docs/** now falls through to normal
 # per-ticket scope matching — there is no blanket allow for either tree.
+#
+# APPEND-ONLY ENFORCEMENT (T-13 acceptance 3; adversarial findings #2/#3):
+# a plain Edit/Write to .claude/active-ticket used to be allowed
+# unconditionally — including a full-file OVERWRITE, exactly what CLAUDE.md's
+# (stale, pre-T-13) "write its ticket ID as the only line" instruction
+# literally describes, which silently destroys the append-only audit trail
+# T-13 exists to restore. This hook now asks claim_lookup.py's
+# --mode append-check (fed the SAME PreToolUse payload this script already
+# has, via stdin) whether the proposed Write's `content` — or the proposed
+# Edit's old_string/new_string, simulated against the file's CURRENT on-disk
+# content — would leave that current content as an exact prefix of the
+# result. Only a call that can merely APPEND new lines (or the file doesn't
+# exist yet — the very first claim) is allowed; anything that would alter or
+# delete existing bytes is denied. The correct way to record a claim is
+# .claude/hooks/claim.sh <ticket-id>, run via the Bash tool (see that
+# script's header for why routing through Bash, not Edit/Write, is exactly
+# the point — it bypasses this hook's Edit|Write-only matcher entirely,
+# documented in the COVERAGE LIMITATION note above, and always appends).
 #
 # GLOB SEMANTICS for docs/tickets.json .scope entries:
 #   - a match is a FULL match of the path relative to CLAUDE_PROJECT_DIR,
@@ -57,6 +104,12 @@
 # work, including anything that only *looks* in-scope before "../" is
 # resolved, is never this guard's business.
 set -uo pipefail
+
+# claim_lookup.py lives next to THIS script, not necessarily under
+# CLAUDE_PROJECT_DIR — tests point CLAUDE_PROJECT_DIR at a synthetic,
+# disposable project dir that only seeds docs/tickets.json and
+# .claude/active-ticket, so resolve relative to this script's own location.
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 INPUT=$(cat)
 FILE=$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // empty')
@@ -81,25 +134,29 @@ case "$REAL_FILE" in
 esac
 REL="${REAL_FILE#"$REAL_PROJECT"/}"
 
+AT="${CLAUDE_PROJECT_DIR}/.claude/active-ticket"
+TICKETS="${CLAUDE_PROJECT_DIR}/docs/tickets.json"
+
 # --- unconditional protocol paths (acceptance 4 + 7) ----------------------
 case "$REL" in
   ".claude/active-ticket")
-    exit 0 ;;
+    APPEND_OK=$(printf '%s' "$INPUT" | python3 "$HOOK_DIR/claim_lookup.py" "$AT" --mode append-check)
+    if [ "$APPEND_OK" = "ok" ]; then
+      exit 0
+    fi
+    deny "$REL is an append-only, git-tracked claim log (T-13 acceptance 3): this Edit/Write would alter or remove existing content instead of only appending new lines. Use 'bash .claude/hooks/claim.sh <ticket-id>' (via the Bash tool) to record a well-formed claim — see that script and .claude/hooks/claim_lookup.py for the format." ;;
   ".claude/evidence/"*)
     deny "$REL is completion evidence; only verify_gate.sh may write .claude/evidence/** after a real verify run — no ticket may write or forge its own (or another ticket's) evidence." ;;
 esac
 
 # --- fail-closed claim record (acceptance 3) -------------------------------
-AT="${CLAUDE_PROJECT_DIR}/.claude/active-ticket"
-TICKETS="${CLAUDE_PROJECT_DIR}/docs/tickets.json"
-
 if [ ! -s "$AT" ]; then
   deny "no ticket is claimed: .claude/active-ticket is missing or empty. A human must claim a ticket (write its id to that file) before any Edit/Write is authorised — there is no bypass."
 fi
 
-TID=$(head -n1 "$AT" | tr -d '[:space:]')
+TID=$(python3 "$HOOK_DIR/claim_lookup.py" "$AT" --mode last)
 if [ -z "$TID" ]; then
-  deny ".claude/active-ticket is whitespace-only. A human must record a real ticket id before any Edit/Write is authorised — there is no bypass."
+  deny ".claude/active-ticket has no resolvable ticket claim on its last non-blank line (whitespace-only content, or the log's most recent entry is a release marker). A human must record a real ticket id before any Edit/Write is authorised — there is no bypass."
 fi
 
 KNOWN=$(jq -r --arg id "$TID" '.tickets[] | select(.id==$id) | .id' "$TICKETS" 2>/dev/null | head -n1)
