@@ -51,19 +51,49 @@ def project(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def make_project(tmp_path: Path, tickets_doc: dict[str, Any]) -> Path:
+    """Build a disposable CLAUDE_PROJECT_DIR around a SYNTHETIC tickets.json.
+
+    Unlike the ``project`` fixture (which seeds the real docs/tickets.json),
+    this lets a test construct a scope shape the real plan does not happen
+    to declare today — e.g. a bare single '*' wildcard, which no real
+    ticket uses — without touching or duplicating the real plan file. Still
+    drives the real hook script exactly like ``run_hook``/``expect`` do.
+    """
+    (tmp_path / "docs").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".claude").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs" / "tickets.json").write_text(json.dumps(tickets_doc))
+    return tmp_path
+
+
+class _Unset:
+    """Sentinel type distinguishing 'leave .claude/active-ticket file as-is'
+    from an explicit ``None`` (delete it) or a ``str`` (overwrite it).
+
+    A plain ``object()`` sentinel typed as ``... | object`` collapses to
+    ``object`` under mypy (``object`` is already a supertype of ``str`` and
+    ``None``), which is why ``write_text`` used to fail to type-check even
+    after both other branches were excluded: mypy could not narrow ``object``
+    down to ``str``. A dedicated class narrows correctly via ``isinstance``.
+    """
+
+
+UNSET = _Unset()
+
+
 def run_hook(
     project_dir: Path,
     file_path: str,
     *,
     tool_name: str = "Edit",
-    active_ticket: str | None | object = ...,
+    active_ticket: str | None | _Unset = UNSET,
     env_extra: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Invoke the real scope_guard.sh hook with a synthetic PreToolUse event.
 
     ``active_ticket``:
-      - ``...`` (default): leave .claude/active-ticket in project_dir as-is
-        (absent unless a previous call in the same test wrote it).
+      - ``UNSET`` (default): leave .claude/active-ticket in project_dir
+        as-is (absent unless a previous call in the same test wrote it).
       - ``None``: delete .claude/active-ticket if present (missing-file case).
       - a string: overwrite .claude/active-ticket with that exact content,
         unmodified — "" tests empty, "   \\n" tests whitespace-only, "T-1" a
@@ -72,7 +102,7 @@ def run_hook(
     at_path = project_dir / ".claude" / "active-ticket"
     if active_ticket is None:
         at_path.unlink(missing_ok=True)
-    elif active_ticket is not ...:
+    elif not isinstance(active_ticket, _Unset):
         at_path.parent.mkdir(parents=True, exist_ok=True)
         at_path.write_text(active_ticket)
 
@@ -146,7 +176,7 @@ def decision(result: subprocess.CompletedProcess[str]) -> str:
 def expect(
     project_dir: Path,
     *,
-    ticket: str | None | object,
+    ticket: str | None | _Unset,
     file_path: str,
     want: str,
     tool_name: str = "Edit",

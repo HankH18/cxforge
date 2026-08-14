@@ -17,8 +17,10 @@ import pytest
 from .conftest import (
     REAL_SCOPES,
     REAL_TICKET_IDS,
+    UNSET,
     decision,
     expect,
+    make_project,
     run_hook,
 )
 
@@ -164,6 +166,64 @@ def test_acceptance_1_portal_glob_does_not_prefix_match_nested_portal_dir(projec
     )
 
 
+# ---------------------------------------------------------------------------
+# Acceptance 1, end-anchor half: a literal (non-"**"-suffixed) scope entry
+# must not match as a PREFIX of a longer path. The "portal/**" regression
+# above cannot exercise this: a "**"-suffixed pattern's own ".*" already
+# consumes anything past the pattern under Python's `.match()` regardless of
+# whether a trailing "$" is present, so dropping that "$" is invisible to
+# any test built only from "**" scopes. It is NOT invisible here: without
+# the trailing "$", `.match()` only anchors at the START of the string, so
+# a literal pattern like "docker-compose.yml" would still match
+# "docker-compose.ymlEXTRA". Each (ticket, literal_entry) pair below was
+# hand cross-checked against that ticket's ENTIRE scope list (see
+# test_literal_probes_are_cross_checked_against_real_tickets) to confirm no
+# *other* glob in the ticket's scope legitimately covers the probe path, so
+# a false ALLOW here can only come from the end anchor being broken.
+# ---------------------------------------------------------------------------
+LITERAL_SUFFIX_PROBES: list[tuple[str, str]] = [
+    ("T-0", "docker-compose.yml"),
+    ("T-2", "scripts/live_smoke.py"),
+    ("T-3", "backend/src/helpdesk/email_adapter.py"),
+    ("T-4", "docs/zendesk-runbook.md"),
+    ("T-10", "scripts/scenario_runner.py"),
+    ("T-11", "scripts/verify_deploy.sh"),
+    ("T-14", "scripts/render_tasks_md.py"),
+    ("T-15", "evals/report.py"),
+    ("T-16", "docker-compose.yml"),
+    ("T-17", "scripts/verify_deploy.sh"),
+    ("T-21", "evals/report.py"),
+]
+
+
+def test_literal_probes_are_cross_checked_against_real_tickets() -> None:
+    """The table above must track docs/tickets.json, not a hand-typed guess:
+    every literal_entry must appear verbatim in that ticket's real scope,
+    and must genuinely contain no wildcard (otherwise it isn't testing the
+    no-wildcard-tail case this block exists for).
+    """
+    for ticket, entry in LITERAL_SUFFIX_PROBES:
+        assert entry in REAL_SCOPES[ticket], (ticket, entry)
+        assert "*" not in entry, f"{entry!r} is not a literal scope entry"
+
+
+@pytest.mark.parametrize(
+    ("ticket", "entry"),
+    LITERAL_SUFFIX_PROBES,
+    ids=[t for t, _ in LITERAL_SUFFIX_PROBES],
+)
+def test_acceptance_1_literal_scope_does_not_match_as_a_prefix_of_a_longer_path(
+    project: Path, ticket: str, entry: str,
+) -> None:
+    """Mutating away the trailing "$" in scope_guard.sh's
+    ``re.compile("^(?:" + pattern + ")$")`` leaves this red: without it, a
+    literal scope entry would still match any path it is merely a PREFIX
+    of, since Python's `.match()` only anchors matching at the start.
+    """
+    probe = str(project / (entry + "-EXTRA-SUFFIX-not-in-scope"))
+    expect(project, ticket=ticket, file_path=probe, want="deny")
+
+
 def test_same_path_allowed_under_a_ticket_whose_scope_actually_lists_it(project: Path) -> None:
     """Same literal path as the regression above, different ticket.
 
@@ -253,7 +313,7 @@ def test_no_env_var_substitutes_for_a_real_claim(project: Path) -> None:
     result = run_hook(
         project,
         str(project / "backend/src/data/models.py"),
-        active_ticket=...,
+        active_ticket=UNSET,
         env_extra={
             "SCOPE_GUARD_BYPASS": "1",
             "CLAUDE_SCOPE_GUARD_SKIP": "1",
@@ -343,21 +403,49 @@ def test_claude_tree_is_not_blanket_allowed_for_a_ticket_without_it_in_scope(pro
 
 
 # ---------------------------------------------------------------------------
-# Glob semantics sanity: '*' within one segment, '**' across segments, no
-# real ticket happens to use a bare single '*' today so this is asserted
-# directly against synthetic scope-shaped paths under a ticket that DOES use
-# '**' — proving '*' would not have matched had it been used.
+# Glob semantics: '*' within one segment only, '**' crosses segments.
 # ---------------------------------------------------------------------------
-def test_single_star_does_not_cross_a_path_separator(project: Path) -> None:
-    """T-1's 'backend/src/data/**' must not be fooled by a nested subdir that
-    a non-crossing single '*' would have blocked — this exercises that '**'
-    really is the segment-crossing form and not an accidental '*' alias.
+def test_double_star_crosses_multiple_nested_subdirectories(project: Path) -> None:
+    """T-1's 'backend/src/data/**' must reach arbitrarily deep nesting —
+    proves '**' really is the segment-crossing form. (This does NOT exercise
+    single-'*' semantics — see test_single_star_does_not_cross_a_path_separator
+    below for that, which needs a synthetic scope since no real ticket
+    declares a bare single '*'.)
     """
     expect(
         project,
         ticket="T-1",
         file_path=str(project / "backend/src/data/nested/deep/models.py"),
         want="allow",
+    )
+
+
+def test_single_star_does_not_cross_a_path_separator(tmp_path: Path) -> None:
+    """A bare single '*' — no real ticket in docs/tickets.json declares one
+    today (every wildcard scope entry in the real plan uses '**'), so this
+    builds a synthetic ticket via ``make_project`` to exercise the single-'*'
+    branch directly rather than asserting something '**'-shaped and calling
+    it done.
+    """
+    synthetic = make_project(
+        tmp_path,
+        {"tickets": [{"id": "T-STAR", "scope": ["backend/src/data/*/models.py"]}]},
+    )
+    # Exactly one path segment between "data/" and "models.py": within a
+    # single '*''s reach.
+    expect(
+        synthetic,
+        ticket="T-STAR",
+        file_path=str(synthetic / "backend/src/data/nested/models.py"),
+        want="allow",
+    )
+    # Two segments ("nested/deep") between "data/" and "models.py": a single
+    # '*' must NOT cross the extra '/' to reach it.
+    expect(
+        synthetic,
+        ticket="T-STAR",
+        file_path=str(synthetic / "backend/src/data/nested/deep/models.py"),
+        want="deny",
     )
 
 
