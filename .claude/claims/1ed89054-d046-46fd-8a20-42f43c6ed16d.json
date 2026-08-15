@@ -1,8 +1,0 @@
-{
- "ticket": "T-31",
- "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
- "note": "The unblocking root: 206 of the suite's failures all trace to the harness-sync commit, and every other ready ticket (T-12/T-15/T-16/T-22/T-23) has a verify gated on that same red suite. T-31 has no deps and is the only ticket whose contract covers the breakage.",
- "start_commit": "3a4e147caaf66690020a7bb40f05c31676a0fab6",
- "attempts": 0,
- "ts": 1786758125
-}
