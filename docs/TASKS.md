@@ -208,7 +208,7 @@
 - **Depends on**: none · **parallel_safe**: false
 - **Non-goals**: NEVER edits evals/labeled_set.yaml or its approval fields - same file-level prohibition as T-15 and T-21; No change to metrics or threshold logic; NOT parallel-safe with T-21: both declare evals/report.py; T-21 is open (human-blocked) - never run concurrently
 
-### T-26: Plan files are tamper-evident; T-11's silent dependency edit is adjudicated  `[queue]`
+### T-26: Plan files are tamper-evident; T-11's silent dependency edit is adjudicated  `[resolved]`
 - **Objective**: T-14's commit silently added T-17 to T-11's depends_on, outside its sanctioned changes; nothing detects structural edits to existing contracts. docs/INGEST.md also still describes a pre-batch world (sole root T-0, no named task list), so a literal follower fails its own confirmation step.
 - **Acceptance**: 1) HUMAN GATE: the project owner ratifies or reverts T-11's depends_on addition of T-17; the decision and rationale are recorded in the completion commit message - stop and ask, never decide autonomously 2) a committed snapshot of every ticket's structural fields (scope, depends_on, verify, acceptance) plus a plan test asserting live tickets.json matches it; a legitimate amendment updates the snapshot in the same commit, making plan changes legible instead of silent 3) the snapshot test fails demonstrably against a synthetic silent depends_on edit, shown in a test using a doctored copy in tmp_path 4) docs/INGEST.md is regenerated to match reality: derives the ready set from tickets.json status and priority fields instead of asserting exactly T-0 unblocked, and names the task list (othram-support-agent) new sessions must bind to
 - **Verify**: `uv run pytest backend/tests/plan backend/tests/hooks -q`

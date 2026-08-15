@@ -1,6 +1,7 @@
 # T-7 labeled-set review — please read this before approving anything
 
-**Status: `evals/labeled_set.yaml` is `PROPOSED_AWAITING_HUMAN_REVIEW`. Nothing
+**Status: `evals/labeled_set.yaml` is `APPROVED` — signed off by Hank Holcomb
+on 2026-08-15 after reading this document. Superseded text follows. Nothing
 downstream (a threshold, a reported precision/recall number, a "T-7 done")
 happens until you act on this document.**
 

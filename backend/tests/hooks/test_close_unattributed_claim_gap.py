@@ -48,15 +48,18 @@ for the whole close while still minting a receipt.
 
 Per T-28's own escape valve ("If a case is genuinely unreachable through any hook ...
 say so plainly in your report rather than inventing a hook that cannot fire"), this file
-does NOT attempt a hook-layer fix -- there is no hook in the path for one to live in. What
-it does instead is pin the exact, currently-real behaviour of `cmd_close` for all five
-named cases as durable, checked evidence (not an "absence assertion that passes
-trivially" -- every test below drives the real `cmd_close` through the real
-`claim.sh close` with a genuinely malformed claim record and asserts on what it actually
-does), so a future ticket with scope over `harness_lib.py`/`.claude/settings.json` has a
-concrete regression suite to turn green. THESE TESTS PASSING DOES NOT MEAN ACCEPTANCE 1 IS
-MET -- see the module- and test-level docstrings; every test name says outright whether
-it pins a crash or a silent wrong-receipt.
+never attempted a hook-layer fix -- there is no hook in the path for one to live in. It
+originally pinned the exact, currently-real behaviour of `cmd_close` for every named case
+as durable, checked evidence, so that an authorised change to `harness_lib.py` itself had
+a concrete regression suite to turn green. ALL SIX CASES HAVE NOW BEEN TURNED GREEN: each
+test below still drives the real `cmd_close` through the real `claim.sh close` with a
+genuinely malformed claim record and asserts on what it actually does, but the expected
+"what it does" is now a clean, named refusal that writes nothing. Each test's own
+docstring records verbatim what it used to assert and why that was the defect.
+
+The last case to fall was case 2 (`session` disagrees with the filename), which was never
+a crash at all -- it was a silent, fully successful close that minted a fingerprint-bound
+receipt for a record whose attribution contradicted itself.
 
 Self-contained like `test_verify_gate.py`: builds its own synthetic git project per test
 in `tmp_path` (real git repo, hand-authored `docs/tickets.json`, copies of the real
@@ -259,17 +262,25 @@ def test_close_refuses_by_name_on_a_claim_record_missing_the_ticket_key(
 # ---------------------------------------------------------------------------
 # Case 2: "session" field disagrees with the claim's own filename
 # ---------------------------------------------------------------------------
-def test_close_silently_mints_a_receipt_when_session_field_disagrees_with_filename(
+def test_close_refuses_by_name_when_session_field_disagrees_with_filename(
     tmp_path: Path,
 ) -> None:
-    """PINS A GAP, does not close it (see module docstring): `cmd_close` never reads
-    `c["session"]` at all -- it resolves identity purely from `_sid()` (the filename it
-    already used to look the record up) and writes THAT into the evidence record. So a
-    claim file whose internal `session` field disagrees with its own filename is not
-    refused, not flagged, not even noticed: `close` succeeds normally and mints a normal
-    receipt, with no acknowledgment anywhere that the record was internally
-    inconsistent. This is not a crash -- it is a true silent pass-through of a malformed
-    record, worse than the crash cases in that nothing at all signals a problem existed.
+    """T-28 acceptance 1 — GAP NOW CLOSED, and this was the worst case in the file.
+
+    This test previously pinned the defect (it was named
+    `test_close_silently_mints_a_receipt_when_session_field_disagrees_with_filename`)
+    and asserted `returncode == 0`, `"closed" in stdout`, a real evidence file on disk,
+    and `receipt["session"] == sid`: `cmd_close` never read `c["session"]` at all, so a
+    record whose internal attribution contradicted its own filename was not refused, not
+    flagged, not even noticed. Unlike the crash cases either side of it, nothing
+    signalled that a problem existed — a fingerprint-bound receipt was minted certifying
+    work under an attribution the record itself denied.
+
+    `harness_lib.claim_defects` now treats that contradiction as what it is: the FILENAME
+    is the attribution every reader resolves ownership from, so a record that disagrees
+    with it asserts two owners and the harness has nothing to adjudicate between them.
+    The record is refused BY NAME (the path is printed), no gate runs, and nothing is
+    written. Same fixture, same corruption, inverted expectation.
     """
     proj = _make_project(tmp_path)
     sid = "session-real-owner"
@@ -277,14 +288,15 @@ def test_close_silently_mints_a_receipt_when_session_field_disagrees_with_filena
 
     result = _close(proj, sid)
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "closed" in result.stdout
-    assert _evidence_path(proj).exists()
-    receipt = json.loads(_evidence_path(proj).read_text())
-    # The receipt is minted for the record it read, silently ignoring the mismatch --
-    # it does not even preserve the impostor value anywhere for a human to spot later.
-    assert receipt["session"] == sid
-    assert receipt["ticket"] == TID
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Traceback (most recent call last)" not in result.stderr
+    # "names the offending record": the claim file's own path, plus both contradicting
+    # attributions, so a human can see exactly what disagreed with what.
+    assert f".claude/claims/{sid}.json" in result.stdout
+    assert "impostor" in result.stdout
+    assert sid in result.stdout
+    assert "closed" not in result.stdout
+    assert not _evidence_path(proj).exists()
 
 
 # ---------------------------------------------------------------------------

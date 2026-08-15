@@ -39,8 +39,8 @@ approval:
   approved_date: "2026-08-15"
   statement: >
     These labels are proposed ground truth for the T-7 escalation eval,
-    authored by the coding agent that implemented T-7. They are NOT yet
-    reviewed or approved. Any precision/recall/F1/confusion-matrix number
+    authored by the coding agent that implemented T-7. They were reviewed and
+    APPROVED by Hank Holcomb on 2026-08-15. Any precision/recall/F1/confusion-matrix number
     computed against this file (see evals/report.py and
     docs/eval-report/) is a DRAFT only, not a real measurement of the
     escalation engine, until a human owner reviews evals/REVIEW.md and
