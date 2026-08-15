@@ -16,7 +16,7 @@
 - **Depends on**: T-0 · **parallel_safe**: true
 - **Non-goals**: No ingestion pipeline; No real-lab content
 
-### T-2: HelpdeskPort, ZendeskAdapter, contract suite  `[queue]`
+### T-2: HelpdeskPort, ZendeskAdapter, contract suite  `[resolved]`
 - **Objective**: The port boundary and its full Zendesk implementation (R1 write-side, R14 foundation).
 - **Acceptance**: 1) Protocol + normalized models exactly as pinned in DESIGN 2) OAuth client (no API tokens), backoff honoring Retry-After 3) all port ops implemented; public reply and internal note as separate PUTs; every write appends the ai-processed tag 4) contract suite written against the Protocol, parametrized by adapter, passing over mocked Zendesk HTTP 5) scripts/live_smoke.py exercising each op against a real trial (manual run, env-gated)
 - **Verify**: `uv run pytest -m "not live" backend/tests/contract backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q`

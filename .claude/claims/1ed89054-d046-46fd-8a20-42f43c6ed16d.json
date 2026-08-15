@@ -1,8 +1,0 @@
-{
- "ticket": "T-2",
- "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
- "note": "Next ready id after T-1, also unblocked by T-0. Remint \u2014 unblocks T-3, T-4 and (with T-1) T-5.",
- "start_commit": "1e735bf6c416634b9828b4f0136de2298790e567",
- "attempts": 0,
- "ts": 1786819376
-}
