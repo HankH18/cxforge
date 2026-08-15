@@ -25,6 +25,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REAL_LABELED_SET = REPO_ROOT / "evals" / "labeled_set.yaml"
 REAL_CASES = REPO_ROOT / "fixtures" / "cases.yaml"
@@ -80,14 +82,54 @@ tickets:
     expected_reasons: []
 """
 
+# T-21: evals/report.py now calls the real, live Anthropic classifier for
+# any ticket that reaches EscalationEngine's classifier tier — which is
+# nearly every ticket in every fixture below (only billing/human_request
+# hard-rule bodies skip it). "The unit suite must not make live API calls"
+# (T-21), so every _run_report/_run_report_in call in this module defaults
+# to injecting evals.report's TEST-ONLY fixed-verdict escape hatch (see
+# that module's docstring) via _base_env below. confidence=1.0 specifically
+# (not e.g. 0.99): EscalationEngine.evaluate's own `confidence >= threshold`
+# check means anything less than 1.0 lets the F1-maximizing threshold sweep
+# push the recommended threshold ABOVE that confidence to suppress the
+# classifier tier entirely (empirically confirmed while building this
+# fixture) — 1.0 clears every threshold in the [0, 1] sweep, so this
+# fixture's behavior does not depend on exactly which threshold gets
+# recommended. Tests that need the REAL key path (or no key at all)
+# override EVALS_REPORT_FAKE_LLM_FOR_TESTS_ONLY back to "" explicitly.
+DEFAULT_FAKE_LLM_VERDICT = json.dumps(
+    {"escalate": True, "reasons": ["frustration"], "confidence": 1.0}
+)
 
-def _run_report(*extra_args: str) -> subprocess.CompletedProcess[str]:
+
+def _base_env(extra: dict[str, str | None] | None = None) -> dict[str, str]:
+    """``extra`` overrides/adds on top of the default fake-LLM injection —
+    a key mapped to ``None`` is REMOVED from the result entirely (not set
+    to an empty string), for tests that need a variable genuinely absent
+    from the child's environment rather than merely falsy (e.g.
+    ``PYTEST_VERSION``, which evals.report._running_under_pytest checks
+    for presence, not truthiness)."""
+    env = dict(os.environ)
+    env.setdefault("EVALS_REPORT_FAKE_LLM_FOR_TESTS_ONLY", DEFAULT_FAKE_LLM_VERDICT)
+    if extra:
+        for key, value in extra.items():
+            if value is None:
+                env.pop(key, None)
+            else:
+                env[key] = value
+    return env
+
+
+def _run_report(
+    *extra_args: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "evals.report", *extra_args],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         timeout=120,
+        env=_base_env(env),
     )
 
 
@@ -112,10 +154,12 @@ def _synthetic_repo(root: Path, labeled_set_yaml: str) -> Path:
     return root
 
 
-def _run_report_in(repo: Path, *extra_args: str) -> subprocess.CompletedProcess[str]:
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(
-        [str(REPO_ROOT / "backend" / "src"), env.get("PYTHONPATH", "")]
+def _run_report_in(
+    repo: Path, *extra_args: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    run_env = _base_env(env)
+    run_env["PYTHONPATH"] = os.pathsep.join(
+        [str(REPO_ROOT / "backend" / "src"), run_env.get("PYTHONPATH", "")]
     ).rstrip(os.pathsep)
     return subprocess.run(
         [sys.executable, "-m", "evals.report", "--cases", str(REAL_CASES), *extra_args],
@@ -123,7 +167,7 @@ def _run_report_in(repo: Path, *extra_args: str) -> subprocess.CompletedProcess[
         capture_output=True,
         text=True,
         timeout=120,
-        env=env,
+        env=run_env,
     )
 
 
@@ -205,17 +249,42 @@ def test_metrics_json_has_the_expected_shape(tmp_path: Path) -> None:
         "recommended_threshold",
         "current_provisional_threshold",
         "label_distribution",
+        # T-21 acceptance 4 — machine-checkable, not report.md prose.
+        "run_timestamp_utc",
+        "measured_sample_size",
+        "unmeasured_ticket_count",
+        "unmeasured_ticket_ids",
+        "live_classifier_call_count",
+        "predictions",
     ):
         assert key in metrics, key
     cm = metrics["confusion_matrix"]
     for key in ("tp", "fp", "fn", "tn"):
         assert key in cm
+    # T-21: the confusion matrix (and therefore precision/recall/f1/
+    # hard_trigger_recall) is computed over the MEASURED subset only —
+    # out_of_procedure and low_confidence's two structural subtypes are
+    # excluded, not defaulted to a guessed answer (see evals/report.py's
+    # module docstring point 4). label_distribution still describes the
+    # FULL labeled set.
     total_predicted = cm["tp"] + cm["fp"] + cm["fn"] + cm["tn"]
-    assert total_predicted == metrics["label_distribution"]["total"]
+    assert total_predicted == metrics["measured_sample_size"]
+    assert (
+        metrics["measured_sample_size"] + metrics["unmeasured_ticket_count"]
+        == metrics["label_distribution"]["total"]
+    )
+    assert len(metrics["unmeasured_ticket_ids"]) == metrics["unmeasured_ticket_count"]
     assert 0.0 <= metrics["precision"] <= 1.0
     assert 0.0 <= metrics["recall"] <= 1.0
     assert 0.0 <= metrics["f1"] <= 1.0
     assert 0.0 <= metrics["recommended_threshold"] <= 1.0
+    assert metrics["live_classifier_call_count"] >= 0
+    # ISO 8601 UTC — datetime.fromisoformat handles the "+00:00" offset
+    # datetime.isoformat() produces for a UTC-aware datetime.
+    import datetime as _dt
+
+    parsed = _dt.datetime.fromisoformat(metrics["run_timestamp_utc"])
+    assert parsed.utcoffset() == _dt.timedelta(0)
 
 
 def test_report_refuses_a_final_report_while_labels_are_unapproved(tmp_path: Path) -> None:
@@ -391,10 +460,27 @@ def test_report_still_refuses_when_approved_date_is_empty_but_status_and_by_are_
 def test_hard_trigger_recall_is_perfect_for_the_real_hard_rule_signals(tmp_path: Path) -> None:
     """Under DESIGN's OR combinator a fired hard rule is threshold-
     independent by construction, so the report's own hard_trigger_recall
-    should be 1.0 against the real labeled set — this also transitively
-    confirms the REAL billing/human_request/unknown_case detectors agree
-    with every hard-trigger label in evals/labeled_set.yaml (a regression
-    here would mean either rules.py changed behavior or a label is wrong)."""
+    should be 1.0 against the real labeled set's MEASURED hard-trigger
+    subset (billing/human_request/unknown_case/classifier-abstention —
+    T-21's module docstring point 4 excludes out_of_procedure and
+    low_confidence's two structural subtypes from this metric entirely,
+    not from this assertion's target of 1.0). This transitively confirms
+    the REAL billing/human_request/unknown_case detectors agree with every
+    hard-trigger label in evals/labeled_set.yaml (a regression here would
+    mean either escalation.rules changed behavior or a label is wrong).
+
+    The one classifier-tier ticket in this subset
+    (esc-low_confidence-abstention-garbled-01) is driven by
+    DEFAULT_FAKE_LLM_VERDICT here, not a real Anthropic call (T-21: "the
+    unit suite must not make live API calls") — it always predicts
+    escalate=True, so this assertion is agnostic to what the real live
+    classifier actually does with a garbled message. See
+    ``backend/tests/evals/test_report.py::
+    test_report_uses_the_real_anthropic_classifier_when_a_key_is_present``
+    (``@pytest.mark.live``) for a genuine, opt-in exercise of the real key
+    path, and the T-21 implementation report for the actual measured
+    number from a real run.
+    """
     output_dir = tmp_path / "out"
     _run_report("--output-dir", str(output_dir))
     metrics = json.loads((output_dir / "metrics.json").read_text())
@@ -538,3 +624,73 @@ def test_an_approved_canonical_set_may_write_into_its_own_docs_tree(tmp_path: Pa
     assert result.returncode == 0, result.stderr
     assert (repo / "docs" / "eval-report" / "report.md").exists()
     assert "FINAL —" in (repo / "docs" / "eval-report" / "report.md").read_text()
+
+
+# ---------------------------------------------------------------------------
+# T-21 — the classifier half now runs against a real live LLMClient. A
+# missing/unusable ANTHROPIC_API_KEY must FAIL LOUDLY (write nothing) rather
+# than silently substitute a fabricated verdict; a present, working key must
+# genuinely reach the real Anthropic API.
+# ---------------------------------------------------------------------------
+
+
+def test_report_fails_loudly_and_writes_nothing_without_a_usable_key(tmp_path: Path) -> None:
+    """No ANTHROPIC_API_KEY (and no TEST-ONLY fixed verdict either) must
+    refuse the whole run before any file is written — T-21 acceptance 2:
+    "without it the report must FAIL LOUDLY rather than silently
+    substituting fabricated verdicts". Overrides both env vars back to ""
+    explicitly (see ``_base_env``'s default injection above) — the
+    synthetic repo below has no ``.env`` of its own for
+    ``evals.report._resolve_llm_client`` to fall back to either, so this
+    is genuinely "no key anywhere", not merely "no fake"."""
+    repo = _synthetic_repo(tmp_path / "repo", APPROVED_HEADER + TWO_TICKETS)
+    output_dir = tmp_path / "out"
+
+    result = _run_report_in(
+        repo,
+        "--output-dir",
+        str(output_dir),
+        env={"EVALS_REPORT_FAKE_LLM_FOR_TESTS_ONLY": "", "ANTHROPIC_API_KEY": ""},
+    )
+
+    assert result.returncode != 0
+    assert "ANTHROPIC_API_KEY" in result.stderr
+    assert "REFUSING" in result.stderr
+    assert not output_dir.exists(), (
+        "a run with no usable key must write nothing at all, not even a DRAFT — "
+        f"found {output_dir}"
+    )
+
+
+@pytest.mark.live
+def test_report_uses_the_real_anthropic_classifier_when_a_key_is_present(tmp_path: Path) -> None:
+    """Opt-in (never runs under ``-m "not live"``, matching how this repo's
+    only other ``live`` marker — the real Zendesk trial suite — is
+    exercised): with a genuine, working ``ANTHROPIC_API_KEY``, the report
+    must reach the real Anthropic API rather than failing loudly. Proves
+    the positive side of T-21 acceptance 2, complementing
+    ``test_report_fails_loudly_and_writes_nothing_without_a_usable_key``'s
+    negative side."""
+    from dotenv import load_dotenv
+
+    load_dotenv(dotenv_path=REPO_ROOT / ".env", override=False)
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        pytest.skip("ANTHROPIC_API_KEY not available in this environment — see .env.example")
+
+    repo = _synthetic_repo(tmp_path / "repo", APPROVED_HEADER + TWO_TICKETS)
+    output_dir = tmp_path / "out"
+
+    result = _run_report_in(
+        repo,
+        "--output-dir",
+        str(output_dir),
+        env={"EVALS_REPORT_FAKE_LLM_FOR_TESTS_ONLY": "", "ANTHROPIC_API_KEY": api_key},
+    )
+
+    assert result.returncode == 0, result.stderr
+    metrics = json.loads((output_dir / "metrics.json").read_text())
+    # TWO_TICKETS: t-2 is a billing hard rule (no LLM call); t-1 is a plain
+    # kb question that reaches the classifier tier — exactly one real call.
+    assert metrics["live_classifier_call_count"] == 1
+    assert isinstance(metrics["predictions"]["t-1"]["predicted_escalate"], bool)

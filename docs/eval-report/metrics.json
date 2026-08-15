@@ -4,7 +4,7 @@
   "scored_labeled_set": "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/cxforge/evals/labeled_set.yaml",
   "scored_labeled_set_is_canonical": true,
   "confusion_matrix": {
-    "tp": 21,
+    "tp": 15,
     "fp": 0,
     "fn": 0,
     "tn": 30
@@ -13,8 +13,8 @@
   "recall": 1.0,
   "f1": 1.0,
   "hard_trigger_recall": 1.0,
-  "hard_trigger_subset_size": 16,
-  "recommended_threshold": 0.59,
+  "hard_trigger_subset_size": 10,
+  "recommended_threshold": 0.0,
   "current_provisional_threshold": 0.5,
   "label_distribution": {
     "total": 51,
@@ -35,6 +35,358 @@
       "low_confidence": 5,
       "out_of_procedure": 2,
       "unknown_case": 2
+    }
+  },
+  "run_timestamp_utc": "2026-08-15T23:01:02.513373+00:00",
+  "measured_sample_size": 45,
+  "unmeasured_ticket_count": 6,
+  "unmeasured_ticket_ids": [
+    "esc-out_of_procedure-change-requester-01",
+    "esc-out_of_procedure-early-deletion-01",
+    "esc-low_confidence-empty_retrieval-accreditation-01",
+    "esc-low_confidence-empty_retrieval-international-01",
+    "esc-low_confidence-verifier_failure-exact-date-01",
+    "esc-low_confidence-verifier_failure-summed-timeline-01"
+  ],
+  "live_classifier_call_count": 36,
+  "classifier_source": "live",
+  "predictions": {
+    "cs-intake-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "cs-extraction-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "cs-sequencing-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "cs-genealogy-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "cs-complete-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "perm-add-contact-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "perm-add-contact-02": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "perm-resend-report-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "perm-extend-retention-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "perm-extend-retention-02": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "kb-turnaround-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "kb-refund-eligibility-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "kb-billing-structure-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "kb-rush-eligibility-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "kb-retention-period-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "kb-report-format-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "kb-genealogy-limits-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "kb-reextraction-explain-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "kb-adversarial-invoice-mention-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "kb-adversarial-human-mention-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "off-weather-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "off-unrelated-product-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "off-greeting-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "off-newsletter-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "off-retail-unrelated-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "esc-billing-double-charge-01": {
+      "measured": true,
+      "expected_escalate": true,
+      "predicted_escalate": true,
+      "predicted_reasons": [
+        "billing"
+      ]
+    },
+    "esc-billing-wrong-amount-01": {
+      "measured": true,
+      "expected_escalate": true,
+      "predicted_escalate": true,
+      "predicted_reasons": [
+        "billing"
+      ]
+    },
+    "esc-billing-refund-demand-01": {
+      "measured": true,
+      "expected_escalate": true,
+      "predicted_escalate": true,
+      "predicted_reasons": [
+        "billing"
+      ]
+    },
+    "esc-human_request-direct-01": {
+      "measured": true,
+      "expected_escalate": true,
+      "predicted_escalate": true,
+      "predicted_reasons": [
+        "human_request"
+      ]
+    },
+    "esc-human_request-polite-01": {
+      "measured": true,
+      "expected_escalate": true,
+      "predicted_escalate": true,
+      "predicted_reasons": [
+        "human_request"
+      ]
+    },
+    "esc-human_request-bot-callout-01": {
+      "measured": true,
+      "expected_escalate": true,
+      "predicted_escalate": true,
+      "predicted_reasons": [
+        "human_request"
+      ]
+    },
+    "esc-combined-billing-human_request-01": {
+      "measured": true,
+      "expected_escalate": true,
+      "predicted_escalate": true,
+      "predicted_reasons": [
+        "billing",
+        "human_request"
+      ]
+    },
+    "esc-unknown_case-nonexistent-id-01": {
+      "measured": true,
+      "expected_escalate": true,
+      "predicted_escalate": true,
+      "predicted_reasons": [
+        "unknown_case"
+      ]
+    },
+    "esc-unknown_case-nonexistent-id-02": {
+      "measured": true,
+      "expected_escalate": true,
+      "predicted_escalate": true,
+      "predicted_reasons": [
+        "unknown_case"
+      ]
+    },
+    "esc-out_of_procedure-change-requester-01": {
+      "measured": false,
+      "expected_escalate": true,
+      "predicted_escalate": null,
+      "predicted_reasons": []
+    },
+    "esc-out_of_procedure-early-deletion-01": {
+      "measured": false,
+      "expected_escalate": true,
+      "predicted_escalate": null,
+      "predicted_reasons": []
+    },
+    "esc-low_confidence-empty_retrieval-accreditation-01": {
+      "measured": false,
+      "expected_escalate": true,
+      "predicted_escalate": null,
+      "predicted_reasons": []
+    },
+    "esc-low_confidence-empty_retrieval-international-01": {
+      "measured": false,
+      "expected_escalate": true,
+      "predicted_escalate": null,
+      "predicted_reasons": []
+    },
+    "esc-low_confidence-verifier_failure-exact-date-01": {
+      "measured": false,
+      "expected_escalate": true,
+      "predicted_escalate": null,
+      "predicted_reasons": []
+    },
+    "esc-low_confidence-verifier_failure-summed-timeline-01": {
+      "measured": false,
+      "expected_escalate": true,
+      "predicted_escalate": null,
+      "predicted_reasons": []
+    },
+    "esc-low_confidence-abstention-garbled-01": {
+      "measured": true,
+      "expected_escalate": true,
+      "predicted_escalate": true,
+      "predicted_reasons": [
+        "frustration"
+      ]
+    },
+    "esc-frustration-repeated-emails-01": {
+      "measured": true,
+      "expected_escalate": true,
+      "predicted_escalate": true,
+      "predicted_reasons": [
+        "frustration"
+      ]
+    },
+    "esc-frustration-furious-01": {
+      "measured": true,
+      "expected_escalate": true,
+      "predicted_escalate": true,
+      "predicted_reasons": [
+        "frustration"
+      ]
+    },
+    "esc-frustration-repeated-asks-01": {
+      "measured": true,
+      "expected_escalate": true,
+      "predicted_escalate": true,
+      "predicted_reasons": [
+        "frustration"
+      ]
+    },
+    "esc-frustration-borderline-mild-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "esc-frustration-borderline-impatient-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "esc-frustration-borderline-near-window-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "esc-complexity-entangled-rush-two-cases-01": {
+      "measured": true,
+      "expected_escalate": true,
+      "predicted_escalate": true,
+      "predicted_reasons": [
+        "complexity"
+      ]
+    },
+    "esc-complexity-entangled-failure-timeline-shipping-01": {
+      "measured": true,
+      "expected_escalate": true,
+      "predicted_escalate": true,
+      "predicted_reasons": [
+        "complexity"
+      ]
+    },
+    "esc-complexity-borderline-two-part-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
+    },
+    "esc-complexity-borderline-stalled-01": {
+      "measured": true,
+      "expected_escalate": false,
+      "predicted_escalate": false,
+      "predicted_reasons": []
     }
   }
 }
