@@ -173,6 +173,30 @@ class Migration:
     sql: str
 
 
+class MigrationsDirectoryError(RuntimeError):
+    """Raised by ``discover_migrations`` when ``migrations/`` -- the
+    directory the deployment artifact is supposed to ship -- is missing
+    or contains no ``*.sql`` files at all.
+
+    Both conditions are treated identically, and both are loud: an ABSENT
+    directory means the artifact never copied ``migrations/`` in the first
+    place (e.g. an image build, or a checkout, that dropped it); a
+    PRESENT-but-EMPTY directory is functionally the same failure from
+    ``init_schema``'s point of view -- zero migrations get applied either
+    way -- and this project has shipped migration ``0001`` since T-20, so
+    a real deployment with zero ``*.sql`` files is exactly as broken as
+    one with no directory (there is no longer a legitimate "brand new
+    project, no migrations yet" state to protect). Pre-T-30,
+    ``discover_migrations`` silently returned ``[]`` for either case
+    (``Path.glob`` on a missing directory behaves like a no-match shell
+    glob, not like ``os.listdir`` -- it does not raise), which let
+    ``init_schema`` "succeed" against a database with no tables; the
+    failure only surfaced later as a confusing "relation does not exist"
+    error instead of at startup, where it is unambiguous and names the
+    actual missing artifact.
+    """
+
+
 def discover_migrations() -> list[Migration]:
     """Load every ``*.sql`` file under ``migrations/`` as a ``Migration``,
     ordered by ascending version.
@@ -184,12 +208,31 @@ def discover_migrations() -> list[Migration]:
     the current working directory), so discovery is identical whether
     called from a container's ``/app`` working directory or from pytest
     invoked at the repo root.
+
+    Raises ``MigrationsDirectoryError`` -- loudly, before ``init_schema``
+    can report success -- if ``migrations/`` does not exist, or exists but
+    ships zero ``*.sql`` files. See that exception's docstring for why
+    both conditions are treated the same way.
     """
+    if not MIGRATIONS_DIR.is_dir():
+        raise MigrationsDirectoryError(
+            f"Migrations directory not found: {MIGRATIONS_DIR}. This deployment "
+            "artifact is incomplete -- backend/src/data/migrations/ was not "
+            "copied into this image/checkout, so schema init cannot proceed. "
+            "Refusing to boot against a database with zero migrations applied."
+        )
     migrations = []
     for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
         version_str, _, name = path.stem.partition("_")
         migrations.append(
             Migration(version=int(version_str), name=name, sql=path.read_text(encoding="utf-8"))
+        )
+    if not migrations:
+        raise MigrationsDirectoryError(
+            f"Migrations directory is empty: {MIGRATIONS_DIR}. This deployment "
+            "artifact is incomplete -- backend/src/data/migrations/ ships no "
+            "*.sql files, so schema init cannot proceed. Refusing to boot "
+            "against a database with zero migrations applied."
         )
     return migrations
 
@@ -246,6 +289,14 @@ def init_schema(
     override exists solely so tests in this ticket's own scope
     (``backend/tests/data/test_migrations.py``) can inject a fake
     migration without touching the real migration file list.
+
+    T-30: when ``migrations`` is left at its default, ``discover_migrations()``
+    is evaluated as part of this call and raises ``MigrationsDirectoryError``
+    loudly -- before the migration-application step, before the final
+    ``conn.commit()`` below -- if the real ``migrations/`` directory is
+    missing or empty (see that function/exception for why). A caller that
+    passes its own ``migrations`` explicitly bypasses discovery entirely and
+    is unaffected by that guard.
     """
     with conn.cursor() as cur:
         cur.execute("CREATE EXTENSION IF NOT EXISTS vector")

@@ -17,13 +17,20 @@ import os
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Literal
 
 import pytest
 from psycopg import sql
 
 from data.db import TEST_SCHEMA_ENV_VAR, get_connection
-from data.schema import Migration, _apply_migrations, discover_migrations, init_schema
+from data.schema import (
+    MIGRATIONS_DIR,
+    Migration,
+    _apply_migrations,
+    discover_migrations,
+    init_schema,
+)
 
 pytestmark = pytest.mark.skipif(
     os.getenv("SKIP_DB_TESTS") == "1",
@@ -83,14 +90,28 @@ def _fresh_throwaway_name() -> str:
     return f"test_migrations_probe_{uuid.uuid4().hex[:8]}"
 
 
-def _runs_columns(schema_name: str) -> list[tuple[str, str, str]]:
-    """``(column_name, data_type, is_nullable)`` triples for the ``runs``
-    table in ``schema_name``, ordered by column position. Filters by
-    ``table_schema`` explicitly, so it is correct regardless of which
-    schema the calling connection's ``search_path`` currently points at."""
+def _runs_columns(schema_name: str) -> list[tuple[str, str, str, str | None, str]]:
+    """``(column_name, data_type, is_nullable, column_default, udt_name)``
+    tuples for the ``runs`` table in ``schema_name``, ordered by column
+    position. Filters by ``table_schema`` explicitly, so it is correct
+    regardless of which schema the calling connection's ``search_path``
+    currently points at.
+
+    T-30 acceptance 2: ``column_default`` and ``udt_name`` were added
+    alongside the original ``(column_name, data_type, is_nullable)`` triple
+    -- an addition, not a replacement -- because that triple alone is blind
+    to two real divergences: a different DEFAULT expression, and a
+    different array ELEMENT type. ``data_type`` reports ``'ARRAY'`` for
+    both ``text[]`` and ``varchar[]`` alike; the element type only shows up
+    in ``udt_name`` (``_text`` vs ``_varchar``). See
+    ``test_diverged_column_default_is_invisible_to_shallow_comparison_but_caught_by_deep_one``
+    and
+    ``test_diverged_array_element_type_is_invisible_to_shallow_comparison_but_caught_by_deep_one``
+    below for the regression proof."""
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT column_name, data_type, is_nullable FROM information_schema.columns "
+            "SELECT column_name, data_type, is_nullable, column_default, udt_name "
+            "FROM information_schema.columns "
             "WHERE table_schema = %s AND table_name = 'runs' ORDER BY ordinal_position",
             (schema_name,),
         )
@@ -109,6 +130,68 @@ def _ledger_rows(schema_name: str) -> list[tuple[int, str]]:
             )
         )
         return cur.fetchall()
+
+
+def _shallow_columns(
+    columns: list[tuple[str, str, str, str | None, str]],
+) -> list[tuple[str, str, str]]:
+    """Project ``_runs_columns``' deep 5-tuples down to the pre-T-30
+    ``(column_name, data_type, is_nullable)`` triple -- used only to prove,
+    inside the regression tests below, that the ORIGINAL shallow comparison
+    really would have missed a diverged DEFAULT or array element type."""
+    return [(name, data_type, is_nullable) for name, data_type, is_nullable, *_rest in columns]
+
+
+def _seed_pre_t8_runs_table(schema_name: str) -> None:
+    """Build the exact pre-T-8 ``runs`` shape (see ``_PRE_T8_RUNS_TABLE_SQL``)
+    in ``schema_name`` and sanity-check it really has no ``reasons`` column
+    yet -- an identical starting point for two schemas that will diverge
+    only in which migration 1 they apply, so that migration is the ONLY
+    variable in the comparison."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(_PRE_T8_OUTCOME_ENUM_SQL)
+        cur.execute(_PRE_T8_RUNS_TABLE_SQL)
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = %s AND table_name = 'runs' AND column_name = 'reasons'",
+            (schema_name,),
+        )
+        assert cur.fetchone() is None, "precondition failed: reasons already present"
+
+
+def _discover_migrations_from(directory: Path) -> list[Migration]:
+    """Parse every ``*.sql`` file under ``directory`` into ``Migration``
+    objects, using the exact same ``<version>_<name>.sql`` convention as
+    ``data.schema.discover_migrations`` -- pointed at an arbitrary
+    directory (a ``tmp_path`` copy) instead of the real migrations package
+    data."""
+    migrations = []
+    for path in sorted(directory.glob("*.sql")):
+        version_str, _, name = path.stem.partition("_")
+        migrations.append(
+            Migration(version=int(version_str), name=name, sql=path.read_text(encoding="utf-8"))
+        )
+    return migrations
+
+
+def _copy_migrations_doctored(
+    tmp_path: Path, doctor: dict[str, tuple[str, str]]
+) -> list[Migration]:
+    """Copy every real migration file under ``data.schema.MIGRATIONS_DIR``
+    into ``tmp_path`` -- the real ``backend/src/data/migrations/`` directory
+    is only ever READ here, never written to -- applying an in-place string
+    substitution to any file whose stem is a key in ``doctor`` (``old``
+    substring replaced with ``new``), then parses the tmp copy into
+    ``Migration`` objects via ``_discover_migrations_from``."""
+    for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+        text = path.read_text(encoding="utf-8")
+        if path.stem in doctor:
+            old, new = doctor[path.stem]
+            assert old in text, f"doctor target {old!r} not found in {path.name}"
+            text = text.replace(old, new)
+        (tmp_path / path.name).write_text(text, encoding="utf-8")
+    return _discover_migrations_from(tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -193,8 +276,110 @@ def test_fresh_database_and_upgraded_pre_t8_database_end_in_identical_schema() -
 
     # Both paths converge on the identical end state.
     assert upgraded_columns == fresh_columns
-    assert any(name == "reasons" for name, _dtype, _nullable in upgraded_columns)
+    assert any(name == "reasons" for name, _dtype, _nullable, *_rest in upgraded_columns)
     assert upgraded_ledger == fresh_ledger == [(1, "add_runs_reasons")]
+
+
+# ---------------------------------------------------------------------------
+# T-30 acceptance 2: the convergence comparison above must also catch a
+# divergent column DEFAULT or a divergent array ELEMENT type -- either of
+# which the pre-T-30 comparison (name/type/nullability only) would have
+# missed entirely, because ``information_schema.columns.data_type`` reports
+# ``'ARRAY'`` for both ``text[]`` and ``varchar[]`` alike, and neither
+# ``data_type`` nor ``is_nullable`` says anything about a column's DEFAULT
+# expression.
+#
+# Both tests below build two schemas from the IDENTICAL pre-T-8 base (see
+# ``_seed_pre_t8_runs_table``) so the migration chain is the only variable:
+# one applies the real, unmodified migration chain (via ``init_schema``'s
+# default ``discover_migrations()``), the other applies a copy of that
+# chain doctored in ``tmp_path`` (the real ``backend/src/data/migrations/``
+# directory is read but never written to -- see ``_copy_migrations_doctored``).
+# Each test first asserts the SHALLOW ``_shallow_columns`` projection is
+# IDENTICAL between the two -- reproducing, on every run, that the pre-T-30
+# comparison would have called these two schemas converged -- then asserts
+# the full, deepened ``_runs_columns`` tuples are NOT equal, pinpointing
+# exactly the field the doctored migration diverged.
+# ---------------------------------------------------------------------------
+
+
+def test_diverged_column_default_is_invisible_to_shallow_comparison_but_caught_by_deep_one(
+    tmp_path: Path,
+) -> None:
+    doctored_migrations = _copy_migrations_doctored(
+        tmp_path,
+        {"0001_add_runs_reasons": ("DEFAULT '{}'::text[]", "DEFAULT '{diverged}'::text[]")},
+    )
+
+    with _schema_scope(_fresh_throwaway_name()) as reference_schema:
+        _seed_pre_t8_runs_table(reference_schema)
+        with get_connection() as conn:
+            init_schema(conn)  # real, unmodified migration chain
+        reference_columns = _runs_columns(reference_schema)
+
+    with _schema_scope(_fresh_throwaway_name()) as doctored_schema:
+        _seed_pre_t8_runs_table(doctored_schema)
+        with get_connection() as conn:
+            init_schema(conn, migrations=doctored_migrations)
+        doctored_columns = _runs_columns(doctored_schema)
+
+    # The defect, reproduced on every run: the pre-T-30 (name, data_type,
+    # is_nullable) triple is IDENTICAL between the two schemas -- the
+    # shallow comparison would have called them converged even though one
+    # migration chain installs a different DEFAULT than the other.
+    assert _shallow_columns(reference_columns) == _shallow_columns(doctored_columns), (
+        "precondition: the shallow projection must still be blind to a "
+        "diverged DEFAULT for this to be a meaningful regression proof"
+    )
+
+    # The fix: the deepened comparison (column_default included) catches it.
+    assert reference_columns != doctored_columns, (
+        "the deepened convergence comparison must catch a diverged column "
+        "DEFAULT that the shallow (name/type/nullability-only) comparison missed"
+    )
+    reference_reasons = next(c for c in reference_columns if c[0] == "reasons")
+    doctored_reasons = next(c for c in doctored_columns if c[0] == "reasons")
+    assert reference_reasons[3] != doctored_reasons[3], "column_default should have diverged"
+
+
+def test_diverged_array_element_type_is_invisible_to_shallow_comparison_but_caught_by_deep_one(
+    tmp_path: Path,
+) -> None:
+    doctored_migrations = _copy_migrations_doctored(
+        tmp_path,
+        {"0001_add_runs_reasons": ("text[]", "varchar[]")},
+    )
+
+    with _schema_scope(_fresh_throwaway_name()) as reference_schema:
+        _seed_pre_t8_runs_table(reference_schema)
+        with get_connection() as conn:
+            init_schema(conn)  # real, unmodified migration chain
+        reference_columns = _runs_columns(reference_schema)
+
+    with _schema_scope(_fresh_throwaway_name()) as doctored_schema:
+        _seed_pre_t8_runs_table(doctored_schema)
+        with get_connection() as conn:
+            init_schema(conn, migrations=doctored_migrations)
+        doctored_columns = _runs_columns(doctored_schema)
+
+    # The defect, reproduced on every run: `data_type` reports 'ARRAY' for
+    # both `text[]` and `varchar[]` alike, so the shallow projection is
+    # identical even though the two chains install different element types.
+    assert _shallow_columns(reference_columns) == _shallow_columns(doctored_columns), (
+        "precondition: `data_type` reports 'ARRAY' for both text[] and "
+        "varchar[] -- the shallow projection must still be blind here"
+    )
+
+    # The fix: the deepened comparison (udt_name included) catches it.
+    assert reference_columns != doctored_columns, (
+        "the deepened convergence comparison must catch a diverged array "
+        "element type (udt_name) that the shallow comparison missed"
+    )
+    reference_reasons = next(c for c in reference_columns if c[0] == "reasons")
+    doctored_reasons = next(c for c in doctored_columns if c[0] == "reasons")
+    assert reference_reasons[4] != doctored_reasons[4], "udt_name should have diverged"
+    assert reference_reasons[4] == "_text"
+    assert doctored_reasons[4] == "_varchar"
 
 
 # ---------------------------------------------------------------------------

@@ -134,10 +134,21 @@ def is_low_confidence_trigger(upstream_reason: Reason | None) -> bool:
 
 def is_classifier_abstention(call: EscalationCall | None) -> bool:
     """DESIGN's "classifier abstention" hard rule: the escalation
-    classifier failed to return a usable, schema-valid verdict (a refusal,
-    a truncated response, any exception the underlying ``LLMClient``
-    raises) — ``escalation.classifier.run_classifier`` returns ``None`` for
-    exactly this case. Escalating on ``None`` is itself deterministic
-    control flow (no model judgment is trusted here), even though the
-    condition being checked is the OUTCOME of a model call."""
+    classifier failed to return a usable, schema-valid verdict.
+    ``escalation.classifier.run_classifier`` returns ``None`` for exactly
+    this case — but, since T-18, only for a NARROWED, logged set of
+    model-shaped failures: an ``openai.OpenAIError`` (API/connection/
+    timeout), the ``ValueError`` ``OpenAILLMClient.structured`` raises on
+    a refusal or truncated response, or a non-``EscalationCall`` return
+    from ``structured()``. Each swallowed case is logged via
+    ``logger.warning`` before ``None`` comes back, so an abstention is
+    never silent. Programming errors — ``TypeError``, ``AttributeError``,
+    ``KeyError``, an unregistered-schema ``AssertionError`` from a test
+    double, or any other bug — are deliberately NOT absorbed into this
+    condition; ``run_classifier`` lets them propagate as a loud crash
+    instead of reporting them here as a plausible-looking abstention (see
+    ``escalation.classifier.run_classifier`` for the full rationale).
+    Escalating on ``None`` is itself deterministic control flow (no model
+    judgment is trusted here), even though the condition being checked is
+    the OUTCOME of a model call."""
     return call is None

@@ -1,0 +1,8 @@
+{
+ "ticket": "T-30",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "note": "Unblocked by T-24's receipt and the last ready ticket needing no protected path \u2014 T-0/T-9/T-19 stay lint-blocked and T-22/T-26/T-27/T-28/T-29 need .claude/hooks or docs/tickets.json writes both enforcement layers deny (NEEDS_HUMAN D0).",
+ "start_commit": "0dd71789ee4b4d610f57cb97957a4fb1a2f827d7",
+ "attempts": 0,
+ "ts": 1786765513
+}
