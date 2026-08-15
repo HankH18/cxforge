@@ -218,9 +218,10 @@ implementing v1 mechanics that no longer exist.
 
 **Two extra blockers specifically for T-0**, which nobody has hit yet because T-0 has never been
 claimable. Its verify is the widest in the plan and both of these fail today:
-1. `uv run ruff check .` reports **101 errors, 95 of them inside `.claude/scripts/harness_lib.py`**
-   and 5 in `gen_tasks.py` — the cc-factory harness files were added without meeting this repo's
-   own lint config (E701/E702 compound statements, E501 long lines). Either reformat them
+1. `uv run ruff check .` reports **100 errors: 95 inside `.claude/scripts/harness_lib.py`, 5 in
+   `gen_tasks.py`, and zero in product code** — the cc-factory harness files were added without
+   meeting this repo's own lint config (E701/E702 compound statements, E501 long lines). Either
+   reformat them
    (`ruff format` + `ruff check --fix`; the 226 hook tests exercise that file heavily and will
    catch a break) or add `.claude` to `extend-exclude` in `pyproject.toml`, which is T-0's scope.
 2. `uv run mypy backend` reports 4 errors in `backend/tests/hooks/test_verify_gate.py` and
