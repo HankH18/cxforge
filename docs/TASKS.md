@@ -232,7 +232,7 @@
 - **Depends on**: T-27 · **parallel_safe**: false
 - **Non-goals**: No change to the append-only enforcement itself; No multi-session arbitration beyond what T-13 established
 
-### T-29: Evidence binds to the tree it certifies  `[queue]`
+### T-29: Evidence binds to the tree it certifies  `[resolved]`
 - **Objective**: A .pass file is a bare epoch; nothing ties it to a commit, so a completion-titled commit and the tree the gate actually verified can diverge. Observed: T-12's gate closed 33 minutes and one commit after its completion-titled commit; only timestamp forensics could reconstruct which tree passed.
 - **Acceptance**: 1) verify_gate records epoch, HEAD commit hash, and a dirty-tree flag as single-line JSON in .claude/evidence/<id>.pass; a fixture without git is recorded as such rather than crashing the gate 2) claim refusal (T-13 acceptance 4) and stop_guard parse both formats during migration: a bare-epoch legacy file is honoured for already-closed tickets but never newly written 3) hooks tests assert the recorded hash equals the fixture repo's HEAD at gate time and that a dirty tree is flagged 4) the hook header documents what the binding proves and does not prove: it certifies the tree the verify ran on, not that that tree was committed
 - **Verify**: `uv run pytest backend/tests/hooks -q`

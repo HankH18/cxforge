@@ -1,8 +1,0 @@
-{
- "ticket": "T-29",
- "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
- "note": "Last ticket in the T-27/T-28 chain and the only remaining one needing no live infrastructure. Its core guarantee (receipts bind to the tree they certify) is already shipped in v2 as commit+fingerprint; the work is proving it from the hooks suite and documenting what the binding does and does not prove.",
- "start_commit": "7790bac6372b150b18e34786cbe3bb1af320ae11",
- "attempts": 0,
- "ts": 1786835238
-}
