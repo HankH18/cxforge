@@ -72,7 +72,7 @@
 - **Depends on**: T-5, T-6 · **parallel_safe**: true
 - **Non-goals**: No UI (T-9); No real auth/multi-user
 
-### T-9: Portal UI  `[queue]`
+### T-9: Portal UI  `[resolved]`
 - **Objective**: The reviewer-facing React surface (R10–R12) and demo centerpiece.
 - **Acceptance**: 1) feed view with route/confidence/reason/trace link 2) draft detail with editable body, approve/reject 3) gate toggle 4) metrics panel (R13) 5) builds clean; component tests for gate and edit-approve flows against a mocked API
 - **Verify**: `(cd portal && npm run build && npm test)`
