@@ -56,7 +56,7 @@
 - **Depends on**: T-5 · **parallel_safe**: false
 - **Non-goals**: No threshold tuning (T-7 owns it); No sentiment model beyond the classifier prompt
 
-### T-7: Labeled set and escalation eval report  `[queue]`
+### T-7: Labeled set and escalation eval report  `[resolved]`
 - **Objective**: The flagship credibility artifact — measured precision/recall on escalation (R15).
 - **Acceptance**: 1) evals/labeled_set.yaml with ~50 tickets spanning all routes, all hard triggers, fuzzy frustration/complexity cases, adversarial phrasing 2) HUMAN GATE: labels reviewed and approved by the project owner before use — record approval in the fixture header; stop and ask, never self-approve 3) promptfoo run + report generator producing confusion matrix, P/R/F1, PR curve image with chosen threshold marked 4) recall >= 0.95 on the hard-trigger subset at the committed threshold; threshold written to escalation config 5) report lands in docs/eval-report/
 - **Verify**: `uv run python -c "import yaml; a=yaml.safe_load(open('evals/labeled_set.yaml'))['approval']; import sys; sys.exit(0 if a.get('status')=='APPROVED' and a.get('approved_by') and a.get('approved_date') else 1)" && uv run python -m evals.report && uv run pytest -m "not live" backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q`
