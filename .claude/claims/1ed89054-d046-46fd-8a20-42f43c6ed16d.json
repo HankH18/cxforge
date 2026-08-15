@@ -1,0 +1,8 @@
+{
+ "ticket": "T-8",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "note": "Unblocked now that T-5 and T-6 both have receipts. Remint \u2014 portal API and approval gate; unblocks T-9.",
+ "start_commit": "61256eb0a5363aefd668f1a452d0771d08a4df60",
+ "attempts": 0,
+ "ts": 1786819669
+}
