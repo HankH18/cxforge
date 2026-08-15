@@ -1,9 +1,9 @@
 # Task Graph (GENERATED from tickets.json — do not hand-edit)
 
-### T-0: Repo bootstrap and test harness  `[queue]`
+### T-0: Repo bootstrap and test harness  `[in_progress]`
 - **Objective**: Monorepo skeleton so every downstream verify command runs.
 - **Acceptance**: 1) backend/ (FastAPI app stub), portal/ (Vite React TS stub), evals/, docs/ exist 2) docker-compose brings up Postgres 16 + pgvector healthy 3) pytest markers contract, grounding, live registered 4) GitHub Actions workflow runs ruff + mypy + pytest -m 'not live' only 5) promptfoo config stub and .env.example present
-- **Verify**: `docker compose up -d db && uv run pytest -m "not live" && uv run ruff check . && uv run mypy backend && cd portal && npm run build && npm test`
+- **Verify**: `docker compose up -d db && uv run pytest -m "not live" && uv run ruff check . && uv run mypy backend && (cd portal && npm run build && npm test)`
 - **Scope**: `backend/**, portal/**, .github/**, docker-compose.yml, pyproject.toml, .env.example, promptfooconfig.yaml, evals/**, .gitignore, uv.lock`
 - **Depends on**: none · **parallel_safe**: false
 - **Non-goals**: No business logic; No portal components beyond scaffold
@@ -75,7 +75,7 @@
 ### T-9: Portal UI  `[queue]`
 - **Objective**: The reviewer-facing React surface (R10–R12) and demo centerpiece.
 - **Acceptance**: 1) feed view with route/confidence/reason/trace link 2) draft detail with editable body, approve/reject 3) gate toggle 4) metrics panel (R13) 5) builds clean; component tests for gate and edit-approve flows against a mocked API
-- **Verify**: `cd portal && npm run build && npm test`
+- **Verify**: `(cd portal && npm run build && npm test)`
 - **Scope**: `portal/**`
 - **Depends on**: T-8 · **parallel_safe**: true
 - **Non-goals**: No styling beyond clean-and-readable; No websockets — polling is fine
@@ -155,7 +155,7 @@
 ### T-19: Bind the portal API contract  `[queue]`
 - **Objective**: portal/src/api.ts and backend/src/portal/schemas.py agree today purely by hand; nothing — no test, codegen step or CI job — fails if they drift, so a renamed field breaks only the live UI.
 - **Acceptance**: 1) the TypeScript request/response types are GENERATED from the FastAPI OpenAPI schema by a committed script — a hand-written parity assertion is explicitly not acceptable, since re-deriving the duplication by hand is the defect 2) regenerating against the current backend produces types byte-identical to what is committed 3) a deliberate backend field rename FAILS the check (demonstrate in the test, not by hand) 4) the parity check is wired into .github/workflows/ci.yml, asserted by a test that reads the workflow file 5) the parity check is demonstrated FAILING against a deliberately renamed backend field before being wired into CI
-- **Verify**: `uv run pytest -m "not live" backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q && cd portal && npm run build && npm test`
+- **Verify**: `uv run pytest -m "not live" backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q && (cd portal && npm run build && npm test)`
 - **Scope**: `portal/**, backend/src/portal/**, backend/tests/portal/**, .github/**`
 - **Depends on**: T-16 · **parallel_safe**: true
 - **Non-goals**: No redesign of the API shape or the portal UI; No new endpoints; parallel_safe only holds once T-16 lands per-process DB isolation; before that, concurrent runs share one database

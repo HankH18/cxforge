@@ -376,11 +376,32 @@ def _split_clauses(verify: str) -> list[list[str]]:
     """Tokenise the WHOLE verify string once with shlex (so a quoted
     argument -- e.g. T-7's `python -c "...; ...; ..."` -- keeps its
     embedded ";" / "&&"-looking substrings intact as part of one token),
-    then split the flat token stream on bare "&&"/";" operator tokens."""
-    tokens = shlex.split(verify)
+    then split the flat token stream on bare "&&"/";" operator tokens.
+
+    Subshell parentheses are transparent here. A verify may group a clause
+    in a subshell -- `(cd portal && npm run build && npm test)` -- which is
+    the form harness_lib.py's own LINT_RULES requires, because a bare `cd`
+    across `&&` leaks directory state into every later clause. Plain
+    `shlex.split` does not treat "(" / ")" as operators, so they arrive glued
+    to the adjacent word ("(cd", "test)") and every downstream check silently
+    stops matching: the clause reads as the command "(cd" rather than "cd",
+    and covers_npm_portal goes false for a verify that plainly does run npm.
+
+    `punctuation_chars=True` makes the lexer split those parens off as their
+    own tokens -- and, crucially, it does so at the SHELL level, so a paren
+    inside a quoted argument is left alone. That distinction is load-bearing:
+    T-7's verify is `uv run python -c "... sys.exit(0 if ... else 1)"`, and
+    naively stripping ")" off every token would silently corrupt it into
+    unbalanced Python. The tokens must be filtered, never rewritten.
+    """
+    lexer = shlex.shlex(verify, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+
     clauses: list[list[str]] = []
     current: list[str] = []
-    for tok in tokens:
+    for tok in lexer:
+        if tok in ("(", ")"):
+            continue  # pure grouping; the clause inside is what we analyse
         if tok in ("&&", ";"):
             if current:
                 clauses.append(current)

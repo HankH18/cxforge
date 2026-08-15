@@ -75,6 +75,7 @@ import os
 import subprocess
 import types
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
 
@@ -206,8 +207,12 @@ def test_no_docs_writes_child_env_excludes_parent_schema_override() -> None:
     # own namespace -- never the real, shared subprocess module -- so no
     # other code is affected, and nothing needs manual restoration since
     # `module` is a throwaway object private to this test.
-    module.subprocess = types.SimpleNamespace(
-        run=_fake_run, CompletedProcess=subprocess.CompletedProcess
+    # setattr rather than plain attribute assignment: mypy types the loader's
+    # return as ModuleType, which has no statically-known `subprocess` member.
+    setattr(  # noqa: B010
+        module,
+        "subprocess",
+        types.SimpleNamespace(run=_fake_run, CompletedProcess=subprocess.CompletedProcess),
     )
 
     module.test_evals_suite_leaves_docs_untouched()
@@ -222,6 +227,11 @@ def test_no_docs_writes_child_env_excludes_parent_schema_override() -> None:
         "with the default (inherit-everything) environment -- the child ends up "
         f"sharing this process's exact {TEST_SCHEMA_ENV_VAR} value, and its own "
         "teardown then CASCADE-drops that live, shared schema mid-suite."
+    )
+    # Narrows `object` -> Mapping for the membership check below. Strictly an
+    # extra assertion: an env= that is not a mapping is itself a real defect.
+    assert isinstance(child_env, Mapping), (
+        f"the child env passed to subprocess.run is not a mapping ({type(child_env)!r})"
     )
     assert TEST_SCHEMA_ENV_VAR not in child_env, (
         f"the child env still carries a {TEST_SCHEMA_ENV_VAR} entry "

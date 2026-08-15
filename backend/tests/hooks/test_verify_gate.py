@@ -50,6 +50,7 @@ import json
 import os
 import shutil
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -68,7 +69,7 @@ SYNTHETIC_TICKET_IDS = ("T-100", "T-101", "T-9999")
 
 
 @pytest.fixture(autouse=True)
-def _never_touch_the_real_repos_live_harness_state() -> None:
+def _never_touch_the_real_repos_live_harness_state() -> Iterator[None]:
     """Hermeticity guard for the whole file.
 
     This session holds a LIVE claim on T-31 in the real repo's

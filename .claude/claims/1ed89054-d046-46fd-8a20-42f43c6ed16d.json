@@ -1,0 +1,8 @@
+{
+ "ticket": "T-0",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "note": "Re-claim after the mandated reset (behavioural failure). Same rationale: dependency root for T-1..T-11. This attempt fixes all four causes together \u2014 ruff exclusion, two mypy errors, the _planlib tokenizer that cannot read a subshell verify, and the TASKS.md regeneration the plan amendment requires.",
+ "start_commit": "4e1a87be81afda548314005c2d9c55c6a1039fe9",
+ "attempts": 0,
+ "ts": 1786818787
+}
