@@ -1,0 +1,8 @@
+{
+ "ticket": "T-13",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "note": "Newly unblocked by T-12's receipt; lowest ready id. Remint \u2014 its verify (backend/tests/hooks) passes on the current tree and its only evidence today is an inert v1 .pass record.",
+ "start_commit": "62d689a2f075b7c7c93d7e94cc15fdc1b0452164",
+ "attempts": 0,
+ "ts": 1786761470
+}
