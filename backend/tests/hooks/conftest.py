@@ -357,7 +357,7 @@ def run_claim_sh(
 # ---------------------------------------------------------------------------
 def run_hook(
     project_dir: Path,
-    file_path: str,
+    file_path: str | None = None,
     *,
     tool_name: str = "Edit",
     active_ticket: str | None | _Unset = UNSET,
@@ -367,6 +367,9 @@ def run_hook(
     old_string: str = "x",
     new_string: str = "y",
     replace_all: bool = False,
+    notebook_path: str | None = None,
+    new_source: str = "print(1)",
+    tool_input_override: dict[str, Any] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Invoke the real (synthetic-project-local) scope_guard.sh with a
     synthetic PreToolUse event.
@@ -411,12 +414,33 @@ def run_hook(
     inspects any of these fields at all (PROTECTED/scope are pure path
     matches), but building a well-formed Edit/Write tool_input still needs
     them.
+
+    ``notebook_path``/``new_source`` (NotebookEdit tool only, T-27
+    acceptance 3): NotebookEdit carries its path under
+    ``tool_input.notebook_path``, not ``file_path`` -- pass ``notebook_path``
+    (instead of the ``file_path`` positional) when ``tool_name="NotebookEdit"``.
+    scope_guard_prep.py (the T-27 hardening layer in front of
+    harness_lib.py's hook-scope) normalises this into ``file_path`` before
+    the guard runs, so a NotebookEdit payload is judged against ticket scope
+    by ``notebook_path`` exactly as an Edit/Write payload is by
+    ``file_path``.
+
+    ``tool_input_override`` (T-27 acceptance 2): when given, used AS THE
+    ENTIRE ``tool_input`` verbatim, bypassing every shape-building branch
+    below (including the NotebookEdit one) -- the only way to build a
+    payload this helper's normal construction can't otherwise express, e.g.
+    an Edit/Write/NotebookEdit with no path key of any kind, to exercise the
+    pathless-payload deny-by-default guard.
     """
     if not isinstance(active_ticket, _Unset):
         write_claim(project_dir, active_ticket, session_id)
 
     tool_input: dict[str, Any]
-    if tool_name == "Write":
+    if tool_input_override is not None:
+        tool_input = tool_input_override
+    elif tool_name == "NotebookEdit":
+        tool_input = {"notebook_path": notebook_path, "new_source": new_source, "cell_type": "code"}
+    elif tool_name == "Write":
         content = "synthetic-content" if isinstance(write_content, _Unset) else write_content
         tool_input = {"file_path": file_path, "content": content}
     else:
@@ -478,16 +502,21 @@ def expect(
     project_dir: Path,
     *,
     ticket: str | None | _Unset,
-    file_path: str,
+    file_path: str | None = None,
     want: str,
     tool_name: str = "Edit",
     session_id: str = SCOPE_TEST_SESSION,
     env_extra: dict[str, str] | None = None,
+    notebook_path: str | None = None,
 ) -> None:
     """Assert the hook's decision for one (ticket claim, path) pair.
 
     ``ticket`` is forwarded to ``run_hook``'s ``active_ticket`` verbatim, so
     it accepts the same three shapes (leave-as-is / delete / overwrite).
+
+    ``notebook_path`` (T-27): pass instead of ``file_path`` when
+    ``tool_name="NotebookEdit"`` -- forwarded to ``run_hook`` verbatim, see
+    its docstring.
     """
     result = run_hook(
         project_dir,
@@ -496,10 +525,12 @@ def expect(
         active_ticket=ticket,
         session_id=session_id,
         env_extra=env_extra,
+        notebook_path=notebook_path,
     )
     got = decision(result)
+    shown_path = file_path if file_path is not None else notebook_path
     assert got == want, (
-        f"ticket={ticket!r} path={file_path!r} tool={tool_name}: "
+        f"ticket={ticket!r} path={shown_path!r} tool={tool_name}: "
         f"expected {want}, got {got} (stdout={result.stdout!r})"
     )
 

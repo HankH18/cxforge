@@ -175,32 +175,53 @@ def test_leftover_v1_active_ticket_artifact_is_completely_inert(project: Path) -
     assert stop_decision(result_third) == "allow"
 
 
-def test_unidentifiable_session_never_blocked_via_any_claim(project: Path) -> None:
-    """v1 had two tests about an unidentifiable session (neither the Stop
-    payload's session_id nor $CLAUDE_CODE_SESSION_ID available):
-    test_session_with_no_timestamp_never_blocks_via_strict_mode (a claim
-    record naming a real session but with no "ts" degrades to
-    unattributed, since only claim.sh's own writer produces both together)
-    and test_session_unidentifiable_degrades_to_global_check (the
-    session-blind PRE-T-13 fallback: block if ANY claim exists, "never MORE
-    permissive than before T-13").
+def test_unidentifiable_session_fails_closed_and_blocks(project: Path) -> None:
+    """REVERSED BY T-27, deliberately — this test's previous form asserted the
+    opposite, and said so on purpose.
 
-    v2 has no "degrade to a global check" fallback, and it's a documented,
-    intentional simplification, not a gap this ticket may quietly patch:
-    harness_lib.py's cmd_hook("stop") is `session_claim(p.get("session_id")
-    or "")` — a missing/None session_id becomes "", and "" can never match
-    a real per-session claim filename, so this ALWAYS allows, regardless of
-    how many claims exist for how many other identified sessions. This is
-    the opposite of v1's "never more permissive" guarantee — a genuine,
-    deliberate v1 -> v2 narrowing (per T31-brief.md's authoritative summary
-    of harness_lib.py's contract), asserted here explicitly so a future
-    change to this behaviour is a conscious decision, not an accident.
-    There is no v2 analogue of "a claim record with no timestamp" to test
-    separately: v2 claim identity is the FILENAME, not a parsed field
-    inside a shared log, so that specific failure mode has no target left.
+    v1 had two tests about an unidentifiable session (neither the Stop
+    payload's session_id nor $CLAUDE_CODE_SESSION_ID available):
+    test_session_with_no_timestamp_never_blocks_via_strict_mode and
+    test_session_unidentifiable_degrades_to_global_check — the session-blind
+    pre-T-13 fallback whose guarantee was "never MORE permissive than before
+    T-13".
+
+    The v2 migration dropped that fallback: `cmd_hook("stop")` resolves
+    `session_claim(p.get("session_id") or "")`, and "" can never match a real
+    per-session claim filename, so an unidentifiable session was ALWAYS
+    allowed to stop — even one that, under a name the payload didn't reveal,
+    was mid-claim. The T-31 migration recorded that as a security-relevant
+    narrowing and asserted it here explicitly, in its own words, "so a future
+    change to this behaviour is a conscious decision, not an accident."
+
+    T-27 is that conscious decision: "Guards fail closed on every input they
+    cannot judge." `.claude/hooks/stop_guard_prep.py` now intercepts ahead of
+    harness_lib.py and BLOCKS a payload with no usable session_id, naming the
+    ambiguity. The two tests below pin the cases that must NOT be swept up by
+    it, because either would deadlock the build.
     """
     write_claim(project, "T-7", "some-recorded-session-not-mine")
     result = run_stop_hook(project, session_id=None)
+    assert stop_decision(result) == "block"
+
+
+def test_identified_session_with_no_claim_still_stops(project: Path) -> None:
+    """The counter-case that keeps T-27's fail-closed rule from deadlocking
+    every session: failing closed applies only when identity is MISSING, not
+    when it is present and simply owns nothing. A session that names itself
+    and holds no claim has nothing to finish, and must stop freely."""
+    write_claim(project, "T-7", "some-recorded-session-not-mine")
+    result = run_stop_hook(project, session_id=SESSION_A)
+    assert stop_decision(result) == "allow"
+
+
+def test_stop_hook_active_still_wins_over_the_fail_closed_block(project: Path) -> None:
+    """`stop_hook_active` is Claude Code's own infinite-loop guard: it means
+    this Stop hook already blocked once for this stop attempt. It must keep
+    absolute priority over T-27's new block, or an unidentifiable session
+    becomes permanently unable to stop — a hang, not a safeguard."""
+    write_claim(project, "T-7", "some-recorded-session-not-mine")
+    result = run_stop_hook(project, session_id=None, stop_hook_active=True)
     assert stop_decision(result) == "allow"
 
 
