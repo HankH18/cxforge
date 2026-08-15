@@ -95,6 +95,36 @@ BASE_COVERAGE: list[tuple[str, str, str, str]] = [
         "T-21", "docs/eval-report/metrics.json", "docs/eval-reports/metrics.json",
         "eval-report vs eval-reports",
     ),
+    (
+        "T-22", ".claude/hooks/verify_gate.sh", "backend/tests/hooked/test_status_sync.py",
+        "hooks vs hooked",
+    ),
+    ("T-23", "backend/tests/conftest.py", "backend/test_utils/conftest.py", "tests vs test_utils"),
+    ("T-24", "backend/src/data/db.py", "backend/src/database/db.py", "data vs database"),
+    (
+        "T-25", "evals/report.py", "evals/report_utils.py",
+        "report.py vs report_utils.py",
+    ),
+    (
+        "T-26", "docs/tickets.json", "docs/tickets.json.bak",
+        "literal filename, not a prefix",
+    ),
+    (
+        "T-27", ".claude/settings.json", ".claude/settings.local.json",
+        "settings.json vs settings.local.json",
+    ),
+    (
+        "T-28", ".claude/hooks/stop_guard.sh", ".claude/stop_guard.sh",
+        "hooks subdir, not .claude root",
+    ),
+    (
+        "T-29", ".claude/hooks/claim_lookup.py", ".claude/hooklib/claim_lookup.py",
+        "hooks vs hooklib",
+    ),
+    (
+        "T-30", "backend/src/escalation/rules.py", "backend/src/escalation/engine.py",
+        "single-file scope; sibling file belongs to other tickets",
+    ),
 ]
 
 

@@ -34,6 +34,12 @@ graph TD
     T7[T-7 Labeled set and escalation eval report] --> T11[T-11 Deploy, demo assets, technical documentation]
     T9[T-9 Portal UI] --> T11[T-11 Deploy, demo assets, technical documentation]
     T10[T-10 Scenario runner and live e2e] --> T11[T-11 Deploy, demo assets, technical documentation]
+    T23[T-23 T-16's outstanding proof: concurrency demonstrated, cleanliness asserted tree-wide] --> T24[T-24 Schema override is structurally test-only]
+    T22[T-22 Ticket status is maintained by the hooks, not by hand] --> T26[T-26 Plan files are tamper-evident; T-11's silent dependency edit is adjudicated]
+    T22[T-22 Ticket status is maintained by the hooks, not by hand] --> T27[T-27 Guards fail closed on every input they cannot judge]
+    T27[T-27 Guards fail closed on every input they cannot judge] --> T28[T-28 Legacy claim lines lose their authorizing power]
+    T28[T-28 Legacy claim lines lose their authorizing power] --> T29[T-29 Evidence binds to the tree it certifies]
+    T24[T-24 Schema override is structurally test-only] --> T30[T-30 Close the audit's low-severity proof gaps]
 
     subgraph remediation["Priority batch — claimed first"]
         T12[T-12 Scope guard matches only intended paths] --> T13[T-13 Session-scoped, append-only ticket claims]
@@ -269,6 +275,168 @@ marked `parallel_safe`.
 - **Depends on**: T-3, T-7, T-9, T-10, T-17
 - **Non-goals**:
   - No video editing tooling — recording is a human step
+- **Parallel safe**: no
+- **Priority**: default
+- **Status**: open
+
+### T-22: Ticket status is maintained by the hooks, not by hand
+- **Objective**: T-14 acceptance 4 specified a status field the hooks maintain; it shipped hand-maintained. Every ticket boundary since has required an out-of-scope hand edit of docs/tickets.json and docs/TASKS.md through the scope guard's documented Bash gap (observed at c237304, 8224d90, ee78825, c0aeb6b, 7c3aadd).
+- **Refs**: OBSM#C1, OBSM#C2, T-14#acceptance-4, CLAUDE.md#rule-4
+- **Acceptance**:
+  1. claim.sh sets the claimed ticket's status to in_progress and verify_gate.sh sets it to closed alongside writing .claude/evidence/<id>.pass; both regenerate docs/TASKS.md via the committed scripts/render_tasks_md.py so the sync test stays green with no agent edit
+  2. hook writes are surgical: a test asserts the resulting docs/tickets.json differs from the prior state by exactly one ticket's status value and nothing else
+  3. backend/tests/hooks drives both transitions end-to-end with synthetic events against a fixture project and asserts tickets.json and TASKS.md agree afterwards
+  4. backend/tests/plan/test_status_field.py's PLAN DEFECT docstring is updated to record the defect closed by this ticket; its one-directional evidence check is unchanged
+  5. the hook headers state the new protocol expectation: no agent-side Edit/Write of docs/tickets.json or docs/TASKS.md is needed at any ticket boundary
+- **Verify**: `uv run pytest backend/tests/plan backend/tests/hooks -q`
+- **Scope**: `.claude/hooks/**`, `backend/tests/hooks/**`, `backend/tests/plan/test_status_field.py`
+- **Depends on**: none
+- **Non-goals**:
+  - No change to evidence semantics (T-29) or claim-format authority (T-28)
+  - Status vocabulary stays open|in_progress|closed
+- **Parallel safe**: no
+- **Priority**: default
+- **Status**: open
+
+### T-23: T-16's outstanding proof: concurrency demonstrated, cleanliness asserted tree-wide
+- **Objective**: T-16 closed with acceptance 5 (two concurrent full-suite runs both pass, demonstrated) satisfied by a sequential in-process proxy whose own docstring disclaims being the demonstration, and acceptance 2's 'git status clean after a full run, asserted by a test' reinterpreted as a docs/eval-report-only fingerprint tolerating pre-existing dirt. Its no-docs-writes test also drops the parent run's schema isolation mid-suite.
+- **Refs**: OBSM#C3, OBSM#C4, OBSM#Q3, T-16#acceptance-2, T-16#acceptance-5
+- **Acceptance**:
+  1. a committed test launches two genuinely concurrent subprocess pytest runs of the db-touching suites and asserts both exit 0 - re-runnable demonstration, not attestation; if runtime cost demands a representative db-heavy subset, the subset choice is justified in the test docstring
+  2. the post-suite cleanliness check covers the whole repo tree (git status --porcelain empty), with pre-existing dirt handled by snapshot-before-suite comparison rather than by exempting directories
+  3. the no-docs-writes child pytest run inherits the parent's schema isolation; a regression test reproduces the current mid-suite drop and proves it fixed
+  4. no existing assertion is weakened; the docs/eval-report fingerprint may be replaced only by an equal-or-stronger check
+- **Verify**: `uv run pytest -m "not live" -q`
+- **Scope**: `backend/tests/**`
+- **Depends on**: none
+- **Non-goals**:
+  - No new product-behaviour tests; this completes T-16's own evidence
+  - No weakening of any assertion to make concurrency pass
+- **Parallel safe**: no
+- **Priority**: default
+- **Status**: open
+
+### T-24: Schema override is structurally test-only
+- **Objective**: The per-process Postgres schema override honours its env signal wherever it appears, so a leaked env var silently switches schemas in production; inertness is convention, not structure.
+- **Refs**: OBSM#Q4, T-16#acceptance-1
+- **Acceptance**:
+  1. the override is honoured only when an unambiguous test-context signal is also present (e.g. PYTEST_CURRENT_TEST set by pytest itself), and the gating condition is documented in db.py
+  2. a test spawns a fresh non-pytest interpreter with the override env var set and asserts get_connection() still uses the default schema
+  3. existing pytest-side schema isolation behaviour is unchanged: current isolation tests stay green
+- **Verify**: `uv run pytest -m "not live" backend/tests/data backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q`
+- **Scope**: `backend/src/data/**`, `backend/tests/data/**`
+- **Depends on**: T-23
+- **Non-goals**:
+  - No change to schema naming or the orphan-schema reaper
+  - No new dependency; pyproject.toml stays T-0's scope
+- **Parallel safe**: no
+- **Priority**: default
+- **Status**: open
+
+### T-25: The approval gate reads only the canonical labeled set
+- **Objective**: evals.report evaluates approval against whatever --labeled-set points at, so a doctored copy yields a non-draft exit-0 run without any human approval; unapproved runs also write DRAFT artifacts into docs/eval-report/ by default.
+- **Refs**: OBSM#Q1, OBSM#Q2, T-15#acceptance-2, SPEC#T-7-human-gate
+- **Acceptance**:
+  1. the approval decision is always evaluated against the committed evals/labeled_set.yaml regardless of any input-substitution argument; an alternate --labeled-set may drive rendering in tests but can never produce a non-draft exit-0 run
+  2. while unapproved, the report writes nothing under docs/: a draft render requires an explicit --output-dir outside docs/, and the default invocation exits non-zero without touching docs/eval-report/
+  3. tests cover: doctored alternate file via --labeled-set still exits non-zero; a synthetic fully-approved fixture exercised without modifying the real file still exits zero, proving the gate's direction is unchanged
+  4. the three T-15 tripwire tests keep their intent; any assertion edit beyond what acceptance 2 directly forces is out of bounds
+- **Verify**: `uv run pytest backend/tests/evals -q`
+- **Scope**: `evals/report.py`, `backend/tests/evals/**`
+- **Depends on**: none
+- **Non-goals**:
+  - NEVER edits evals/labeled_set.yaml or its approval fields - same file-level prohibition as T-15 and T-21
+  - No change to metrics or threshold logic
+  - NOT parallel-safe with T-21: both declare evals/report.py; T-21 is open (human-blocked) - never run concurrently
+- **Parallel safe**: no
+- **Priority**: default
+- **Status**: open
+
+### T-26: Plan files are tamper-evident; T-11's silent dependency edit is adjudicated
+- **Objective**: T-14's commit silently added T-17 to T-11's depends_on, outside its sanctioned changes; nothing detects structural edits to existing contracts. docs/INGEST.md also still describes a pre-batch world (sole root T-0, no named task list), so a literal follower fails its own confirmation step.
+- **Refs**: OBSM#C5, OBSM#Q5, CLAUDE.md#rule-1
+- **Acceptance**:
+  1. HUMAN GATE: the project owner ratifies or reverts T-11's depends_on addition of T-17; the decision and rationale are recorded in the completion commit message - stop and ask, never decide autonomously
+  2. a committed snapshot of every ticket's structural fields (scope, depends_on, verify, acceptance) plus a plan test asserting live tickets.json matches it; a legitimate amendment updates the snapshot in the same commit, making plan changes legible instead of silent
+  3. the snapshot test fails demonstrably against a synthetic silent depends_on edit, shown in a test using a doctored copy in tmp_path
+  4. docs/INGEST.md is regenerated to match reality: derives the ready set from tickets.json status and priority fields instead of asserting exactly T-0 unblocked, and names the task list (othram-support-agent) new sessions must bind to
+- **Verify**: `uv run pytest backend/tests/plan backend/tests/hooks -q`
+- **Scope**: `docs/tickets.json`, `docs/TASKS.md`, `docs/INGEST.md`, `backend/tests/plan/**`
+- **Depends on**: T-22
+- **Non-goals**:
+  - No re-litigating any closed ticket's contract; the snapshot pins what exists
+  - status fields are excluded from the snapshot (T-22's hooks own them)
+- **Parallel safe**: no
+- **Priority**: default
+- **Status**: open
+
+### T-27: Guards fail closed on every input they cannot judge
+- **Objective**: scope_guard exits 0 (allow) when its python3 realpath helper fails, silently allows payloads lacking tool_input.file_path, and the Edit|Write matcher misses NotebookEdit entirely.
+- **Refs**: OBSM#H1, T-12#acceptance-3
+- **Acceptance**:
+  1. failure of the realpath helper (python3 absent or erroring) produces a deny naming the infra failure, not a silent allow; test simulates via PATH manipulation
+  2. a PreToolUse payload whose tool_input carries no file_path is denied unless the tool is on an explicit commented pathless allowlist in the hook
+  3. NotebookEdit is added to the settings.json matcher and its notebook_path is honoured by the guard; tests drive the real hook with NotebookEdit payloads
+  4. the hook header's coverage-limitation note is updated to reflect the narrowed gaps
+- **Verify**: `uv run pytest backend/tests/hooks -q`
+- **Scope**: `.claude/hooks/**`, `.claude/settings.json`, `backend/tests/hooks/**`
+- **Depends on**: T-22
+- **Non-goals**:
+  - The Bash write path stays out of scope for the guard (documented limitation); integrity of plan files is T-26's snapshot, not a Bash sandbox
+- **Parallel safe**: no
+- **Priority**: default
+- **Status**: open
+
+### T-28: Legacy claim lines lose their authorizing power
+- **Objective**: Pre-T-13 bare claim lines still authorize: verify_gate's amnesty gates any session on an unattributed claim and stamps evidence for it, and stop_guard allows a stop regardless of evidence when the claim is legacy-shaped. The ledger's stale first line (bare T-13) keeps the format alive.
+- **Refs**: OBSM#H2, T-13#acceptance-1
+- **Acceptance**:
+  1. verify_gate refuses to run a gate or write evidence for a claim record with no session attribution; the refusal names the offending record
+  2. stop_guard treats a legacy bare line as inert history: it neither blocks nor authorizes; current-claim resolution considers only JSON records
+  3. pre-authorized test edits, and ONLY these, per the justify-test-edit rule: test_legacy_claim_line_allows_regardless_of_evidence (stop_guard) and the verify_gate amnesty tests are rewritten to assert the new fail-closed behaviour with the same fixtures
+  4. the stale bare first line of .claude/active-ticket is retired via a sanctioned migration (JSON tombstone record or a dedicated migration commit); raw Edit/Write rewrites of the ledger remain denied
+  5. scope_guard may keep reading legacy lines for scope decisions (the 113 pre-T-13 scope tests stay valid); only gating and stopping authority is withdrawn
+- **Verify**: `uv run pytest backend/tests/hooks -q`
+- **Scope**: `.claude/hooks/**`, `backend/tests/hooks/**`
+- **Depends on**: T-27
+- **Non-goals**:
+  - No change to the append-only enforcement itself
+  - No multi-session arbitration beyond what T-13 established
+- **Parallel safe**: no
+- **Priority**: default
+- **Status**: open
+
+### T-29: Evidence binds to the tree it certifies
+- **Objective**: A .pass file is a bare epoch; nothing ties it to a commit, so a completion-titled commit and the tree the gate actually verified can diverge. Observed: T-12's gate closed 33 minutes and one commit after its completion-titled commit; only timestamp forensics could reconstruct which tree passed.
+- **Refs**: OBSM#Q6, OBSM#C6
+- **Acceptance**:
+  1. verify_gate records epoch, HEAD commit hash, and a dirty-tree flag as single-line JSON in .claude/evidence/<id>.pass; a fixture without git is recorded as such rather than crashing the gate
+  2. claim refusal (T-13 acceptance 4) and stop_guard parse both formats during migration: a bare-epoch legacy file is honoured for already-closed tickets but never newly written
+  3. hooks tests assert the recorded hash equals the fixture repo's HEAD at gate time and that a dirty tree is flagged
+  4. the hook header documents what the binding proves and does not prove: it certifies the tree the verify ran on, not that that tree was committed
+- **Verify**: `uv run pytest backend/tests/hooks -q`
+- **Scope**: `.claude/hooks/**`, `backend/tests/hooks/**`
+- **Depends on**: T-28
+- **Non-goals**:
+  - No retroactive rewriting of existing evidence files
+  - No signing or cryptographic chain - commit binding only
+- **Parallel safe**: no
+- **Priority**: default
+- **Status**: open
+
+### T-30: Close the audit's low-severity proof gaps
+- **Objective**: Three verified-low gaps from the batch audits: escalation/rules.py's abstention docstring still describes pre-T-18 semantics; the migration convergence test compares only name/type/nullability so a divergent column default or array element type would pass; discover_migrations returns an empty list silently when the migrations directory is missing from an image.
+- **Refs**: OBSM#Q7, OBSM#Q8, T-18#acceptance-1, T-20#acceptance-2
+- **Acceptance**:
+  1. rules.py's abstention docstring matches shipped semantics: narrowed absorb-set, logged swallows, programming errors propagate
+  2. the schema-convergence test also compares column defaults and array element types (udt_name), and fails demonstrably against a synthetic divergence via a doctored migration in tmp fixtures
+  3. a missing migrations directory aborts schema init loudly instead of booting with zero migrations; a test simulates the stripped-image case and asserts the loud failure
+- **Verify**: `uv run pytest -m "not live" -q`
+- **Scope**: `backend/src/escalation/rules.py`, `backend/src/data/**`, `backend/tests/data/**`
+- **Depends on**: T-24
+- **Non-goals**:
+  - Docstring-only change in escalation: no behaviour edits outside data/
+  - No change to which exceptions the classifier absorbs (T-18 settled that)
 - **Parallel safe**: no
 - **Priority**: default
 - **Status**: open
