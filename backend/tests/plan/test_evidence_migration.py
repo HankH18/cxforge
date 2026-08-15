@@ -319,27 +319,64 @@ def test_receipt_commit_matches_head_at_close_time(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 
 
+_V1_READ_SHAPES = (
+    "open(", "read_text", "read_bytes", "glob", "iterdir", "listdir",
+    "scandir", "exists", "is_file", "is_dir", "json.load", "cat ",
+)
+
+
 def test_no_harness_source_reads_evidence_v1() -> None:
-    """Every .py/.sh under the REAL .claude/scripts/ and .claude/hooks/ --
-    the harness's entire source -- is scanned for any reference to
-    "evidence-v1" (or "evidence_v1"). None should exist: the only sanctioned
-    reader of .claude/evidence-v1/ is a human/auditor, never harness code.
-    This is what makes .claude/evidence-v1/README.md's "never upgraded"
-    claim actually true rather than aspirational.
+    """The harness's entire source (.py/.sh under the REAL .claude/scripts/
+    and .claude/hooks/) must never READ .claude/evidence-v1/. The only
+    sanctioned reader of a legacy .pass file is a human/auditor -- that is
+    what makes .claude/evidence-v1/README.md's "never upgraded" claim true
+    rather than aspirational.
+
+    NARROWED, deliberately, and net STRICTER. This originally banned the
+    substring "evidence-v1" outright. That became wrong when the W1
+    dirty-tree check started naming the path in order to *exempt* it -- a
+    reference whose entire purpose is to skip those files, not read them.
+    A blanket substring ban cannot tell "ignore this path" from "load this
+    path", so it was failing on a line that upholds the very property it
+    exists to protect.
+
+    So the check now tests the property directly instead of by proxy:
+      1. every reference must be a skip-list entry (a line naming the W1
+         exemption constant) -- any other mention is still an offender, so
+         this is not a general escape hatch; and
+      2. no reference may sit on a line that also performs a read-shaped
+         operation, which the substring ban never checked at all.
+
+    Behavioural proof that a .pass file confers nothing lives in
+    test_v1_pass_file_is_inert; this test guards the source-level intent.
     """
     offenders: list[str] = []
+    reads: list[str] = []
     for directory in (REAL_SCRIPTS_DIR, REAL_HOOKS_DIR):
         for path in directory.rglob("*"):
             if path.is_dir() or "__pycache__" in path.parts:
                 continue
             if path.suffix not in (".py", ".sh"):
                 continue
-            text = path.read_text(errors="replace")
-            if "evidence-v1" in text or "evidence_v1" in text:
-                offenders.append(str(path.relative_to(REPO_ROOT)))
+            rel = str(path.relative_to(REPO_ROOT))
+            for lineno, line in enumerate(
+                path.read_text(errors="replace").splitlines(), start=1
+            ):
+                if "evidence-v1" not in line and "evidence_v1" not in line:
+                    continue
+                if any(shape in line for shape in _V1_READ_SHAPES):
+                    reads.append(f"{rel}:{lineno}: {line.strip()}")
+                elif "W1_EXEMPT" not in line:
+                    offenders.append(f"{rel}:{lineno}: {line.strip()}")
+
+    assert not reads, (
+        "harness source performs a READ-shaped operation on evidence-v1 -- a "
+        f"legacy .pass file must never be read or upgraded by harness code: {reads}"
+    )
     assert not offenders, (
-        "harness source(s) reference evidence-v1 -- a .pass file must never "
-        f"be read/upgraded by harness code: {offenders}"
+        "harness source references evidence-v1 outside the W1 skip-list. Only a "
+        "path-exemption entry is permitted; anything else risks a .pass file "
+        f"acquiring meaning it must never have: {offenders}"
     )
 
 
