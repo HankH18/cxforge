@@ -24,7 +24,7 @@
 - **Depends on**: T-0 · **parallel_safe**: true
 - **Non-goals**: No macros; No email adapter (T-3)
 
-### T-3: EmailAdapter stub passes the contract suite  `[queue]`
+### T-3: EmailAdapter stub passes the contract suite  `[resolved]`
 - **Objective**: Prove the port is swappable — the differentiation artifact (R14).
 - **Acceptance**: 1) EmailAdapter over an in-memory fake transport passes the identical parametrized contract suite 2) README section stating exactly what a production email channel would add (IMAP polling, threading via Message-ID) without implementing it
 - **Verify**: `uv run pytest -m "not live" -q`
