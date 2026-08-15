@@ -40,7 +40,7 @@
 - **Depends on**: T-2 · **parallel_safe**: true
 - **Non-goals**: No polling fallback unless the trial blocks webhooks — if it does, STOP and tell the human (plan defect)
 
-### T-5: Agent core graph  `[queue]`
+### T-5: Agent core graph  `[resolved]`
 - **Objective**: The LangGraph run: classify, route, ground, compose, verify, decide, act (R2–R5, R7, R9, R11 decide-side).
 - **Acceptance**: 1) graph nodes/state exactly as pinned in DESIGN 2) all model calls through LLMClient; OpenAI impl with strict structured outputs, pinned model constant 3) case facts reach drafts only via templates fed by tool results 4) verifier node scores KB drafts, threshold from config 5) gate setting respected in decide 6) graph tests with a fake LLMClient cover the four canonical scenarios end-to-end in-process 7) grounding suite: adversarial unknown-case and false-premise inputs produce escalation or refusal, never invented facts
 - **Verify**: `uv run pytest -m "not live" backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q`
