@@ -240,7 +240,7 @@
 - **Depends on**: T-28 · **parallel_safe**: false
 - **Non-goals**: No retroactive rewriting of existing evidence files; No signing or cryptographic chain - commit binding only
 
-### T-30: Close the audit's low-severity proof gaps  `[queue]`
+### T-30: Close the audit's low-severity proof gaps  `[resolved]`
 - **Objective**: Three verified-low gaps from the batch audits: escalation/rules.py's abstention docstring still describes pre-T-18 semantics; the migration convergence test compares only name/type/nullability so a divergent column default or array element type would pass; discover_migrations returns an empty list silently when the migrations directory is missing from an image.
 - **Acceptance**: 1) rules.py's abstention docstring matches shipped semantics: narrowed absorb-set, logged swallows, programming errors propagate 2) the schema-convergence test also compares column defaults and array element types (udt_name), and fails demonstrably against a synthetic divergence via a doctored migration in tmp fixtures 3) a missing migrations directory aborts schema init loudly instead of booting with zero migrations; a test simulates the stripped-image case and asserts the loud failure
 - **Verify**: `uv run pytest -m "not live" -q`

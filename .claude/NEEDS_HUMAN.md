@@ -172,6 +172,66 @@ Both T-16 and T-23 — the tickets whose scope covers `backend/tests/**` — are
 open ticket owns this file. It needs either a small plan amendment or a one-line fix authorised
 directly.
 
+### D7. Where the build stopped, and what each remaining ticket actually needs
+
+15 receipts exist: T-12, T-13, T-14, T-15, T-16, T-17, T-18, T-20, T-23, T-24, T-25, T-30, T-31
+(plus the two closed earlier in the batch). `uv run pytest -m "not live" -q` is **589 passed**.
+Every remaining ticket is blocked, and they are NOT all blocked for the same reason — the
+distinction matters:
+
+**Blocked only by D0/D2 (one command from you unblocks all of these):**
+T-0, T-9, T-19 — verify-string lint. Then T-1, T-2, T-3, T-4, T-5, T-6, T-8 remint behind T-0,
+and T-21 behind T-7.
+
+**Substantively DONE by the v2 harness, but formally unclosable — needs your ruling:**
+
+- **T-22** ("status maintained by the hooks, not by hand"). Its objective is fully met: v2 DERIVES
+  status from claim/receipt files and stores nothing, so no ticket boundary requires an agent to
+  hand-edit `docs/tickets.json` — the defect is gone by deletion rather than by automation.
+  `backend/tests/plan/test_status_field.py` now proves the stored field is dead, both statically
+  and dynamically. But acceptance 1 names `claim.sh` and `verify_gate.sh` writing a status value,
+  and acceptance 5 names hook headers — files that no longer exist or are protected. It cannot be
+  closed as literally written.
+- **T-28** ("legacy claim lines lose their authorizing power"). v2 has no ledger and no legacy
+  lines at all; authority comes from `.claude/claims/<session>.json` only.
+  `backend/tests/hooks/test_claim_format.py` asserts a leftover v1 artifact is completely inert.
+- **T-29** ("evidence binds to the tree it certifies"). v2 receipts already carry `commit` and a
+  content `fingerprint`. `backend/tests/plan/test_evidence_migration.py` proves the commit equals
+  HEAD at close and the fingerprint changes with scope content.
+
+Recommend: mark T-22/T-28/T-29 satisfied-by-supersession with a short note, rather than
+implementing v1 mechanics that no longer exist.
+
+**Genuinely still open, with real defects remaining:**
+
+- **T-27** ("guards fail closed on every input they cannot judge"). Three real gaps survive in v2:
+  1. `hook-scope` returns ALLOW for any payload with no `tool_input.file_path` — no allowlist.
+  2. `NotebookEdit` is absent from the `.claude/settings.json` PreToolUse matcher, so notebook
+     writes bypass the scope guard entirely.
+  3. **Security-relevant narrowing found while migrating the tests:** v1's stop guard failed
+     CLOSED when it could not identify the session; v2 `hook-stop` returns pass-through. An
+     unidentifiable session can now stop with an open claim.
+  All three live in `.claude/scripts/harness_lib.py` and `.claude/settings.json` — D1 territory.
+- **T-26** — needs both D1 (its scope names `docs/tickets.json`) and an explicit human gate
+  (ratify or revert T-14's silent addition of T-17 to T-11's `depends_on`).
+- **T-7, T-10, T-11, T-21** — the human-gated four in D4, unchanged.
+
+**Two extra blockers specifically for T-0**, which nobody has hit yet because T-0 has never been
+claimable. Its verify is the widest in the plan and both of these fail today:
+1. `uv run ruff check .` reports **101 errors, 95 of them inside `.claude/scripts/harness_lib.py`**
+   and 5 in `gen_tasks.py` — the cc-factory harness files were added without meeting this repo's
+   own lint config (E701/E702 compound statements, E501 long lines). Either reformat them
+   (`ruff format` + `ruff check --fix`; the 226 hook tests exercise that file heavily and will
+   catch a break) or add `.claude` to `extend-exclude` in `pyproject.toml`, which is T-0's scope.
+2. `uv run mypy backend` reports 4 errors in `backend/tests/hooks/test_verify_gate.py` and
+   `backend/tests/data/test_schema_isolation_inheritance.py`. Neither file is covered by any
+   current ticket's verify, which is why they went unnoticed.
+
+**One flakiness note, not a blocker:** `backend/tests/data/test_concurrency.py` fails if a THIRD
+pytest process runs against the same database while it runs — its two children compete for
+connections and one exits non-zero. It passes reliably when run alone (verified across four full
+runs). Worth knowing before wiring it into CI alongside anything else.
+
 ### D5. What T-31's receipt does and does not attest
 
 The suite went from 206 failed / 343 passed to **578 passed**, and T-31 is being
