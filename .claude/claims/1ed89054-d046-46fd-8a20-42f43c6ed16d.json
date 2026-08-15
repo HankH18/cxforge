@@ -1,0 +1,8 @@
+{
+ "ticket": "T-7",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "note": "Unblocked by the owner's label sign-off (2026-08-15), the one gate no agent may pass. Its verify chains the approval check, a full evals/report.py run, and the product suite \u2014 all green. Closing it unblocks T-21, which is now the critical path because the report's numbers are still stub-derived.",
+ "start_commit": "be1bfeb319223ed3dbbc4655c09c3502193b56ec",
+ "attempts": 0,
+ "ts": 1786831356
+}

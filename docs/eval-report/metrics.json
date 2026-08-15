@@ -1,6 +1,8 @@
 {
-  "approved": false,
-  "approval_status": "PROPOSED_AWAITING_HUMAN_REVIEW",
+  "approved": true,
+  "approval_status": "APPROVED",
+  "scored_labeled_set": "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/cxforge/evals/labeled_set.yaml",
+  "scored_labeled_set_is_canonical": true,
   "confusion_matrix": {
     "tp": 21,
     "fp": 0,

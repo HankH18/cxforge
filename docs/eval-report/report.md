@@ -1,10 +1,8 @@
 # Escalation eval report — T-7
 
-**DRAFT — LABELS NOT YET APPROVED (see evals/labeled_set.yaml's approval: block and evals/REVIEW.md)**
+**FINAL — labels approved (see evals/labeled_set.yaml's approval: block)**
 
-> This report is generated end-to-end from `evals/labeled_set.yaml`, but that file's `approval.status` is `'PROPOSED_AWAITING_HUMAN_REVIEW'`, not `APPROVED`. Every number below is a DRAFT — proof the pipeline runs, not a real measurement. See `evals/REVIEW.md` for what the project owner needs to review before this can become a final report.
-
-Generated: 2026-08-14T06:40:43.483639+00:00
+Generated: 2026-08-15T22:03:14.513521+00:00
 Labeled tickets: 51
 
 ## Methodology — what is REAL vs STUBBED
@@ -133,4 +131,4 @@ Every ticket's REAL vs STUBBED signals, for audit — see `evals/report.py` modu
 | `esc-complexity-borderline-stalled-01` | no-escalate | no-escalate | — | classifier verdict [STUBBED]: escalate=True, confidence=0.58 |
 
 ---
-**DRAFT — LABELS NOT YET APPROVED (see evals/labeled_set.yaml's approval: block and evals/REVIEW.md)**
+**FINAL — labels approved (see evals/labeled_set.yaml's approval: block)**
