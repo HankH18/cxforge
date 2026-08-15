@@ -1,0 +1,8 @@
+{
+ "ticket": "T-26",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "note": "Human gate satisfied: Hank ratified keeping T-17 in T-11's depends_on (evidence: verify_deploy.sh's __T17_UNSET__ sentinel is what makes remote verification real rather than a localhost false-green). Last remaining ticket needing no live external infrastructure.",
+ "start_commit": "fc8982f6aeddceb3fe363bfd59ea3d5995fe25bd",
+ "attempts": 0,
+ "ts": 1786836401
+}

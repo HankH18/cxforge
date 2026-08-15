@@ -515,6 +515,27 @@ working; but the headline should not have required a human to come falsify it.
 
 ---
 
+# RUN 2 LOG
+
+**T-29 — CONFIRMED, no finding.** Receipt binds to `1e4356a ticket-close: T-29`,
+fingerprint recomputes exactly, 6 files in range, **zero out of scope**,
+`attempts: 0`. No test removed, none skipped or xfailed, **+7 tests added**.
+Notable because T-29 was one of the three tickets NEEDS_HUMAN called
+"satisfied by supersession, unclosable as written" — the same shape that
+produced the W7/W8 overclaim on T-28. This one closed clean on added coverage
+rather than on absence-assertions.
+
+**T-21 — CONFIRMED** (audited earlier): 36 live classifier calls replacing the
+stub tables, zero out-of-scope even under the W15 lens, `attempts: 1`.
+
+T-26 claimed at `fc8982f`. Its scope is `docs/tickets.json`, `docs/TASKS.md`,
+`docs/INGEST.md`, `backend/tests/plan/**` — the first ticket in this run whose
+contract legitimately names the authoritative plan file, so its close is the one
+to read carefully: an in-scope plan edit is sanctioned, but the diff should be
+checked against what its acceptance criteria actually authorise.
+
+---
+
 # RUN 2 — resumed 2026-08-15T23:0xZ, 20 cycles at 15-minute intervals (~5h)
 
 Watch resumed at Hank's instruction. Baseline: 27 receipts, **T-21 claimed**
