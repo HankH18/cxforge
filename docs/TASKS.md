@@ -184,7 +184,7 @@
 - **Depends on**: none · **parallel_safe**: false
 - **Non-goals**: No change to evidence semantics (T-29) or claim-format authority (T-28); Status vocabulary stays open|in_progress|closed
 
-### T-23: T-16's outstanding proof: concurrency demonstrated, cleanliness asserted tree-wide  `[queue]`
+### T-23: T-16's outstanding proof: concurrency demonstrated, cleanliness asserted tree-wide  `[resolved]`
 - **Objective**: T-16 closed with acceptance 5 (two concurrent full-suite runs both pass, demonstrated) satisfied by a sequential in-process proxy whose own docstring disclaims being the demonstration, and acceptance 2's 'git status clean after a full run, asserted by a test' reinterpreted as a docs/eval-report-only fingerprint tolerating pre-existing dirt. Its no-docs-writes test also drops the parent run's schema isolation mid-suite.
 - **Acceptance**: 1) a committed test launches two genuinely concurrent subprocess pytest runs of the db-touching suites and asserts both exit 0 - re-runnable demonstration, not attestation; if runtime cost demands a representative db-heavy subset, the subset choice is justified in the test docstring 2) the post-suite cleanliness check covers the whole repo tree (git status --porcelain empty), with pre-existing dirt handled by snapshot-before-suite comparison rather than by exempting directories 3) the no-docs-writes child pytest run inherits the parent's schema isolation; a regression test reproduces the current mid-suite drop and proves it fixed 4) no existing assertion is weakened; the docs/eval-report fingerprint may be replaced only by an equal-or-stronger check
 - **Verify**: `uv run pytest -m "not live" -q`

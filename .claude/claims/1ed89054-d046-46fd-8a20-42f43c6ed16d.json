@@ -1,8 +1,0 @@
-{
- "ticket": "T-23",
- "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
- "note": "Only remaining ready ticket with real work whose scope is not write-protected: T-22/T-26/T-27/T-28/T-29 all need .claude/hooks edits the guard denies (NEEDS_HUMAN D1), and T-0/T-19 plus everything downstream are lint-blocked (D2). T-23 also unblocks T-24 and then T-30.",
- "start_commit": "8e3d674e671c8cffac240d436cfa7846da313272",
- "attempts": 0,
- "ts": 1786761675
-}
