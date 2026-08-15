@@ -1,8 +1,0 @@
-{
- "ticket": "T-17",
- "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
- "note": "Unblocked by T-16's receipt; lowest ready id. Remint \u2014 verify is backend/tests/deploy, green on the current tree.",
- "start_commit": "9096307efe45dedfdae7ffe8c3af335c5082e6e6",
- "attempts": 0,
- "ts": 1786761569
-}

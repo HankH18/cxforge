@@ -136,7 +136,7 @@
 - **Depends on**: none · **parallel_safe**: false
 - **Non-goals**: No new test cases for product behaviour — this is isolation and hygiene only; No weakening of any existing assertion to make a suite parallel-safe
 
-### T-17: Deploy verifier honours an exported DEPLOY_HOST  `[queue]`
+### T-17: Deploy verifier honours an exported DEPLOY_HOST  `[resolved]`
 - **Objective**: verify_deploy.sh sources .env with set -a before reading DEPLOY_HOST, and .env defines it as an empty assignment, so an exported value is silently clobbered and the run falls to LOCAL mode while printing PASS.
 - **Acceptance**: 1) DEPLOY_HOST=<host> bash scripts/verify_deploy.sh takes the REMOTE branch; an exported value is never overwritten by sourcing .env (regression test with a fake env file reproducing the clobber) 2) local mode requires an explicit opt-in flag and can never be mistaken for droplet evidence; without it, an empty DEPLOY_HOST is a hard failure rather than a silent local PASS 3) local mode is opt-in via an explicit flag and prints no PASS without it; an empty DEPLOY_HOST with no flag is a hard non-zero failure, so T-11's droplet criterion can only be met by a remote-mode run 4) docs/deploy.md and .env.example updated to match the corrected precedence
 - **Verify**: `uv run pytest backend/tests/deploy -q`
