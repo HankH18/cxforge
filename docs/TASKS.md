@@ -248,7 +248,7 @@
 - **Depends on**: T-24 · **parallel_safe**: false
 - **Non-goals**: Docstring-only change in escalation: no behaviour edits outside data/; No change to which exceptions the classifier absorbs (T-18 settled that)
 
-### T-31: Complete the harness-sync migration and preserve auditable closure history  `[queue]`
+### T-31: Complete the harness-sync migration and preserve auditable closure history  `[in_progress]`
 - **Objective**: The harness-sync commit removed the production claim parser, verification hook, and active-ticket ledger while retaining their contracts and tests; it also moved historical receipts to evidence-v1 although the new lifecycle recognizes only JSON receipts. The non-live suite is broken and historical closures now resolve as queued.
 - **Acceptance**: 1) The active lifecycle, configured hooks, and hook tests agree on one supported claim/close protocol; the hook test suite passes without merely deleting coverage for ownership, close gating, or fail-closed behavior 2) Historical evidence-v1/*.pass is reconciled under an explicit migration policy: retain it as clearly labeled non-auditable legacy closure records that the lifecycle can recognize, or restore/remint receipt-bound records; the implementation must not fabricate commit hashes or fingerprints from historical bare timestamps 3) Every plan ticket marked closed has a lifecycle status consistent with the chosen migration policy; dependencies are not silently regressed to queue solely by the sync 4) Regression tests prove both a legacy closure record and a new fingerprint-bound JSON receipt behave as specified, and the full non-live suite passes
 - **Verify**: `uv run pytest -m "not live" -q`

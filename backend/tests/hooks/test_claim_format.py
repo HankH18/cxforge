@@ -1,395 +1,387 @@
-"""T-13 acceptance: the claim-log FORMAT itself — append-only, one JSON
-record per line, ticket id + session id + UTC timestamp all recoverable —
-plus claim_lookup.py's (the shared parser every guard calls) interpretation
-of it, including the legacy single-line compatibility case.
+"""T-31 migration: the v1 append-only JSONL claim LEDGER and its parser
+(``.claude/hooks/claim_lookup.py``, deleted by the c44f9af harness sync)
+have no v2 counterpart to drive directly. This file rebinds the v1
+behaviour classes claim_lookup.py used to guard against the v2 CONTRACT
+that replaced them, driven end to end through the real
+``.claude/scripts/claim.sh`` / ``harness_lib.py`` lifecycle:
 
-This file tests the format/parser directly; test_stop_guard.py and
-test_verify_gate.py test each hook's DECISION built on top of it.
+  * v1 "one JSON record per line, ticket/session/ts all recoverable" ->
+    v2 "one JSON *file* per session at .claude/claims/<session>.json,
+    with a richer required shape (ticket, session, note, start_commit,
+    attempts, ts)" -- test_claim_record_shape_has_all_required_fields,
+    test_start_commit_field_is_the_real_ticket_start_commit.
+  * v1 "--mode owned resolves the most recent line for THIS session,
+    ignoring everyone else's lines" (per-session attribution over a
+    shared log) -> v2 "attribution is structural: a session's claim
+    lives at its own path, and only its own path" --
+    test_claim_belongs_to_exactly_one_session_and_files_are_isolated.
+  * v1 "--mode last / --mode owned resolve a *shared* ledger by
+    interpretation" -> v2 "status is DERIVED (receipt -> resolved, claim
+    -> in_progress, neither -> queue), never parsed from a log" --
+    test_derived_status_queue_then_in_progress_then_resolved. This is
+    the direct replacement for v1's "last line wins" ledger resolution.
+  * v1 "legacy bare `T-13` line is honoured with session-agnostic
+    amnesty until shadowed by a newer line" -> in v2 the harness sync
+    itself created the analogous legacy artifact: 18 pre-migration
+    receipts moved to bare-epoch ``.claude/evidence-v1/<T-id>.pass``
+    files. Migration policy (T-31) is the OPPOSITE of v1's amnesty: a
+    v1 record is permanently INERT, never honoured, never upgraded --
+    only a real v2 JSON receipt resolves a ticket to "resolved". See
+    test_legacy_v1_pass_record_is_inert_while_a_v2_json_receipt_is_honoured
+    (T-31 acceptance 2/4).
+  * v1 "missing active-ticket file / malformed line never crashes the
+    parser, resolves to nothing" -> in v2 there is no shared mutable log
+    for a stray byte to corrupt, so nothing but harness_lib.py itself
+    ever writes into .claude/claims/ or .claude/evidence/; the residual
+    "no state yet" case is the directories not existing at all, which
+    must still resolve every ticket to "queue" without error --
+    test_no_claims_or_evidence_directories_yet_resolves_cleanly_to_queue.
+    (v1's "malformed JSON *inside* a claim file" and "ordering across
+    many lines in one shared log" have no v2 analogue to test honestly:
+    v2 claims are one-per-session, so there is no shared log to order,
+    and no code path other than harness_lib.py's own atomic
+    ``json.dump`` ever produces a claims-directory entry.)
+
+Lifecycle REFUSALS (unknown ticket / duplicate claim / missing
+dependency / receipt-already-exists / verify-string lint / release) are
+covered in test_claim_writer.py, which is about the act of writing (or
+refusing to write) a record. This file is about the record's shape and
+what the harness derives from it.
+
+Self-contained: builds its own synthetic git project per test in
+tmp_path (git init, one commit, a hand-authored docs/tickets.json, and a
+copy of the real .claude/scripts + .claude/hooks trees) and drives it via
+.claude/scripts/claim.sh with CLAUDE_PROJECT_DIR/CLAUDE_CODE_SESSION_ID
+pointed at that synthetic project. Never touches the real repo's
+.claude/claims/, .claude/evidence/, docs/, or git history -- this
+session holds a live claim on T-31 there.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
+import time
 from pathlib import Path
+from typing import Any
 
-import pytest
+REPO_ROOT = Path(__file__).resolve().parents[3]
+REAL_SCRIPTS_DIR = REPO_ROOT / ".claude" / "scripts"
+REAL_HOOKS_DIR = REPO_ROOT / ".claude" / "hooks"
 
-from .conftest import CLAIM_LOOKUP_PATH, LIVE_ACTIVE_TICKET, REPO_ROOT, write_claim
+GIT_ENV = {
+    "GIT_AUTHOR_NAME": "t31-format-test",
+    "GIT_AUTHOR_EMAIL": "t31-format-test@example.invalid",
+    "GIT_COMMITTER_NAME": "t31-format-test",
+    "GIT_COMMITTER_EMAIL": "t31-format-test@example.invalid",
+}
 
 
-def _lookup(claims_file: Path, *args: str) -> str:
+def make_ticket(
+    tid: str,
+    *,
+    scope: list[str] | None = None,
+    verify: str = "true",
+    depends_on: list[str] | None = None,
+    title: str | None = None,
+) -> dict[str, Any]:
+    """A minimal, valid docs/tickets.json entry -- every field harness_lib.py
+    actually reads (id, scope, verify, depends_on), plus the cosmetic ones
+    gen_tasks.py (invoked at the end of a successful close) also expects.
+    """
+    return {
+        "id": tid,
+        "title": title or f"Synthetic ticket {tid}",
+        "objective": "synthetic test ticket",
+        "acceptance": ["n/a"],
+        "verify": verify,
+        "scope": scope if scope is not None else [f"{tid}.txt"],
+        "depends_on": depends_on or [],
+        "non_goals": [],
+        "parallel_safe": False,
+        "status": "open",
+    }
+
+
+def tickets_doc(*tickets: dict[str, Any]) -> dict[str, Any]:
+    return {"project": "t31-format-test", "tickets": list(tickets)}
+
+
+def make_repo(tmp_path: Path, doc: dict[str, Any]) -> Path:
+    """Build a disposable git project: init, docs/tickets.json, copies of
+    the real .claude/scripts and .claude/hooks trees, one initial commit.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {**os.environ, **GIT_ENV}
+    subprocess.run(["git", "init", "-q"], cwd=repo, env=env, check=True)
+    (repo / "docs").mkdir()
+    (repo / "docs" / "tickets.json").write_text(json.dumps(doc))
+    shutil.copytree(
+        REAL_SCRIPTS_DIR, repo / ".claude" / "scripts",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    shutil.copytree(
+        REAL_HOOKS_DIR, repo / ".claude" / "hooks",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    subprocess.run(["git", "add", "-A"], cwd=repo, env=env, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=repo, env=env, check=True)
+    return repo
+
+
+def run_claim_sh(
+    repo: Path, *args: str, session: str, env_extra: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, **GIT_ENV}
+    env["CLAUDE_PROJECT_DIR"] = str(repo)
+    env["CLAUDE_CODE_SESSION_ID"] = session
+    if env_extra:
+        env.update(env_extra)
+    return subprocess.run(
+        ["bash", str(repo / ".claude" / "scripts" / "claim.sh"), *args],
+        cwd=repo, env=env, capture_output=True, text=True, timeout=30,
+    )
+
+
+def do_claim(repo: Path, tid: str, note: str, *, session: str) -> subprocess.CompletedProcess[str]:
+    return run_claim_sh(repo, "claim", tid, note, session=session)
+
+
+def do_close(repo: Path, *, session: str) -> subprocess.CompletedProcess[str]:
+    return run_claim_sh(repo, "close", session=session)
+
+
+def status_board(repo: Path) -> dict[str, str]:
+    """Run claim.sh with no verb (defaults to status_board) and parse the
+    "<id>  <status>  <title>" lines into {ticket_id: status}.
+    """
+    result = run_claim_sh(repo, session="status-board-probe")
+    assert result.returncode == 0, result.stderr
+    out: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        tid, status_word, _title = line.split(maxsplit=2)
+        out[tid] = status_word
+    return out
+
+
+def read_claim(repo: Path, session: str) -> dict[str, Any] | None:
+    p = repo / ".claude" / "claims" / f"{session}.json"
+    if not p.exists():
+        return None
+    return json.loads(p.read_text())
+
+
+def git_head(repo: Path) -> str:
     result = subprocess.run(
-        ["python3", str(CLAIM_LOOKUP_PATH), str(claims_file), *args],
-        capture_output=True,
-        text=True,
-        timeout=10,
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True,
+        env={**os.environ, **GIT_ENV}, check=True,
     )
-    assert result.returncode == 0, (
-        f"claim_lookup.py must never crash: {args}, stderr={result.stderr!r}"
+    return result.stdout.strip()
+
+
+def git_subject(repo: Path, commit: str) -> str:
+    result = subprocess.run(
+        ["git", "log", "-1", "--format=%s", commit], cwd=repo, capture_output=True,
+        text=True, env={**os.environ, **GIT_ENV}, check=True,
     )
-    return result.stdout
+    return result.stdout.strip()
 
 
 # ---------------------------------------------------------------------------
-# Round trip
+# Shape / required fields
 # ---------------------------------------------------------------------------
-def test_claim_record_round_trips_ticket_session_and_timestamp(tmp_path: Path) -> None:
-    write_claim(tmp_path, "T-42", "session-abc-123", ts="2026-08-14T12:00:00Z")
-    at_path = tmp_path / ".claude" / "active-ticket"
-    lines = at_path.read_text().splitlines()
-    assert len(lines) == 1
-    record = json.loads(lines[0])
-    assert record == {
-        "ticket": "T-42",
-        "session": "session-abc-123",
-        "ts": "2026-08-14T12:00:00Z",
+def test_claim_record_shape_has_all_required_fields(tmp_path: Path) -> None:
+    """v1: test_claim_record_round_trips_ticket_session_and_timestamp
+    asserted a JSONL line == {"ticket", "session", "ts"} exactly.
+    v2: a claim record is a JSON object at .claude/claims/<session>.json
+    with a strictly larger required shape -- {"ticket", "session", "note",
+    "start_commit", "attempts", "ts"} -- since there is no shared log to
+    lean on for ordering/attribution/audit; those all move into the
+    record itself.
+    """
+    repo = make_repo(tmp_path, tickets_doc(make_ticket("T-1")))
+    before = int(time.time())
+    result = do_claim(repo, "T-1", "picked first per plan order", session="session-A")
+    after = int(time.time())
+    assert result.returncode == 0, result.stderr
+
+    record = read_claim(repo, "session-A")
+    assert record is not None, ".claude/claims/session-A.json must exist after a successful claim"
+    assert record.keys() == {"ticket", "session", "note", "start_commit", "attempts", "ts"}
+    assert record["ticket"] == "T-1"
+    assert record["session"] == "session-A"
+    assert record["note"] == "picked first per plan order"
+    assert record["attempts"] == 0
+    assert isinstance(record["start_commit"], str) and record["start_commit"]
+    # "ts" carries forward v1's timestamp-recoverability guarantee, minus
+    # v1's cross-line ORDERING (moot: a session holds at most one claim at
+    # a time, so there is nothing to order against).
+    assert isinstance(record["ts"], int)
+    assert before <= record["ts"] <= after
+
+
+def test_start_commit_field_is_the_real_ticket_start_commit(tmp_path: Path) -> None:
+    """New in v2 (no v1 analogue): a claim is bound to a real git commit,
+    not just a timestamp, so close-time integrity can diff "everything
+    that changed during this ticket" against the ticket's scope. This
+    test proves start_commit is not just A commit but THE commit claim.sh
+    itself made, carrying the exact `ticket-start: <tid>` message.
+    """
+    repo = make_repo(tmp_path, tickets_doc(make_ticket("T-7")))
+    result = do_claim(repo, "T-7", "ordering note", session="session-A")
+    assert result.returncode == 0, result.stderr
+
+    record = read_claim(repo, "session-A")
+    assert record is not None
+    assert record["start_commit"] == git_head(repo)
+    assert git_subject(repo, record["start_commit"]) == "ticket-start: T-7"
+
+
+# ---------------------------------------------------------------------------
+# Per-session attribution
+# ---------------------------------------------------------------------------
+def test_claim_belongs_to_exactly_one_session_and_files_are_isolated(tmp_path: Path) -> None:
+    """v1: test_mode_owned_finds_most_recent_matching_line /
+    test_mode_owned_returns_nothing_for_a_session_that_never_claimed
+    asserted --mode owned resolved a session's OWN most recent line and
+    nothing else out of a shared log.
+    v2 replaces log-scanned attribution with structural attribution: each
+    session's claim lives at its own path (.claude/claims/<session>.json)
+    and nowhere else. This proves two sessions claiming two different
+    tickets never see, borrow, or get attributed each other's record --
+    "another session's claim is never treated as yours".
+    """
+    repo = make_repo(tmp_path, tickets_doc(make_ticket("T-1"), make_ticket("T-2")))
+
+    r_a = do_claim(repo, "T-1", "A's ticket", session="session-A")
+    assert r_a.returncode == 0, r_a.stderr
+    r_b = do_claim(repo, "T-2", "B's ticket", session="session-B")
+    assert r_b.returncode == 0, r_b.stderr
+
+    claim_a = read_claim(repo, "session-A")
+    claim_b = read_claim(repo, "session-B")
+    assert claim_a is not None and claim_a["ticket"] == "T-1" and claim_a["session"] == "session-A"
+    assert claim_b is not None and claim_b["ticket"] == "T-2" and claim_b["session"] == "session-B"
+
+    # Nothing named after a session that never claimed exists at all.
+    assert read_claim(repo, "session-C") is None
+
+    # The claims directory holds exactly the two files, named by session.
+    claims_dir = repo / ".claude" / "claims"
+    assert sorted(p.stem for p in claims_dir.glob("*.json")) == ["session-A", "session-B"]
+
+    board = status_board(repo)
+    assert board["T-1"] == "in_progress"
+    assert board["T-2"] == "in_progress"
+
+
+# ---------------------------------------------------------------------------
+# Derived status (replaces v1's "last line wins" ledger resolution)
+# ---------------------------------------------------------------------------
+def test_derived_status_queue_then_in_progress_then_resolved(tmp_path: Path) -> None:
+    """v1 had no derived-status concept at all -- a consumer resolved the
+    shared ledger itself via claim_lookup.py's --mode last ("whichever
+    line is newest wins") or --mode owned. v2 removes the ledger and
+    replaces that interpretation step with an explicit, stateless
+    derivation living in harness_lib.status(): receipt exists -> resolved;
+    else a claim names the ticket -> in_progress; else -> queue. This is
+    the direct successor to v1's ledger-resolution tests, asserted across
+    a full real lifecycle rather than a synthetic log.
+    """
+    repo = make_repo(tmp_path, tickets_doc(make_ticket("T-3", verify="true")))
+
+    assert status_board(repo)["T-3"] == "queue"
+
+    claimed = do_claim(repo, "T-3", "next in order", session="session-A")
+    assert claimed.returncode == 0, claimed.stderr
+    assert status_board(repo)["T-3"] == "in_progress"
+
+    closed = do_close(repo, session="session-A")
+    assert closed.returncode == 0, closed.stderr
+    assert status_board(repo)["T-3"] == "resolved"
+
+    # Resolution also retires the claim file and mints a v2 receipt.
+    assert read_claim(repo, "session-A") is None
+    receipt_path = repo / ".claude" / "evidence" / "T-3.json"
+    assert receipt_path.exists()
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["ticket"] == "T-3"
+    assert receipt.keys() == {
+        "ticket", "session", "verify", "commit", "fingerprint", "attempts", "ts",
     }
 
 
 # ---------------------------------------------------------------------------
-# Append-only
+# LEGACY: v1 .pass records are inert; only v2 JSON receipts are honoured
+# (T-31 acceptance 2/4)
 # ---------------------------------------------------------------------------
-def test_second_claim_appends_a_line_and_the_earlier_line_is_byte_identical(
+def test_legacy_v1_pass_record_is_inert_while_a_v2_json_receipt_is_honoured(
     tmp_path: Path,
 ) -> None:
-    write_claim(tmp_path, "T-1", "session-A", ts="2026-08-14T00:00:00Z")
-    at_path = tmp_path / ".claude" / "active-ticket"
-    first_write_content = at_path.read_text()
+    """v1: test_legacy_bare_line_is_a_ticket_with_no_session and friends
+    asserted claim_lookup.py granted a bare legacy `T-13` line
+    session-agnostic AMNESTY -- it was honoured as a real claim.
+    v2's migration policy is the opposite for the analogous artifact: the
+    c44f9af harness sync moved 18 pre-migration receipts to bare-epoch
+    ``.claude/evidence-v1/<T-id>.pass`` files (no commit, no fingerprint,
+    no session). harness_lib.receipt() only ever reads
+    ``.claude/evidence/<T-id>.json`` -- a v1 .pass file is retained as
+    inert history, NEVER honoured, NEVER upgraded (T-31 non_goals
+    forbids fabricating a commit/fingerprint from a bare timestamp).
 
-    write_claim(tmp_path, "T-2", "session-B", ts="2026-08-14T01:00:00Z")
-    content = at_path.read_text()
-    lines = content.splitlines(keepends=True)
-
-    assert len(lines) == 2
-    assert lines[0] == first_write_content, "earlier line must be byte-identical after append"
-    assert json.loads(lines[1]) == {
-        "ticket": "T-2",
-        "session": "session-B",
-        "ts": "2026-08-14T01:00:00Z",
-    }
-
-
-def test_three_claims_preserve_full_history_in_order(tmp_path: Path) -> None:
-    write_claim(tmp_path, "T-1", "session-A", ts="t1")
-    write_claim(tmp_path, "T-2", "session-B", ts="t2")
-    write_claim(tmp_path, "T-3", "session-A", ts="t3")
-    at_path = tmp_path / ".claude" / "active-ticket"
-    records = [json.loads(ln) for ln in at_path.read_text().splitlines()]
-    assert [r["ticket"] for r in records] == ["T-1", "T-2", "T-3"]
-    assert [r["session"] for r in records] == ["session-A", "session-B", "session-A"]
-
-
-# ---------------------------------------------------------------------------
-# claim_lookup.py interpretation
-# ---------------------------------------------------------------------------
-def test_mode_last_ignores_session_entirely(tmp_path: Path) -> None:
-    write_claim(tmp_path, "T-1", "session-A")
-    write_claim(tmp_path, "T-2", "session-B")
-    at_path = tmp_path / ".claude" / "active-ticket"
-    assert _lookup(at_path, "--mode", "last") == "T-2"
-
-
-def test_mode_owned_finds_most_recent_matching_line(tmp_path: Path) -> None:
-    write_claim(tmp_path, "T-1", "session-A", ts="t1")
-    write_claim(tmp_path, "T-2", "session-B", ts="t2")
-    write_claim(tmp_path, "T-3", "session-A", ts="t3")
-    at_path = tmp_path / ".claude" / "active-ticket"
-    assert _lookup(at_path, "--mode", "owned", "--session", "session-A") == "T-3"
-    assert _lookup(at_path, "--mode", "owned", "--session", "session-B") == "T-2"
-
-
-def test_mode_owned_returns_nothing_for_a_session_that_never_claimed(tmp_path: Path) -> None:
-    write_claim(tmp_path, "T-1", "session-A")
-    at_path = tmp_path / ".claude" / "active-ticket"
-    assert _lookup(at_path, "--mode", "owned", "--session", "session-Z") == ""
-
-
-def test_release_marker_ticket_null_resolves_to_nothing(tmp_path: Path) -> None:
-    write_claim(tmp_path, "T-1", "session-A", ts="t1")
-    write_claim(tmp_path, None, "session-A", ts="t2")
-    at_path = tmp_path / ".claude" / "active-ticket"
-    assert _lookup(at_path, "--mode", "last") == ""
-    assert _lookup(at_path, "--mode", "owned", "--session", "session-A") == ""
-
-
-# ---------------------------------------------------------------------------
-# Legacy compatibility (T-13 constraint 7 / migration)
-# ---------------------------------------------------------------------------
-def test_legacy_bare_line_is_a_ticket_with_no_session(tmp_path: Path) -> None:
-    at_path = tmp_path / "at"
-    at_path.write_text("T-13\n")
-    assert _lookup(at_path, "--mode", "last") == "T-13"
-    assert _lookup(at_path, "--mode", "owned", "--session", "any-session") == "T-13"
-    assert _lookup(at_path, "--mode", "owned", "--session", "a-totally-different-one") == "T-13"
-
-
-def test_legacy_line_with_no_trailing_newline_still_parses(tmp_path: Path) -> None:
-    """Exactly what pathlib's write_text("T-5") produces — no trailing
-    newline — which is also exactly the shape the pre-existing 113
-    scope_guard.sh tests write via run_hook(active_ticket=...).
+    This proves both halves of T-31 acceptance 2/4 in one real lifecycle:
+    (1) a ticket with only a v1 .pass record still derives as "queue" and
+    remains genuinely claimable; (2) actually running the real v2
+    lifecycle for it produces a receipt that IS honoured -- status flips
+    to "resolved" and a second claim is refused because a receipt exists.
     """
-    at_path = tmp_path / "at"
-    at_path.write_text("T-5")
-    assert _lookup(at_path, "--mode", "last") == "T-5"
+    repo = make_repo(tmp_path, tickets_doc(make_ticket("T-9", verify="true")))
+    v1_dir = repo / ".claude" / "evidence-v1"
+    v1_dir.mkdir(parents=True)
+    (v1_dir / "T-9.pass").write_text("1690000000\n")
 
+    # (1) legacy record is inert: still "queue", still claimable.
+    assert status_board(repo)["T-9"] == "queue"
+    claimed = do_claim(repo, "T-9", "legacy record must not block this", session="session-A")
+    assert claimed.returncode == 0, claimed.stderr
+    assert status_board(repo)["T-9"] == "in_progress"
 
-def test_whitespace_only_content_resolves_to_nothing(tmp_path: Path) -> None:
-    at_path = tmp_path / "at"
-    at_path.write_text("   \n")
-    assert _lookup(at_path, "--mode", "last") == ""
+    # (2) the real v2 receipt, once minted, IS honoured.
+    closed = do_close(repo, session="session-A")
+    assert closed.returncode == 0, closed.stderr
+    assert status_board(repo)["T-9"] == "resolved"
+    assert (repo / ".claude" / "evidence" / "T-9.json").exists()
+    # The untouched v1 artifact is still sitting there, still inert.
+    assert (v1_dir / "T-9.pass").read_text() == "1690000000\n"
 
-
-def test_missing_file_resolves_to_nothing_never_crashes(tmp_path: Path) -> None:
-    at_path = tmp_path / "does-not-exist"
-    assert _lookup(at_path, "--mode", "last") == ""
-    assert _lookup(at_path, "--mode", "owned", "--session", "x") == ""
-
-
-def test_legacy_line_amnesty_ends_once_a_newer_line_is_appended(tmp_path: Path) -> None:
-    """T-13 adversarial finding #5: --mode owned's amnesty for an
-    unattributed (legacy) line applies ONLY while it is the single most
-    recent line in the whole log. The instant anything is appended after
-    it — attributed or not, for any ticket — a fresh query no longer
-    resolves to it.
-    """
-    at_path = tmp_path / "at"
-    at_path.write_text("T-13\n")
-    assert _lookup(at_path, "--mode", "owned", "--session", "any-unrelated-session") == "T-13"
-
-    with at_path.open("a") as f:
-        f.write(json.dumps({"ticket": "T-15", "session": "fresh-session", "ts": "t2"}) + "\n")
-
-    # The legacy T-13 line is shadowed now; an unrelated session gets
-    # nothing back for it (NOT "T-13", and NOT "T-15" either — T-15 belongs
-    # to "fresh-session", not to this querying session).
-    assert _lookup(at_path, "--mode", "owned", "--session", "any-unrelated-session") == ""
-    assert _lookup(at_path, "--mode", "owned", "--session", "fresh-session") == "T-15"
-
-
-def test_mode_owned_strict_never_grants_legacy_amnesty(tmp_path: Path) -> None:
-    """T-13 adversarial finding #1: --strict (stop_guard.sh's mode) refuses
-    an unattributed line for EVERY session, even as the log's sole line —
-    no migration-window amnesty at all.
-    """
-    at_path = tmp_path / "at"
-    at_path.write_text("T-13\n")
-    assert _lookup(at_path, "--mode", "owned", "--session", "any-session", "--strict") == ""
-
-    with at_path.open("a") as f:
-        f.write(json.dumps({"ticket": "T-14", "session": "session-Q", "ts": "t"}) + "\n")
-    # A real, attributed claim is unaffected by --strict.
-    assert _lookup(at_path, "--mode", "owned", "--session", "session-Q", "--strict") == "T-14"
-    assert _lookup(at_path, "--mode", "owned", "--session", "someone-else", "--strict") == ""
+    reclaim = do_claim(repo, "T-9", "should be refused now", session="session-B")
+    assert reclaim.returncode != 0
+    assert "already has a receipt" in reclaim.stdout
 
 
 # ---------------------------------------------------------------------------
-# Timestamp is load-bearing for attribution (T-13 adversarial finding #4)
+# No shared mutable log left to corrupt: absent state resolves cleanly
 # ---------------------------------------------------------------------------
-def test_session_without_timestamp_gets_no_exclusive_attribution(tmp_path: Path) -> None:
-    """A JSON record naming a real "session" but carrying NO "ts" at all
-    cannot have been produced by .claude/hooks/claim.sh (the only
-    production writer — it always writes both together). claim_lookup.py
-    must not trust it as SESSION_A's exclusive claim: it degrades to the
-    same unattributed bucket as a bare legacy line, so an UNRELATED session
-    resolves it identically to SESSION_A (both governed by the single-
-    most-recent-line amnesty, never by real attribution) — and --strict
-    refuses it for everyone, including SESSION_A itself.
+def test_no_claims_or_evidence_directories_yet_resolves_cleanly_to_queue(tmp_path: Path) -> None:
+    """v1: test_missing_file_resolves_to_nothing_never_crashes and the
+    append-check malformed-payload tests proved claim_lookup.py degraded
+    gracefully when .claude/active-ticket was absent, empty, or garbage.
+    v2 has no single shared file that can be "missing" or "malformed" in
+    that sense -- .claude/claims/ and .claude/evidence/ are plain
+    directories, created lazily, and nothing but harness_lib.py's own
+    json.dump ever writes into them. The residual "no state recorded
+    yet" case is simply neither directory existing at all; this proves
+    that resolves every ticket to "queue" without error, never crashing
+    status_board the way a naive path.exists()-less read might.
     """
-    at_path = tmp_path / "at"
-    at_path.write_text(json.dumps({"ticket": "T-5", "session": "S-A"}) + "\n")
+    repo = make_repo(tmp_path, tickets_doc(make_ticket("T-1"), make_ticket("T-2")))
+    assert not (repo / ".claude" / "claims").exists()
+    assert not (repo / ".claude" / "evidence").exists()
 
-    assert _lookup(at_path, "--mode", "last") == "T-5"
-    assert _lookup(at_path, "--mode", "owned", "--session", "S-A") == "T-5"
-    assert _lookup(at_path, "--mode", "owned", "--session", "totally-unrelated") == "T-5"
-    assert _lookup(at_path, "--mode", "owned", "--session", "S-A", "--strict") == ""
-    assert _lookup(at_path, "--mode", "owned", "--session", "totally-unrelated", "--strict") == ""
-
-
-def test_session_without_timestamp_is_shadowed_once_a_newer_line_is_appended(
-    tmp_path: Path,
-) -> None:
-    """A ts-less record naming a session is unattributed (see
-    test_session_without_timestamp_gets_no_exclusive_attribution) and so is
-    governed by the SAME single-most-recent-line amnesty as a bare legacy
-    line: once something newer and real is appended after it, it stops
-    being resolvable via --mode owned at all — not even by the session its
-    own "session" field names. Meanwhile the newer, properly-attributed
-    line resolves normally for its own real owner.
-    """
-    at_path = tmp_path / "at"
-    at_path.write_text(json.dumps({"ticket": "T-2", "session": "session-B"}) + "\n")  # no ts
-    with at_path.open("a") as f:
-        f.write(json.dumps({"ticket": "T-1", "session": "session-A", "ts": "t2"}) + "\n")
-
-    assert _lookup(at_path, "--mode", "owned", "--session", "session-A") == "T-1"
-    assert _lookup(at_path, "--mode", "owned", "--session", "session-B") == ""
-
-
-# ---------------------------------------------------------------------------
-# --mode append-check (T-13 acceptance 3; adversarial findings #2/#3)
-# ---------------------------------------------------------------------------
-def _append_check(claims_file: Path, payload: dict) -> str:
-    result = subprocess.run(
-        ["python3", str(CLAIM_LOOKUP_PATH), str(claims_file), "--mode", "append-check"],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert result.returncode == 0
-    return result.stdout
-
-
-def test_append_check_write_that_only_appends_is_ok(tmp_path: Path) -> None:
-    at_path = tmp_path / "at"
-    at_path.write_text("T-1\n")
-    payload = {"tool_name": "Write", "tool_input": {"content": "T-1\nT-2\n"}}
-    assert _append_check(at_path, payload) == "ok"
-
-
-def test_append_check_write_that_truncates_is_a_violation(tmp_path: Path) -> None:
-    """This is finding #2/#3's exact sabotage: a Write whose content is
-    just a fresh single line, exactly what CLAUDE.md's stale
-    "write its ticket ID as the only line" instruction produces.
-    """
-    at_path = tmp_path / "at"
-    at_path.write_text(json.dumps({"ticket": "T-5", "session": "sess-AAAA", "ts": "t1"}) + "\n")
-    payload = {"tool_name": "Write", "tool_input": {"content": "T-14\n"}}
-    assert _append_check(at_path, payload) == "violate"
-
-
-def test_append_check_write_of_first_ever_claim_is_ok(tmp_path: Path) -> None:
-    at_path = tmp_path / "does-not-exist-yet"
-    payload = {"tool_name": "Write", "tool_input": {"content": "T-1\n"}}
-    assert _append_check(at_path, payload) == "ok"
-
-
-def test_append_check_edit_that_replaces_whole_content_is_a_violation(tmp_path: Path) -> None:
-    at_path = tmp_path / "at"
-    at_path.write_text("T-5\n")
-    payload = {
-        "tool_name": "Edit",
-        "tool_input": {"old_string": "T-5\n", "new_string": "T-14\n"},
-    }
-    assert _append_check(at_path, payload) == "violate"
-
-
-def test_append_check_edit_that_only_appends_is_ok(tmp_path: Path) -> None:
-    at_path = tmp_path / "at"
-    at_path.write_text("T-1\nT-2\n")
-    payload = {
-        "tool_name": "Edit",
-        "tool_input": {"old_string": "T-2\n", "new_string": "T-2\nT-3\n"},
-    }
-    assert _append_check(at_path, payload) == "ok"
-
-
-def test_append_check_edit_with_no_match_is_a_no_op_and_ok(tmp_path: Path) -> None:
-    at_path = tmp_path / "at"
-    at_path.write_text("T-5\n")
-    payload = {"tool_name": "Edit", "tool_input": {"old_string": "x", "new_string": "y"}}
-    assert _append_check(at_path, payload) == "ok"
-
-
-def test_append_check_malformed_payload_fails_closed(tmp_path: Path) -> None:
-    at_path = tmp_path / "at"
-    at_path.write_text("T-5\n")
-    result = subprocess.run(
-        ["python3", str(CLAIM_LOOKUP_PATH), str(at_path), "--mode", "append-check"],
-        input="not valid json{{{",
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert result.returncode == 0
-    assert result.stdout == "violate"
-
-
-# ---------------------------------------------------------------------------
-def test_legacy_line_followed_by_a_proper_claim_disambiguates(tmp_path: Path) -> None:
-    """Once ANY session appends a proper record, the ambiguity the legacy
-    line carried is over for --mode last (global) — the new record wins
-    outright, exactly like any other append-only "last line wins" case.
-    """
-    at_path = tmp_path / "at"
-    at_path.write_text("T-13\n")
-    with at_path.open("a") as f:
-        f.write(json.dumps({"ticket": "T-14", "session": "session-Q", "ts": "t"}) + "\n")
-    assert _lookup(at_path, "--mode", "last") == "T-14"
-
-
-# ---------------------------------------------------------------------------
-# Real repo cross-checks — read-only, never mutated (see conftest docstring)
-# ---------------------------------------------------------------------------
-def test_real_active_ticket_parses_cleanly_under_both_modes() -> None:
-    """Concrete check behind T-13 constraint 7 ("must not strand the
-    claim"): whatever the live repo's .claude/active-ticket currently
-    contains resolves without error under both claim_lookup.py modes. Does
-    NOT assert a specific ticket value — that changes as tickets land.
-    """
-    if not LIVE_ACTIVE_TICKET.exists():
-        pytest.skip("no live .claude/active-ticket in this checkout")
-    last = subprocess.run(
-        ["python3", str(CLAIM_LOOKUP_PATH), str(LIVE_ACTIVE_TICKET), "--mode", "last"],
-        capture_output=True, text=True, timeout=10,
-    )
-    assert last.returncode == 0
-    owned = subprocess.run(
-        ["python3", str(CLAIM_LOOKUP_PATH), str(LIVE_ACTIVE_TICKET),
-         "--mode", "owned", "--session", "any-probe-session-id"],
-        capture_output=True, text=True, timeout=10,
-    )
-    assert owned.returncode == 0
-    if last.stdout:
-        # Still true only while the live file's LAST line is a legacy
-        # (session-less) claim — the T-13-era shape this repo shipped with.
-        # Once any session appends a proper record, this stops holding and
-        # is exactly the disambiguation test_legacy_line_followed_by_a_
-        # proper_claim_disambiguates above already covers synthetically.
-        last_line = [ln for ln in LIVE_ACTIVE_TICKET.read_text().splitlines() if ln.strip()][-1]
-        try:
-            json.loads(last_line)
-            is_legacy = False
-        except (json.JSONDecodeError, ValueError):
-            is_legacy = True
-        if is_legacy:
-            assert owned.stdout == last.stdout
-
-
-def test_active_ticket_path_is_not_gitignored() -> None:
-    """T-13 acceptance 3: claim records must be tracked in git. Concretely,
-    .claude/active-ticket must not be excluded by .gitignore — it may or
-    may not be tracked at this exact HEAD depending on claim state, but it
-    must never be UNTRACKABLE.
-    """
-    result = subprocess.run(
-        ["git", "check-ignore", "-q", ".claude/active-ticket"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        timeout=10,
-    )
-    # git check-ignore exits 0 if the path IS ignored, 1 if it is NOT.
-    assert result.returncode == 1, (
-        ".claude/active-ticket must not be gitignored (T-13 acceptance 3)"
-    )
-
-
-def test_active_ticket_path_is_tracked_in_git() -> None:
-    """T-13 adversarial finding #6: "not gitignored" is NOT the same claim
-    as "tracked" — a file can be un-ignored and still untracked (e.g. after
-    `git rm --cached`, or if it was simply never `git add`-ed). This is the
-    genuine "TRACKED IN GIT" check acceptance 3 requires: `git ls-files
-    --error-unmatch` exits 0 only for a path actually present in the
-    index/HEAD, not merely un-ignored.
-    """
-    result = subprocess.run(
-        ["git", "ls-files", "--error-unmatch", ".claude/active-ticket"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        timeout=10,
-    )
-    assert result.returncode == 0, (
-        ".claude/active-ticket must be tracked in git (T-13 acceptance 3), "
-        f"got: {result.stderr!r}"
-    )
+    board = status_board(repo)
+    assert board == {"T-1": "queue", "T-2": "queue"}

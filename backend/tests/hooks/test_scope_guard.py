@@ -4,7 +4,21 @@ Every test here drives the REAL hook script as a subprocess (see
 conftest.run_hook / conftest.expect) — nothing in this file reimplements the
 glob matcher. A synthetic CLAUDE_PROJECT_DIR (pytest's tmp_path, via the
 ``project`` fixture) stands in for the repo so no test ever reads or writes
-the real .claude/active-ticket.
+the real repo's .claude/claims/ or .claude/evidence/.
+
+T-31 (v2 harness migration) note, read before touching BASE_COVERAGE: v2's
+harness_lib.PROTECTED denies Edit/Write to docs/tickets.json,
+.claude/hooks/**, .claude/scripts/**, .claude/settings.json,
+.claude/claims/** and .claude/evidence/** UNCONDITIONALLY — before any
+per-ticket scope check runs at all, for every ticket, every session. Under
+v1 several tickets (T-12, T-13, T-22, T-26, T-27, T-28, T-29, and now T-31)
+declared one of those exact paths as part of their OWN scope, so v1's
+BASE_COVERAGE used it as that ticket's "allow" probe. That probe would now
+be denied for the wrong reason (PROTECTED, not scope) even while claimed,
+so those seven-turned-eight rows below were moved to a DIFFERENT,
+non-protected glob from that same ticket's scope — see
+test_claude_hooks_and_scripts_are_never_writable_by_any_ticket below for
+the guarantee that motivated the move, proven directly.
 """
 
 from __future__ import annotations
@@ -17,7 +31,6 @@ import pytest
 from .conftest import (
     REAL_SCOPES,
     REAL_TICKET_IDS,
-    UNSET,
     decision,
     expect,
     make_project,
@@ -68,10 +81,14 @@ BASE_COVERAGE: list[tuple[str, str, str, str]] = [
     ),
     ("T-11", "docs/architecture.md", "deployment/config.yml", "deploy vs deployment"),
     (
-        "T-12", ".claude/hooks/scope_guard.sh", ".claude/hooks_backup/scope_guard.sh",
-        "hooks vs hooks_backup",
+        "T-12", "backend/tests/hooks/test_scope_guard.py",
+        "backend/tests/hook/test_scope_guard.py",
+        "tests/hooks vs tests/hook (probe moved off .claude/hooks/**, now PROTECTED)",
     ),
-    ("T-13", ".claude/hooks/stop_guard.sh", ".claude/hook/stop_guard.sh", "missing s"),
+    (
+        "T-13", "backend/tests/hooks/test_stop_guard.py", "backend/tests/hook/test_stop_guard.py",
+        "tests/hooks vs tests/hook (probe moved off .claude/hooks/**, now PROTECTED)",
+    ),
     (
         "T-14", "backend/tests/plan/test_invariants.py", "backend/tests/planning/test_x.py",
         "plan vs planning",
@@ -96,8 +113,9 @@ BASE_COVERAGE: list[tuple[str, str, str, str]] = [
         "eval-report vs eval-reports",
     ),
     (
-        "T-22", ".claude/hooks/verify_gate.sh", "backend/tests/hooked/test_status_sync.py",
-        "hooks vs hooked",
+        "T-22", "backend/tests/hooks/test_verify_gate.py",
+        "backend/tests/hooked/test_status_sync.py",
+        "hooks vs hooked (probe moved off .claude/hooks/**, now PROTECTED)",
     ),
     ("T-23", "backend/tests/conftest.py", "backend/test_utils/conftest.py", "tests vs test_utils"),
     ("T-24", "backend/src/data/db.py", "backend/src/database/db.py", "data vs database"),
@@ -106,24 +124,32 @@ BASE_COVERAGE: list[tuple[str, str, str, str]] = [
         "report.py vs report_utils.py",
     ),
     (
-        "T-26", "docs/tickets.json", "docs/tickets.json.bak",
-        "literal filename, not a prefix",
+        "T-26", "docs/INGEST.md", "docs/INGEST.md.bak",
+        "literal filename, not a prefix (probe moved off docs/tickets.json, now PROTECTED)",
     ),
     (
-        "T-27", ".claude/settings.json", ".claude/settings.local.json",
-        "settings.json vs settings.local.json",
+        "T-27", "backend/tests/hooks/test_settings_guard.py",
+        "backend/tests/hook/test_settings_guard.py",
+        "tests/hooks vs tests/hook (probe moved off .claude/settings.json, now PROTECTED)",
     ),
     (
-        "T-28", ".claude/hooks/stop_guard.sh", ".claude/stop_guard.sh",
-        "hooks subdir, not .claude root",
+        "T-28", "backend/tests/hooks/test_stop_guard_v2.py",
+        "backend/tests/hook/test_stop_guard_v2.py",
+        "tests/hooks vs tests/hook (probe moved off .claude/hooks/**, now PROTECTED)",
     ),
     (
-        "T-29", ".claude/hooks/claim_lookup.py", ".claude/hooklib/claim_lookup.py",
-        "hooks vs hooklib",
+        "T-29", "backend/tests/hooks/test_claim_lookup.py",
+        "backend/tests/hook/test_claim_lookup.py",
+        "tests/hooks vs tests/hook (probe moved off .claude/hooks/**, now PROTECTED)",
     ),
     (
         "T-30", "backend/src/escalation/rules.py", "backend/src/escalation/engine.py",
         "single-file scope; sibling file belongs to other tickets",
+    ),
+    (
+        "T-31", "backend/tests/hooks/test_harness_lib_conftest.py",
+        "backend/tests/hook/test_harness_lib_conftest.py",
+        "tests/hooks vs tests/hook (T-31's other scope globs are all PROTECTED too)",
     ),
 ]
 
@@ -309,11 +335,36 @@ def test_out_of_repo_path_is_ignored_even_with_no_active_ticket(project: Path) -
 
 
 # ---------------------------------------------------------------------------
-# Fail-closed claim record (acceptance 3) — no bypass of any kind
+# Claim-state behaviour. v1 called this section "fail-closed claim record"
+# (acceptance 3): v1's guard denied EVERY Edit/Write whenever the session
+# had no active-ticket file at all — deny was the default posture absent
+# any claim.
+#
+# v2 FLIPS that default. harness_lib.py's guard(), decision-order step 5,
+# is explicit about it in the source: "session holds no claim -> allow"
+# (comment: "non-owning sessions are unconstrained (jarvis T-21)"). The
+# scope check exists to keep a CLAIM-HOLDING session inside its own
+# ticket's declared scope, not to gate all activity behind holding a claim
+# in the first place. This is documented, authoritative behaviour in
+# harness_lib.py — out of scope for T-31 to second-guess — not a bug this
+# file may paper over by asserting the old outcome anyway.
+#
+# What still fails closed, UNCHANGED from v1: a session that DOES hold a
+# claim, naming a ticket id with no entry in docs/tickets.json, still can't
+# write anywhere outside PROTECTED/META_ALLOW.
+# test_empty_active_ticket_denies / test_whitespace_only_active_ticket_denies
+# / test_unknown_ticket_id_denies below are UNCHANGED from v1 in both call
+# and outcome (all three still deny) — the mechanism moved (all three now
+# exercise the identical harness_lib.ticket(id) -> None fallback, rather
+# than three distinct free-text parse failures) but the guarantee didn't.
 # ---------------------------------------------------------------------------
-def test_missing_active_ticket_denies(project: Path) -> None:
+def test_no_claim_at_all_is_unconstrained_outside_protected_paths(project: Path) -> None:
+    """v1: test_missing_active_ticket_denies, asserted "deny". Superseded by
+    the v2 flip described in this section's docstring above — renamed so
+    the function name doesn't keep asserting something false.
+    """
     data_path = str(project / "backend/src/data/models.py")
-    expect(project, ticket=None, file_path=data_path, want="deny")
+    expect(project, ticket=None, file_path=data_path, want="allow")
 
 
 def test_empty_active_ticket_denies(project: Path) -> None:
@@ -327,23 +378,30 @@ def test_whitespace_only_active_ticket_denies(project: Path) -> None:
 
 
 def test_unknown_ticket_id_denies(project: Path) -> None:
-    """T-99 is not in docs/tickets.json: undefined scope must fail closed."""
+    """T-99 is not in docs/tickets.json: a claim naming it still can't reach
+    anywhere outside PROTECTED/META_ALLOW.
+    """
     assert "T-99" not in REAL_TICKET_IDS
     data_path = str(project / "backend/src/data/models.py")
     expect(project, ticket="T-99", file_path=data_path, want="deny")
 
 
-def test_no_env_var_substitutes_for_a_real_claim(project: Path) -> None:
+def test_bypass_env_vars_never_turn_a_deny_into_an_allow(project: Path) -> None:
     """Negative control: a self-issued env var must not stand in for a claim.
 
-    Even with no active-ticket file, an agent cannot wave a flag at the
-    guard to make it allow anyway.
+    v1's version of this test used a no-claim scenario, which ALSO denied
+    under v1 — but that exact scenario now ALLOWS under v2 (see
+    test_no_claim_at_all_is_unconstrained_outside_protected_paths above),
+    so it stopped demonstrating anything about env vars specifically.
+    Re-pointed at a scenario v2 DOES still deny — a real claim, on a path
+    outside that ticket's own declared scope — to preserve the original
+    point: harness_lib.py's guard() reads no bypass env var of any kind,
+    ever. These flags are just as inert here as everywhere else.
     """
-    (project / ".claude" / "active-ticket").unlink(missing_ok=True)
     result = run_hook(
         project,
-        str(project / "backend/src/data/models.py"),
-        active_ticket=UNSET,
+        str(project / "backend/src/agents/graph.py"),  # outside T-5: 'agent' vs 'agents'
+        active_ticket="T-5",
         env_extra={
             "SCOPE_GUARD_BYPASS": "1",
             "CLAUDE_SCOPE_GUARD_SKIP": "1",
@@ -356,30 +414,77 @@ def test_no_env_var_substitutes_for_a_real_claim(project: Path) -> None:
 # ---------------------------------------------------------------------------
 # Protocol paths (acceptance 4 + 7)
 # ---------------------------------------------------------------------------
-def test_claim_record_itself_stays_writable(project: Path) -> None:
-    """.claude/active-ticket is how a claim is made — the narrowed
-    replacement for the old blanket '.claude/*' branch.
+def test_claim_file_itself_is_never_writable_via_edit_or_write(project: Path) -> None:
+    """v1: .claude/active-ticket WAS how a claim got made — an agent wrote
+    it directly with the Edit/Write tool, so acceptance 4/7 required it
+    stay writable (see the two tests this replaces:
+    test_claim_record_itself_stays_writable /
+    test_claim_record_writable_even_with_no_prior_claim, both asserted
+    "allow"). v2 flips this completely: a claim is made exclusively by
+    running `claim.sh claim <tid> <note>` (harness_lib.py's cmd_claim
+    writes .claude/claims/<session>.json directly from Python — never
+    through the Edit/Write tool), and that whole directory is listed in
+    harness_lib.PROTECTED, so the Edit/Write path to it is now DENIED,
+    unconditionally, for every session — with or without a claim.
+    Exhaustively covered (append/rewrite/no-op/whose-claim variations) in
+    test_scope_guard_append_only.py; this is a one-line regression pin so
+    this file's own "Protocol paths" section still states the guarantee.
     """
     expect(
         project,
         ticket="T-5",
-        file_path=str(project / ".claude/active-ticket"),
-        want="allow",
+        file_path=str(project / ".claude/claims/some-other-session.json"),
+        want="deny",
+    )
+    expect(
+        project,
+        ticket=None,
+        file_path=str(project / ".claude/claims/some-other-session.json"),
+        want="deny",
     )
 
 
-def test_claim_record_writable_even_with_no_prior_claim(project: Path) -> None:
-    """A brand new session with nothing claimed yet must still be able to
-    write .claude/active-ticket for the very first time.
+@pytest.mark.parametrize("ticket", REAL_TICKET_IDS, ids=REAL_TICKET_IDS)
+def test_claude_hooks_and_scripts_are_never_writable_by_any_ticket(
+    project: Path, ticket: str,
+) -> None:
+    """v2-only guarantee, with no v1 analogue: T-12/T-13/T-22/T-27/T-28/T-29
+    (and now T-31) used to declare .claude/hooks/** as part of their OWN
+    v1 scope specifically so the ticket implementing them could edit those
+    files — that's why v1's BASE_COVERAGE used exactly that path as their
+    "allow" probe. v2 removes that entirely: .claude/hooks/** and
+    .claude/scripts/** are harness_lib.PROTECTED unconditionally, so even
+    THOSE tickets can no longer Edit/Write there; only claim.sh (invoked
+    directly, never through the Edit/Write tool) may touch harness state,
+    and any other change is a plan defect for .claude/NEEDS_HUMAN.md, not a
+    ticket scope. This is the guarantee that forced BASE_COVERAGE's T-12 /
+    T-13 / T-22 / T-26 / T-27 / T-28 / T-29 / T-31 rows to move their
+    "allow" probe onto a different, non-protected glob — proven directly,
+    for every real ticket, here.
     """
-    expect(project, ticket=None, file_path=str(project / ".claude/active-ticket"), want="allow")
+    expect(
+        project,
+        ticket=ticket,
+        file_path=str(project / ".claude/hooks/scope_guard.sh"),
+        want="deny",
+    )
+    expect(
+        project,
+        ticket=ticket,
+        file_path=str(project / ".claude/scripts/harness_lib.py"),
+        want="deny",
+    )
 
 
 @pytest.mark.parametrize("ticket", REAL_TICKET_IDS, ids=REAL_TICKET_IDS)
 def test_evidence_dir_is_never_writable_by_any_ticket(project: Path, ticket: str) -> None:
     """Acceptance 7, unconditional: no ticket's scope may ever permit a write
-    under .claude/evidence/**, including T-12/T-13 whose own scope is
-    .claude/hooks/** — evidence is verify_gate.sh's alone to write.
+    under .claude/evidence/**. Outcome unchanged from v1, but the mechanism
+    is now structural rather than incidental: v1 denied this only because
+    no real ticket's scope happened to list it; v2 denies it via
+    harness_lib.PROTECTED regardless of what any ticket's scope says (step
+    3, ahead of any per-ticket scope check) — evidence is cmd_close's alone
+    to write.
     """
     expect(
         project,
@@ -423,11 +528,18 @@ def test_docs_tree_is_not_blanket_allowed_second_ticket(project: Path) -> None:
 
 
 def test_claude_tree_is_not_blanket_allowed_for_a_ticket_without_it_in_scope(project: Path) -> None:
+    """Probes a .claude/** path that is neither PROTECTED nor META_ALLOW
+    (unlike .claude/hooks/scope_guard.sh, which — see
+    test_claude_hooks_and_scripts_are_never_writable_by_any_ticket above —
+    is now denied for EVERY ticket regardless of scope, so it would no
+    longer isolate "not in this ticket's scope" as the reason for the
+    deny). This one genuinely reaches the per-ticket scope check.
+    """
     assert not any(g.startswith(".claude/") for g in REAL_SCOPES["T-1"])
     expect(
         project,
         ticket="T-1",
-        file_path=str(project / ".claude/hooks/scope_guard.sh"),
+        file_path=str(project / ".claude/some-random-state.json"),
         want="deny",
     )
 
