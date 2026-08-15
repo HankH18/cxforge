@@ -32,7 +32,7 @@
 - **Depends on**: T-2 · **parallel_safe**: true
 - **Non-goals**: No real SMTP/IMAP — the stub stays a stub
 
-### T-4: Webhook ingress and Zendesk setup runbook  `[queue]`
+### T-4: Webhook ingress and Zendesk setup runbook  `[resolved]`
 - **Objective**: Exactly-once, loop-safe ticket event intake (R1).
 - **Acceptance**: 1) HMAC-verified endpoint matching the pinned payload 2) idempotency via tickets_seen — duplicate (ticket, comment) events are no-ops 3) events authored by the AI user are dropped 4) docs/zendesk-runbook.md covers the human steps: trial signup, OAuth app, AI agent user, trigger with 'tags not include ai-processed' nullifier, webhook + signing secret, cloudflared 5) unit tests for HMAC reject/accept, dedupe, self-event drop
 - **Verify**: `uv run pytest -m "not live" backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q`
