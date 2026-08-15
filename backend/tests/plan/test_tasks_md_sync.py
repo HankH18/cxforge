@@ -22,6 +22,18 @@ GENERATED, never hand-edited, and any drift between it and its inputs
 state that `gen_tasks.py`'s per-ticket `status()` call reads) is a failure a
 human should see immediately rather than a human needing to notice.
 
+TIMING (T-16): docs/TASKS.md is a CLOSE-BOUNDARY artifact. `cmd_close` writes
+the receipt, removes the claim file, and only then runs `gen_tasks.py` -- so
+the committed file always renders the state with no claim held. A ticket's
+own verify, however, runs while its claim is still open, which means the live
+`.claude/claims/` state has an `in_progress` marker the committed file cannot
+yet have. That one-marker lag is correct behaviour, not drift, so this test
+accepts either rendering: the live one, or the close-boundary one. Everything
+else -- a hand-edit, a dropped ticket, a stale title, a status that does not
+match the receipts -- still fails, because both renderings would differ from
+the file. Without this, every ticket whose verify covers backend/tests/plan
+would fail its own close purely for holding its own claim.
+
 `gen_tasks.py` is a script, not a library -- it has no importable
 `render(data)` function; run top to bottom it resolves `ROOT` from
 `CLAUDE_PROJECT_DIR` (falling back to `git rev-parse --show-toplevel`) and
@@ -55,10 +67,15 @@ REAL_CLAIMS_DIR = REPO_ROOT / ".claude" / "claims"
 REAL_EVIDENCE_DIR = REPO_ROOT / ".claude" / "evidence"
 
 
-def _build_shadow_project(tmp_path: Path) -> Path:
+def _build_shadow_project(tmp_path: Path, *, with_claims: bool) -> Path:
     """A disposable CLAUDE_PROJECT_DIR that mirrors the real repo's current
     generation inputs exactly, read-only copies only -- nothing here is ever
-    written back to the real repo."""
+    written back to the real repo.
+
+    ``with_claims=False`` reproduces the close-boundary state: receipts as
+    they are now, but no open claim, which is precisely the input
+    ``cmd_close`` hands ``gen_tasks.py`` when it regenerates the committed
+    file. See this module's TIMING note."""
     (tmp_path / ".claude" / "scripts").mkdir(parents=True, exist_ok=True)
     (tmp_path / "docs").mkdir(parents=True, exist_ok=True)
     shutil.copyfile(HARNESS_LIB_PATH, tmp_path / ".claude" / "scripts" / "harness_lib.py")
@@ -68,6 +85,8 @@ def _build_shadow_project(tmp_path: Path) -> Path:
     for name, src in (("claims", REAL_CLAIMS_DIR), ("evidence", REAL_EVIDENCE_DIR)):
         dst = tmp_path / ".claude" / name
         dst.mkdir(parents=True, exist_ok=True)
+        if name == "claims" and not with_claims:
+            continue
         if src.is_dir():
             for f in src.glob("*.json"):
                 shutil.copyfile(f, dst / f.name)
@@ -94,13 +113,14 @@ def _run_gen_tasks(project_dir: Path) -> str:
 def test_tasks_md_is_exactly_what_gen_tasks_produces_from_current_state(
     tmp_path: Path,
 ) -> None:
-    project = _build_shadow_project(tmp_path)
-    expected = _run_gen_tasks(project)
+    live = _run_gen_tasks(_build_shadow_project(tmp_path / "live", with_claims=True))
+    boundary = _run_gen_tasks(_build_shadow_project(tmp_path / "boundary", with_claims=False))
     actual = TASKS_MD_PATH.read_text()
-    assert actual == expected, (
+    assert actual in (live, boundary), (
         "docs/TASKS.md has drifted from what .claude/scripts/gen_tasks.py "
-        "produces from the current docs/tickets.json plus live "
-        ".claude/claims//.claude/evidence/ state. Run "
+        "produces from the current docs/tickets.json plus .claude/evidence/ "
+        "state -- it matches neither the live rendering nor the "
+        "close-boundary rendering (see this module's TIMING note). Run "
         "'python3 .claude/scripts/gen_tasks.py' and commit the result -- "
         "never hand-edit docs/TASKS.md (it also regenerates automatically "
         "on every 'claim.sh close')."

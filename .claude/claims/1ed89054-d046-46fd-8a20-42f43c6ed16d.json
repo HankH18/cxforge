@@ -1,0 +1,8 @@
+{
+ "ticket": "T-16",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "note": "Last of the dependency-free remints and the widest gate \u2014 its verify is the whole non-live suite, so closing it here proves the T-31 migration holds before the T-17/T-18/T-20 remints that depend on it.",
+ "start_commit": "7c80506db877af65b29f89e7b2327ab22153ab9a",
+ "attempts": 1,
+ "ts": 1786760784
+}
