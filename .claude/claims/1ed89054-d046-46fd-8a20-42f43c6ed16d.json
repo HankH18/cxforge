@@ -1,0 +1,8 @@
+{
+ "ticket": "T-5",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "note": "Unblocked now that both T-1 and T-2 have receipts. Remint \u2014 agent core; unblocks T-6 and T-8.",
+ "start_commit": "06e35ca0f7a9c758fae4837f735036dd18b47d72",
+ "attempts": 0,
+ "ts": 1786819593
+}
