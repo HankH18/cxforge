@@ -4,7 +4,7 @@ always imports this file before any nested conftest.py or test module — so
 everything at module scope below runs exactly once, at the very start of
 every pytest process, before any test connects to the database.
 
-Four independent pieces of hygiene live here, each tied to one T-16
+Five independent pieces of hygiene live here, each tied to a T-16 or T-23
 acceptance criterion:
 
 1. Per-process Postgres schema isolation (acceptance 1). The mere fact that
@@ -14,15 +14,27 @@ acceptance criterion:
    before any test can run, then cleans that schema up (and reaps any
    orphaned ones left by a crashed prior run) via the hooks below.
 2. A whole-run guard that the suite never leaves ``docs/eval-report``
-   dirtier than it found it (acceptance 2), keyed on a CONTENT fingerprint
-   rather than ``git status``'s dirty/clean flag — see the comment above
-   ``_content_fingerprint`` for why the flag alone is not enough.
-3. Relocation of the three inert conftest-level ``pytestmark`` skip guards
+   dirtier than it found it (T-16 acceptance 2 / T-23 acceptance 4), keyed
+   on a CONTENT fingerprint rather than ``git status``'s dirty/clean flag —
+   see the comment above ``_content_fingerprint`` for why the flag alone is
+   not enough. T-23 acceptance 4 requires this to be kept, not weakened or
+   subsumed: a directory-scoped byte fingerprint catches an already-dirty
+   file being silently rewritten (same "M" flag, different bytes), which
+   the whole-tree check below — being ``git status``-based — cannot.
+3. A whole-REPO-TREE guard (T-23 acceptance 2): ``git status --porcelain``
+   must report the same set of dirty lines at session finish as it did at
+   session start, i.e. the suite added, modified, or removed nothing.
+   Pre-existing dirt anywhere in the tree is tolerated via
+   snapshot-before-suite comparison, never by exempting a whole directory.
+   A short, explicit, named list of paths written by the HARNESS (not the
+   test suite) during a live session is excluded — see
+   ``_HARNESS_WRITTEN_PATHS`` for exactly which paths and why.
+4. Relocation of the three inert conftest-level ``pytestmark`` skip guards
    in ``graph/``, ``grounding/`` and ``portal/`` into a
    ``pytest_collection_modifyitems`` hook, which — unlike a sibling
    module's ``pytestmark`` — pytest actually honors for every test file in
    those directories (acceptance 3).
-4. A crash-survival reaper that drops orphaned ``test_*`` schemas left
+5. A crash-survival reaper that drops orphaned ``test_*`` schemas left
    behind by a pytest process that never got to run its own teardown.
 """
 
@@ -30,6 +42,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -150,15 +163,125 @@ _docs_eval_report_baseline: str | None = None
 
 
 # --------------------------------------------------------------------------
-# Session start: capture the docs/eval-report baseline, then reap any
-# orphaned test_* schemas left behind by a pytest process that crashed
-# before its own teardown fixture ran.
+# T-23 acceptance 2: whole-repo-tree cleanliness, by snapshot-before-suite
+# comparison of `git status --porcelain` rather than a "must be empty"
+# assertion — this repo, like docs/eval-report/ above, can carry
+# pre-existing local dirt anywhere in the tree, and that dirt is not this
+# suite's fault. Snapshotting once at session start and once at session
+# finish and diffing the two catches exactly what the suite itself did:
+#
+#   * a path with no line in the baseline that has one at finish -> ADDED
+#     or newly-modified (a clean tracked file can only gain a status line
+#     by being touched; an untracked file can only gain one by being
+#     created).
+#   * a path with a line in the baseline that has none at finish -> REMOVED
+#     or reverted to clean.
+#   * a path whose status LINE itself differs (e.g. " M path" baseline vs.
+#     "MM path" finish, meaning the worktree copy was touched again on top
+#     of a pre-existing staged change) -> also caught, because we diff
+#     whole porcelain lines, not bare paths.
+#
+# This is deliberately independent of, not a replacement for, the
+# docs/eval-report content fingerprint above (T-23 acceptance 4): `git
+# status` reports only a per-path dirty/clean FLAG, so it is blind to a
+# rewrite of an already-dirty file that preserves the same flag (see that
+# section's comment, and the regression proof
+# test_content_fingerprint_catches_a_rewrite_a_status_flag_cant in
+# backend/tests/evals/test_no_docs_writes.py). The fingerprint stays as the
+# strong, content-addressed check for the one directory known to already be
+# dirty at HEAD; this tree-wide check is the coarser, whole-repo complement
+# acceptance 2 asks for. Keeping both is what acceptance 4 requires when a
+# replacement isn't demonstrably stronger everywhere.
+#
+# Real-world wrinkle this repo actually has: a concurrent build harness and
+# monitoring agent legitimately write to a short, FIXED list of paths
+# during a live session, independent of whatever pytest happens to be
+# running at the time. Those are not "pre-existing dirt" (a snapshot taken
+# moments before this run may not have seen them yet) and they are not
+# something this test suite could plausibly produce itself, so a diff
+# against them is excluded by name below — never by exempting a whole
+# directory the suite itself could write into (docs/, backend/, etc. are
+# never excluded).
+# --------------------------------------------------------------------------
+
+_HARNESS_WRITTEN_PATHS = (
+    # Appended by the PostToolUse monitor hook on EVERY tool call (see
+    # .claude/hooks and the monitor script). A concurrent watchdog/build
+    # session making its own tool calls while this suite runs appends to
+    # this file mid-run; nothing inside this pytest process ever writes to
+    # it, and no test in this suite exercises the monitor hook against the
+    # real repo path (backend/tests/hooks/conftest.py's synthetic-project
+    # fixtures redirect CLAUDE_PROJECT_DIR away from the real tree for
+    # exactly this reason).
+    ".claude/monitor/heartbeat.jsonl",
+    # One JSON file per claimed ticket, written/removed by
+    # `.claude/scripts/claim.sh` at claim/close/release — never through the
+    # Edit/Write tool (see .claude/rules/harness-protocol.md). Not
+    # gitignored (unlike .claude/evidence/, which is, and so never appears
+    # in `git status --porcelain` output in the first place — it needs no
+    # entry here). A concurrent session claiming, closing, or releasing a
+    # DIFFERENT ticket while this suite runs changes this directory's
+    # contents and thus its untracked status.
+    ".claude/claims/",
+    # Regenerated by `.claude/scripts/claim.sh` at every ticket
+    # claim/close/release boundary (docs/TASKS.md is explicitly documented
+    # as harness-generated, never hand-edited — see CLAUDE.md). A
+    # concurrent session finishing a different ticket while this suite runs
+    # rewrites it.
+    "docs/TASKS.md",
+)
+
+
+def _excluded_path(path: str, excluded: str) -> bool:
+    """True if ``path`` (as it appears in a porcelain line) is exactly, or —
+    for a directory entry ending in "/" — nested under, ``excluded``."""
+    if excluded.endswith("/"):
+        return path == excluded or path.startswith(excluded)
+    return path == excluded
+
+
+def _is_harness_written_line(line: str) -> bool:
+    # Porcelain v1: 2-char status code, 1 space, then the path (or, for a
+    # rename/copy, "old -> new"). Treat the line as harness-owned only if
+    # EVERY path it names is harness-owned — a rename that moves a
+    # non-harness path in or out of a harness path is still a real event.
+    entry = line[3:]
+    paths = entry.split(" -> ") if " -> " in entry else [entry]
+    return all(
+        any(_excluded_path(path, excluded) for excluded in _HARNESS_WRITTEN_PATHS)
+        for path in paths
+    )
+
+
+def _git_status_lines() -> list[str]:
+    """Whole-tree ``git status --porcelain`` lines, minus lines that are
+    entirely accounted for by ``_HARNESS_WRITTEN_PATHS``."""
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [
+        line for line in result.stdout.splitlines() if line and not _is_harness_written_line(line)
+    ]
+
+
+_git_status_baseline: list[str] | None = None
+
+
+# --------------------------------------------------------------------------
+# Session start: capture the docs/eval-report baseline and the whole-tree
+# git-status baseline, then reap any orphaned test_* schemas left behind by
+# a pytest process that crashed before its own teardown fixture ran.
 # --------------------------------------------------------------------------
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
-    global _docs_eval_report_baseline
+    global _docs_eval_report_baseline, _git_status_baseline
     _docs_eval_report_baseline = _docs_eval_report_fingerprint()
+    _git_status_baseline = _git_status_lines()
 
     if SKIP_DB_TESTS:
         return
@@ -204,9 +327,14 @@ def _reap_orphaned_test_schemas() -> None:
 
 
 # --------------------------------------------------------------------------
-# Session finish: drop this process's own schema (clean-exit cleanup) and
+# Session finish: drop this process's own schema (clean-exit cleanup), then
 # assert docs/eval-report/ is exactly as dirty/clean as it was at the start
-# of the run.
+# of the run (content fingerprint), and separately assert the whole repo
+# tree is exactly as dirty/clean as it was at the start of the run (git
+# status, minus known harness-written paths). Both checks run regardless of
+# each other's outcome — neither may mask the other — and either failing
+# sets exitstatus = 1; a later success in this function must never reset it
+# back to 0.
 # --------------------------------------------------------------------------
 
 
@@ -221,13 +349,27 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         except Exception:
             pass  # cleanup failure must never mask the real test results
 
-    if _docs_eval_report_baseline is None:
-        return
-    after = _docs_eval_report_fingerprint()
-    if after != _docs_eval_report_baseline:
-        session.exitstatus = 1
-        print(
-            "\nT-16 acceptance 2 VIOLATION: docs/eval-report/ content changed "
-            f"during this run.\nbefore fingerprint: {_docs_eval_report_baseline!r}"
-            f"\nafter fingerprint:  {after!r}"
-        )
+    if _docs_eval_report_baseline is not None:
+        after = _docs_eval_report_fingerprint()
+        if after != _docs_eval_report_baseline:
+            session.exitstatus = 1
+            print(
+                "\nT-16 acceptance 2 VIOLATION: docs/eval-report/ content changed "
+                f"during this run.\nbefore fingerprint: {_docs_eval_report_baseline!r}"
+                f"\nafter fingerprint:  {after!r}"
+            )
+
+    if _git_status_baseline is not None:
+        after_lines = _git_status_lines()
+        before_set = set(_git_status_baseline)
+        after_set = set(after_lines)
+        added = sorted(after_set - before_set)
+        removed = sorted(before_set - after_set)
+        if added or removed:
+            session.exitstatus = 1
+            print(
+                "\nT-23 acceptance 2 VIOLATION: repo tree not clean after this run "
+                "(git status --porcelain changed, excluding known harness-written "
+                f"paths — see _HARNESS_WRITTEN_PATHS).\nadded:   {added!r}"
+                f"\nremoved: {removed!r}"
+            )

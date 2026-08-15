@@ -21,14 +21,39 @@ a content rewrite of an already-dirty file (report.md embeds a `Generated:
 its "M path" flag reads identically whether or not a test rewrites it
 further). ``test_content_fingerprint_catches_a_rewrite_a_status_flag_cant``
 below is the regression proof for that exact gap.
+
+T-23 acceptance 3: the child pytest process spawned below must NOT inherit
+this (parent) process's ``OTHRAM_TEST_SCHEMA`` value. ``subprocess.run``'s
+default (no ``env=``) is to inherit the whole current environment, so
+without the explicit override below the child ends up sharing the exact
+same Postgres schema its parent is actively using — not an isolated schema
+of its own. ``backend/tests/conftest.py`` (the pytest root conftest, which
+the child also imports) unconditionally runs ``DROP SCHEMA IF EXISTS <own>
+CASCADE`` at every session's end, with no way to tell "a schema this
+process derived and owns" from "a schema merely inherited from a parent's
+environment" — so the child's own teardown CASCADE-drops the schema its
+parent (and the rest of the enclosing full-suite run) is still relying on,
+mid-suite. That drop is silent: ``data.db.get_connection`` unconditionally
+re-issues ``CREATE SCHEMA IF NOT EXISTS`` on every connection, so the
+schema NAME reappears (empty) the instant anything reconnects, while every
+table and row it held is gone. Popping ``OTHRAM_TEST_SCHEMA`` from the
+child's env below lets the child's own conftest derive a fresh,
+independent schema for itself instead — exactly the per-process isolation
+T-16 already gives any other pytest process that starts with the variable
+unset — so the child's teardown only ever drops a schema it exclusively
+owns. See ``backend/tests/test_schema_isolation_inheritance.py`` for the
+regression proof.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+from data.db import TEST_SCHEMA_ENV_VAR
 
 # backend/tests/evals/test_no_docs_writes.py -> evals -> tests -> backend -> repo root
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -60,6 +85,19 @@ def _docs_eval_report_fingerprint() -> str:
     return _content_fingerprint(REPO_ROOT / "docs" / "eval-report")
 
 
+def _child_env() -> dict[str, str]:
+    """The environment the child pytest process below is spawned with:
+    this process's own environment, MINUS ``OTHRAM_TEST_SCHEMA`` (T-23
+    acceptance 3 — see this module's docstring). Popping rather than
+    leaving it inherited means the child's own conftest.py derives an
+    independent schema for itself (its own PID always differs from this
+    process's), instead of sharing — and later CASCADE-dropping — the
+    schema this (parent) process is still actively using."""
+    env = dict(os.environ)
+    env.pop(TEST_SCHEMA_ENV_VAR, None)
+    return env
+
+
 def test_evals_suite_leaves_docs_untouched() -> None:
     before = _docs_eval_report_fingerprint()
 
@@ -76,6 +114,7 @@ def test_evals_suite_leaves_docs_untouched() -> None:
             _SELF,
         ],
         cwd=REPO_ROOT,
+        env=_child_env(),
         capture_output=True,
         text=True,
         timeout=300,
