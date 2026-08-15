@@ -192,7 +192,7 @@
 - **Depends on**: none · **parallel_safe**: false
 - **Non-goals**: No new product-behaviour tests; this completes T-16's own evidence; No weakening of any assertion to make concurrency pass
 
-### T-24: Schema override is structurally test-only  `[queue]`
+### T-24: Schema override is structurally test-only  `[resolved]`
 - **Objective**: The per-process Postgres schema override honours its env signal wherever it appears, so a leaked env var silently switches schemas in production; inertness is convention, not structure.
 - **Acceptance**: 1) the override is honoured only when an unambiguous test-context signal is also present (e.g. PYTEST_CURRENT_TEST set by pytest itself), and the gating condition is documented in db.py 2) a test spawns a fresh non-pytest interpreter with the override env var set and asserts get_connection() still uses the default schema 3) existing pytest-side schema isolation behaviour is unchanged: current isolation tests stay green
 - **Verify**: `uv run pytest -m "not live" backend/tests/data backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q`
