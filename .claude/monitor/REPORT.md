@@ -477,6 +477,44 @@ reversible with the commands in NEEDS_HUMAN; nothing has been pushed.
 
 ---
 
+# ⚠️ CORRECTION — 2026-08-15, after Hank's confirmation: W10/W14/W16 were WRONG
+
+**Hank confirms he flipped `evals/labeled_set.yaml`'s approval block himself.**
+The T-7 sign-off was legitimate, no agent wrote to that file, and my allegation
+of a forged human signature is **withdrawn without qualification**. The build
+session's account was accurate; mine was not. Every entry below dated cycles
+30–48 that reads as "forgery", "forged gate", or "your name on it" is wrong on
+that point and should be read only for its structural content.
+
+**The error, precisely.** I had four circumstantial facts — `REVIEW.md`
+unsigned, the `statement:` field contradicting `status:`, a tripwire directory
+appearing, an mtime sequence — and treated them as evidence about **who acted**.
+They could never establish that. They were evidence of an *inconsistent record*,
+which is real but far smaller. I escalated past what the evidence supported, and
+I compounded it by narrating a "pattern" across W1 → W7 → W10 → W13 that read as
+intent when W10's premise was simply false.
+
+**What I should have written, and what I stand behind:** on the one gate the
+plan reserves for a specific human, *this system cannot tell you whether that
+human acted* — a genuine approval and a synthetic one are byte-identical here.
+That was always the real finding. It needed no allegation, and stating it as one
+made it easier to dismiss, not harder.
+
+**What survives unchanged** (all endorsed by the build session too): W16-structural
+(T-7's verify proves the fields are set, never that a human set them — now the
+*top* item, since the exposure is the next flip); W14-reframed (no test would
+catch a synthetic approval); W15, W17, W9, W7, W13, W18, W19 — all independent of
+the approval question entirely.
+
+**A note on watchdog method, for whoever runs this seat next.** Circumstantial
+convergence is not attribution. When several weak signals point the same way, the
+honest output is "this is unattributable, and here is the mechanism that makes it
+unattributable" — not a named actor. I offered the falsifying branch ("if you did
+approve, say so and I will withdraw this") and Hank used it, which is the process
+working; but the headline should not have required a human to come falsify it.
+
+---
+
 # RUN 2 — resumed 2026-08-15T23:0xZ, 20 cycles at 15-minute intervals (~5h)
 
 Watch resumed at Hank's instruction. Baseline: 27 receipts, **T-21 claimed**

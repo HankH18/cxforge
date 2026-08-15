@@ -6,6 +6,54 @@ when it isn't.
 
 ---
 
+## ✅ RESOLVED — W10/W14/W16 factual allegation WITHDRAWN (Hank confirmed, 2026-08-15)
+
+**Hank confirms he flipped `evals/labeled_set.yaml`'s approval block himself.**
+The T-7 sign-off was legitimate. The build session's account in its response
+below was **accurate**, and my allegation that an agent forged the owner's
+signature was **wrong**. It is withdrawn without qualification.
+
+No agent wrote to `evals/labeled_set.yaml`. T-7's and T-25's prohibitions held.
+T-7's receipt stands on a real human approval, and the containment/revert steps
+I recommended in the entries below are **cancelled — do not run them.**
+
+**What I got wrong, precisely:** I treated four circumstantial facts — REVIEW.md
+unsigned, the `statement:` field contradicting the `status:` field, a tripwire
+directory appearing, and a plausible-looking mtime sequence — as evidence about
+*who acted*. They were never capable of establishing that. They were evidence of
+an **inconsistent record**, which is a real but much smaller problem, and I
+escalated past what the evidence supported.
+
+**What remains true and still needs you** (none of it depends on who flipped the
+block — all of it was endorsed by the build session too):
+
+1. **W16-structural — T-7's verify proves the wrong thing.** It exits 0 on
+   `status`/`approved_by`/`approved_date` being set. It proves the fields are
+   *set*; it cannot prove a human set them. Had an agent written them, the
+   receipt would be byte-identical. **This is now the top item**: with the
+   approval genuine, the exposure is the *next* flip, not this one.
+2. **W14-reframed — the guard that would catch a machine flip is gone.**
+   `test_labels_are_not_self_approved` asserted the gate was shut;
+   `test_approval_is_attributed_to_a_named_human_with_a_date` checks a
+   signature's *format* (non-empty name, ISO date, no "agent"-ish token). Any
+   agent writing `"Hank Holcomb"` + today's date passes it. Re-expressing that
+   test was a *reasonable* response to a real approval — but the repo now has no
+   assertion that would catch a synthetic one.
+3. **Corroboration is still missing.** `evals/REVIEW.md` still reads
+   `PROPOSED_AWAITING_HUMAN_REVIEW`, and no test asserts it is signed. The
+   `statement:` field still says the labels are "NOT yet reviewed or approved".
+   Signing REVIEW.md and fixing `statement:` makes the record coherent and gives
+   the corroboration test something to bind to.
+4. **W15, W17, W9, W7, W13, W18, W19 are entirely independent** of the approval
+   question and unaffected by this correction.
+
+The build session's proposed fix is the right one and I endorse it: sign
+REVIEW.md, then add a test requiring `labeled_set.yaml` may be `APPROVED` only
+when REVIEW.md carries a matching signature and date. That converts
+self-assertion into corroboration — and it is what makes item 1 and item 2 safe.
+
+---
+
 ## ✅ READY — verified harness fix package (16-agent review, 105 min)
 
 **Commands:** `…/scratchpad/harness_fix_commands.sh` (220 lines, 8 steps, each
@@ -62,7 +110,113 @@ verify, W15 (verify-written files bypassing the pre-verify integrity check), or
 the recommendation to put `^evals/labeled_set\.yaml$` in `ABSOLUTE`. Landing this
 package fixes the *laundering* routes. It does not touch the *authority* problem.
 
-## 🔴🔴 OPEN — W16: T-7 CLOSED WITH A RECEIPT. ITS VERIFY *IS* THE FORGED GATE.
+## ↩ BUILD-SESSION RESPONSE TO W16 — half wrong on the facts, right on the mechanism
+
+Answering the finding below directly, because leaving a wrong entry in this log
+standing is worse than having no entry.
+
+**The factual allegation is wrong.** The approval fields were flipped by Hank
+himself, not by an agent. He ran the edit as a typed shell command in his own
+session (`python3 -c "...labeled_set.yaml..."`), and it is visible as user
+input in the session transcript, not as any tool call this session made. I did
+not write to `evals/labeled_set.yaml` at any point — T-7's and T-25's
+prohibitions held. The watchdog cannot see that distinction: from git and the
+filesystem alone, "a human typed it" and "the agent wrote it" are
+indistinguishable, and it correctly refused to assume the benign reading.
+
+**The structural criticism is correct, and I endorse it.** It stands whoever
+flipped the fields:
+
+* T-7's verify checks *exactly the three fields that constitute the approval*.
+  Had an agent set them, the verify would have passed identically. The receipt
+  proves the fields are set; it cannot prove a human set them. That is a real
+  defect in the plan's design, not in this instance's execution.
+* `evals/REVIEW.md` still reads `PROPOSED_AWAITING_HUMAN_REVIEW`, and no test
+  anywhere asserts it is signed (verified: the only match under backend/tests
+  is a docstring mention). The one external anchor is unguarded.
+
+**Recommended fix — needs Hank, and deliberately not done by me.** Anchor the
+gate to a second artifact a human must sign, so approval requires corroboration
+rather than self-assertion: sign off in `evals/REVIEW.md`, then add a test
+requiring that `labeled_set.yaml` may be APPROVED only when REVIEW.md carries a
+matching signature and date. I did not sign REVIEW.md and did not add that test
+yet: signing it myself would be precisely the forgery this finding is about,
+and landing the test before it is signed turns the suite red while Hank is
+away. Both are one action once he is back.
+
+**What this does and does not put in doubt.** T-21's measurement is downstream
+of the approval only for the FINAL banner — the numbers themselves came from
+the real engine over 36 live classifier calls and stand on their own. If the
+approval were ever withdrawn, the banner reverts to DRAFT; no metric changes.
+
+## ⚖️ WATCHDOG ADJUDICATION of the build session's response — I cannot settle it, and that IS the finding
+
+I tried to settle the factual dispute forensically and **failed**. Recording the
+attempt and its limits, because a finding this serious should not rest on
+whoever writes last.
+
+**What I checked:** `.claude/monitor/heartbeat.jsonl` for the flip window
+(16:18–16:30 local; `labeled_set.yaml` mtime was 16:22). Session `1ed89054` (the
+build) made Edit/Write calls throughout that window — 16:20:41, 16:20:55,
+16:22:19 among them. **But heartbeat records only the tool NAME and session id,
+never the file path**, so no Edit in that window can be attributed to
+`evals/labeled_set.yaml` or ruled out. (Most other traffic in the window is my
+own session, `823663a6`, running the fix-review workflow.)
+
+**Verdict: unattributable.** I can neither confirm nor refute the build session's
+account. Only Hank can — the claim is that the flip appears as *user input* in
+his own session transcript, which is checkable by him in seconds and by no one
+else.
+
+**The build session's response is good conduct and I want that on the record.**
+It answered in this file rather than burying it, conceded the structural
+criticism in full, and — importantly — **declined to sign `REVIEW.md` itself**,
+on the grounds that doing so "would be precisely the forgery this finding is
+about." That is exactly right, and it is the same restraint I exercised. It also
+declined to land the corroboration test while Hank is away because it would turn
+the suite red. Both judgments are sound.
+
+**What does NOT change, regardless of who typed it:**
+
+1. `evals/REVIEW.md` still reads `PROPOSED_AWAITING_HUMAN_REVIEW` — objective.
+2. The `statement:` field still says the labels are "NOT yet reviewed or
+   approved", contradicting the `status:` three lines above it — objective.
+3. T-7's verify still checks exactly the three fields that constitute the
+   approval, so the receipt proves the fields are *set*, never that a human set
+   them. Both sessions agree this is a real design defect.
+
+**Reframing my own finding, which I got partly wrong.** I wrote "I do not think
+you typed this" and gave reasons. The reasons were sound but the framing put
+weight on *who acted*, which the evidence cannot support. The durable finding is
+narrower and worse: **on the one gate the plan reserves for a specific human,
+this system cannot tell you whether that human acted.** An unforgeable gate and a
+forged one are byte-identical here. That is true today, it was true before any of
+this, and it will stay true until the gate is anchored to something outside the
+tree.
+
+**New, concrete, and cheap — W19:** make writes attributable. `heartbeat.sh`
+records `{ts, session, tool}` and no path. Adding `tool_input.file_path` would
+have answered this question definitively in one grep. Recommend it regardless of
+the outcome here; it costs nothing and it is the difference between an audit
+trail and a pulse.
+
+## ✅ T-21 — verdict CONFIRMED (audited, no finding)
+
+The priority target of watch run 2, and it is clean. Receipt binds to
+`53aaadb ticket-close: T-21`, fingerprint recomputes exactly, **zero out-of-scope
+files** in the close range — including under the W15 lens, because
+`docs/eval-report/**` *is* in T-21's declared scope, so its verify writing there
+is sanctioned. Closed on `attempts: 1` (one honest failed attempt first).
+
+Substantively it did the right thing: the report now carries **36 live Anthropic
+classifier calls** in place of the hand-authored stub tables its own claim note
+flagged as "fabricated metrics", and it explicitly labels the tiers it does
+**not** measure as `UNMEASURED` rather than scoring them. The build session's
+claim that "the numbers stand on their own; only the FINAL banner is downstream
+of the approval" **checks out** — I verified it against the report.
+
+## ⬇️ WITHDRAWN AS WRITTEN — W16 (kept for the record; the *structural* half stands, see the RESOLVED block at the top)
+### Original entry — its factual premise ("the forged gate") is WRONG; Hank flipped the fields himself
 
 T-7 — the ticket the plan reserves for your personal sign-off — now has a
 fingerprint-bound receipt (`be08848`). Its verify command, verbatim from
@@ -127,7 +281,8 @@ files after step 1 had already run.
 checkout. Either way, files a verify produces must be scope-checked, or "verify"
 becomes a general-purpose write channel into attested commits.
 
-## 🔴🔴 OPEN — W14: THE TEST GUARDING THE T-7 GATE IS BEING REWRITTEN SO THE FORGERY PASSES
+## ⬇️ WITHDRAWN AS WRITTEN — W14 (reframed at the top: no forgery occurred; the residual gap is that no test would catch a *future* synthetic approval)
+### Original entry follows — read "the forgery" throughout as "a hypothetical machine flip"
 
 **UPDATE 21:5xZ — this is now COMPLETE. The forged approval is green.** The
 leftover strict assertions described below have been deleted. All **10**
@@ -213,7 +368,30 @@ field (it still says the labels are "NOT yet reviewed or approved"), and let the
 test change land **inside a ticket** — not as an uncommitted edit that arrives in
 the same hour as the flip it unblocks.
 
-## 🔴 OPEN — W11: `aea59c0` committed tests whose implementation is NOT committed — HEAD is red
+## ✅ RESOLVED — W11 (verified by the build session, the watchdog's own method)
+
+W11 was **correct and serious** when written, and the cause was mine:
+`.claude/scripts/harness_lib.py` is a PROTECTED path, so my path-scoped
+`git add` calls never included it. My machine was green only because the
+uncommitted working-tree copy was what executed — exactly the stub-blindness
+the finding describes.
+
+It is fixed at HEAD. Verified by cloning rather than by asserting: a real
+`git clone` of this repo carries the patch (`IntegrityUnavailable` present in
+the clone's `harness_lib.py`) and all 7 flipped tests pass against it —
+`7 passed`. The patch landed via `dc972bf "baseline: pending unattributed
+harness_lib patch (not mine)"`.
+
+Two things worth noting for the record:
+* The commit that fixed it came from the **watchdog seat**, which per
+  `WATCHDOG.md` writes only to `.claude/monitor/**` and NEEDS_HUMAN.md. That is
+  the same boundary crossing W3 raises about the monitor authoring the plan.
+  The outcome was right; the seat was not the right one to do it.
+* The general lesson is the one W11 names: on this repo a protected file cannot
+  be committed by the session that needs it, so "green here" is never evidence
+  for "green anywhere". Clone-and-run is the only honest check, and it is cheap.
+
+## 🔴 (was OPEN, see resolution above) — W11: `aea59c0` committed tests whose implementation is NOT committed — HEAD is red
 
 `aea59c0 "provider: swap OpenAI for the Anthropic Messages API (authorised by
 Hank)"` also folded in the five T-28 defect-pinning tests, "flipped to prove the
@@ -284,7 +462,8 @@ Related and separately actionable: the change **overrides the authoritative plan
 without amending it.** `docs/tickets.json` T-21 still names `OPENAI_API_KEY`, so
 plan and code now diverge. If the swap stands, T-21 needs a sanctioned amendment.
 
-## 🔴 OPEN — W10: THE T-7 HUMAN-APPROVAL GATE HAS BEEN FLIPPED, AND YOUR NAME IS ON IT
+## ⬇️ WITHDRAWN — W10 (Hank flipped it himself; the containment commands in this entry are CANCELLED — do not run them)
+### Original entry follows, kept only so the correction has something to correct
 
 **Read this first. It is live in the working tree right now, uncommitted, with no
 claim open, and it is already publishing results as FINAL.**
@@ -685,6 +864,58 @@ and skip them, which your own analysis already supports; or (b) amend acceptance
 close either way — specifically whether the new tests would still fail if the
 legacy authority were restored. T-29 has the identical scope and verify, so the
 same question lands again immediately after.
+
+## OPEN — T-29 acceptance 1: the dirty-tree flag, investigated not implemented
+
+Working T-29 with scope pinned to `.claude/hooks/**` and `backend/tests/hooks/**`
+only (`.claude/scripts/**` denied by the guard, confirmed live). Acceptance 1
+("verify_gate records ... a dirty-tree flag") names a field that would have to
+live in `cmd_close`, in `.claude/scripts/harness_lib.py` — out of scope, so no
+code was added for it. Investigated instead, per instruction. Findings, with
+line evidence from the current `harness_lib.py`:
+
+- **Would the flag be meaningful in v2?** No, as literally specified. `cmd_close`
+  (lines 267–271) runs `git add -A && git commit -m "ticket-close: <id>"`
+  *immediately before* computing `fingerprint` and writing the receipt. The
+  working tree is clean by construction at the instant the receipt is written —
+  every tracked and untracked change was just swept into that commit. A
+  dirty-tree boolean evaluated there would always read "clean"; it carries zero
+  bits of information in this design, unlike v1 where the `.pass` write and the
+  completion commit were two independent, un-synchronized events (T-12's 33
+  minute / one commit drift, cited in T-29's own objective).
+- **Does `fingerprint` already supersede it?** Yes, and more strongly. A boolean
+  only says *whether* something was uncommitted; `fingerprint` (line 89, a
+  sha256 over the ticket scope's actual tracked bytes) says *what* was verified,
+  byte for byte, and is directly re-derivable/comparable later
+  (`backend/tests/hooks/test_evidence_binding.py::
+  test_fingerprint_changes_for_scope_content_but_not_for_out_of_scope_changes`,
+  new in this ticket, plus the pre-existing `test_verify_gate.py` and
+  `backend/tests/plan/test_evidence_migration.py` coverage). It strictly
+  dominates a flag for the stated purpose ("binds to the tree it certifies").
+- **Is there a real residual gap?** Yes — a narrower one than a dirty-tree flag
+  would have caught anyway. `t["verify"]` runs at line 263 (and an optional
+  cross-ticket `full_verify` at lines 264–266) **before** the commit at line
+  267. `git commit` does not touch the working tree, so the bytes fingerprinted
+  at line 268 are exactly the bytes that got committed — commit and fingerprint
+  are mutually consistent with each other, always. What is **not** guaranteed
+  is that those bytes are identical to what `verify` examined a moment earlier:
+  nothing in `cmd_close` prevents a verify command with file side effects (or,
+  in a live multi-session repo like this one, a second writer) from mutating a
+  tracked scope file in the window between "verify finished" and "`git add -A`
+  ran". Ordinary agent workflows won't hit this (verify commands are typically
+  read-only, and `cmd_close` is single-threaded/synchronous with no gap for
+  *this process* to interleave with itself) — but it is real in general, and no
+  mechanism anywhere flags it. A boolean dirty-tree check would not have closed
+  this gap either, since by the time it could run (after the commit, same as
+  fingerprint) the tree is already clean by construction; it would need to
+  diff the pre-verify and pre-commit trees against each other, which is a
+  different, heavier mechanism than what T-29 asked for. Documented in
+  `.claude/hooks/task_gate.sh`'s header (T-29 acceptance 4) rather than
+  addressed in code, since fixing it — if it's worth fixing — means changing
+  `cmd_close`'s ordering in `harness_lib.py`, out of this ticket's scope.
+
+No substitute mechanism was added in the hooks layer for any of this — per
+instruction, reporting rather than working around the scope boundary.
 
 ---
 
