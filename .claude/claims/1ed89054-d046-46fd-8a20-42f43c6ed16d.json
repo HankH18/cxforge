@@ -1,0 +1,8 @@
+{
+ "ticket": "T-14",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "note": "Newly unblocked by T-15's receipt; next ready id after T-13. Remint \u2014 verify covers backend/tests/plan and backend/tests/hooks, both green.",
+ "start_commit": "dcf839b2deaad9289d1142db9a8e3c44c76c1a20",
+ "attempts": 0,
+ "ts": 1786761515
+}
