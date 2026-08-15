@@ -1,6 +1,6 @@
 # Task Graph (GENERATED from tickets.json — do not hand-edit)
 
-### T-0: Repo bootstrap and test harness  `[in_progress]`
+### T-0: Repo bootstrap and test harness  `[resolved]`
 - **Objective**: Monorepo skeleton so every downstream verify command runs.
 - **Acceptance**: 1) backend/ (FastAPI app stub), portal/ (Vite React TS stub), evals/, docs/ exist 2) docker-compose brings up Postgres 16 + pgvector healthy 3) pytest markers contract, grounding, live registered 4) GitHub Actions workflow runs ruff + mypy + pytest -m 'not live' only 5) promptfoo config stub and .env.example present
 - **Verify**: `docker compose up -d db && uv run pytest -m "not live" && uv run ruff check . && uv run mypy backend && (cd portal && npm run build && npm test)`
