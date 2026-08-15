@@ -1,34 +1,52 @@
 {
   "hooks": {
-    "TaskCompleted": [
-      {
-        "hooks": [
-          { "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/verify_gate.sh" }
-        ]
-      }
-    ],
     "PreToolUse": [
-      {
-        "matcher": "TaskUpdate",
-        "hooks": [
-          { "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/verify_gate.sh" }
-        ]
-      },
       {
         "matcher": "Edit|Write",
         "hooks": [
-          { "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/scope_guard.sh" }
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/scope_guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "TaskUpdate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/task_gate.sh"
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/task_gate.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/heartbeat.sh"
+          }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/stop_guard.sh" }
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/stop_guard.sh"
+          }
         ]
       }
     ]
