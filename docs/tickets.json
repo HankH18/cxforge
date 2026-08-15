@@ -16,7 +16,7 @@
         "GitHub Actions workflow runs ruff + mypy + pytest -m 'not live' only",
         "promptfoo config stub and .env.example present"
       ],
-      "verify": "docker compose up -d db && uv run pytest -m \"not live\" && uv run ruff check . && uv run mypy backend && cd portal && npm run build && npm test",
+      "verify": "docker compose up -d db && uv run pytest -m \"not live\" && uv run ruff check . && uv run mypy backend && (cd portal && npm run build && npm test)",
       "scope": [
         "backend/**",
         "portal/**",
@@ -314,7 +314,7 @@
         "metrics panel (R13)",
         "builds clean; component tests for gate and edit-approve flows against a mocked API"
       ],
-      "verify": "cd portal && npm run build && npm test",
+      "verify": "(cd portal && npm run build && npm test)",
       "scope": [
         "portal/**"
       ],
@@ -646,7 +646,7 @@
         "the parity check is wired into .github/workflows/ci.yml, asserted by a test that reads the workflow file",
         "the parity check is demonstrated FAILING against a deliberately renamed backend field before being wired into CI"
       ],
-      "verify": "uv run pytest -m \"not live\" backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q && cd portal && npm run build && npm test",
+      "verify": "uv run pytest -m \"not live\" backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q && (cd portal && npm run build && npm test)",
       "scope": [
         "portal/**",
         "backend/src/portal/**",
