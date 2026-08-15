@@ -64,7 +64,7 @@
 - **Depends on**: T-6 · **parallel_safe**: true
 - **Non-goals**: No expanding the set past ~60; No synthetic label approval — human sign-off is external ground truth
 
-### T-8: Portal API and approval gate  `[queue]`
+### T-8: Portal API and approval gate  `[resolved]`
 - **Objective**: Feed, draft edit/approve/reject, gate toggle, metrics (R10–R13).
 - **Acceptance**: 1) endpoints exactly as pinned, X-Portal-Token auth 2) gate ON holds drafts pending; approve sends via HelpdeskPort and records gated_sent 3) metrics computed per the pinned definitions — gated sends excluded from the human-avoidance numerator 4) API tests cover both gate states and metric math
 - **Verify**: `uv run pytest -m "not live" backend/tests/data backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q`
