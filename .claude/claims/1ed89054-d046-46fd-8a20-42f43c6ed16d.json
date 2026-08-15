@@ -1,8 +1,0 @@
-{
- "ticket": "T-22",
- "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
- "note": "First of the five D1-unblocked tickets and the root of their chain (T-26 and T-27 both depend on it; T-28 and T-29 follow T-27). Now workable because the guard yields to a ticket's own declared scope.",
- "start_commit": "11fe4d1a5d30f86720b6502ef70f876e89560f44",
- "attempts": 0,
- "ts": 1786823582
-}
