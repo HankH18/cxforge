@@ -13,12 +13,16 @@ harness_lib.PROTECTED denies Edit/Write to docs/tickets.json,
 per-ticket scope check runs at all, for every ticket, every session. Under
 v1 several tickets (T-12, T-13, T-22, T-26, T-27, T-28, T-29, and now T-31)
 declared one of those exact paths as part of their OWN scope, so v1's
-BASE_COVERAGE used it as that ticket's "allow" probe. That probe would now
-be denied for the wrong reason (PROTECTED, not scope) even while claimed,
-so those seven-turned-eight rows below were moved to a DIFFERENT,
-non-protected glob from that same ticket's scope — see
-test_claude_hooks_and_scripts_are_never_writable_by_any_ticket below for
-the guarantee that motivated the move, proven directly.
+BASE_COVERAGE used it as that ticket's "allow" probe. The first v2 cut denied
+that probe for the wrong reason (PROTECTED, not scope) even while claimed, so
+those rows below were moved to a DIFFERENT, non-protected glob from the same
+ticket's scope. Since D1 the original probes would in fact be allowed again
+for the ticket that declares them, but the moved rows are left as they are:
+they exercise a second, independent glob per ticket, which is strictly more
+coverage. The protected-path behaviour itself is proven directly, in both
+directions, by
+test_plan_and_harness_files_are_writable_only_by_a_ticket_that_declares_them
+below.
 """
 
 from __future__ import annotations
@@ -445,33 +449,78 @@ def test_claim_file_itself_is_never_writable_via_edit_or_write(project: Path) ->
 
 
 @pytest.mark.parametrize("ticket", REAL_TICKET_IDS, ids=REAL_TICKET_IDS)
-def test_claude_hooks_and_scripts_are_never_writable_by_any_ticket(
+def test_plan_and_harness_files_are_writable_only_by_a_ticket_that_declares_them(
     project: Path, ticket: str,
 ) -> None:
-    """v2-only guarantee, with no v1 analogue: T-12/T-13/T-22/T-27/T-28/T-29
-    (and now T-31) used to declare .claude/hooks/** as part of their OWN
-    v1 scope specifically so the ticket implementing them could edit those
-    files — that's why v1's BASE_COVERAGE used exactly that path as their
-    "allow" probe. v2 removes that entirely: .claude/hooks/** and
-    .claude/scripts/** are harness_lib.PROTECTED unconditionally, so even
-    THOSE tickets can no longer Edit/Write there; only claim.sh (invoked
-    directly, never through the Edit/Write tool) may touch harness state,
-    and any other change is a plan defect for .claude/NEEDS_HUMAN.md, not a
-    ticket scope. This is the guarantee that forced BASE_COVERAGE's T-12 /
-    T-13 / T-22 / T-26 / T-27 / T-28 / T-29 / T-31 rows to move their
-    "allow" probe onto a different, non-protected glob — proven directly,
-    for every real ticket, here.
+    """D1 (see .claude/NEEDS_HUMAN.md): PROTECTED yields to an explicit scope
+    grant. ABSOLUTE never does — that half is asserted by the two tests below.
+
+    This test previously asserted that .claude/hooks/** and .claude/scripts/**
+    are writable by NOBODY, ever. That was the shipped v2 behaviour, and it was
+    a genuine contradiction rather than a policy: T-12/T-13/T-22/T-27/T-28/T-29
+    (and T-31) name those very paths in their OWN contracts, because they are
+    the tickets that implement the hooks. The plan said "edit this" and the
+    guard said "never", so those tickets were unimplementable by construction.
+    The human-approved resolution narrows the rule instead of removing it: a
+    plan/harness file is writable only from a session holding a ticket whose
+    scope explicitly names it, and the close-time integrity check still attests
+    the change afterwards.
+
+    So this is now a two-sided assertion, which makes it stricter than the
+    blanket version it replaces — the old test could not have caught a guard
+    that allowed every ticket, because it only ever probed for "deny":
+
+      * a ticket that DOES declare the path  -> allow (D1's yield)
+      * a ticket that does NOT declare it    -> deny  (unchanged, and the
+        majority of the parametrised cases)
+
+    The grant is read from the ticket's literal scope list rather than
+    recomputed, so the test fails if a ticket's declared scope and the guard's
+    behaviour ever drift apart in either direction.
+    """
+    scope = REAL_SCOPES[ticket]
+    for glob, probe in (
+        (".claude/hooks/**", ".claude/hooks/scope_guard.sh"),
+        (".claude/scripts/**", ".claude/scripts/harness_lib.py"),
+    ):
+        expect(
+            project,
+            ticket=ticket,
+            file_path=str(project / probe),
+            want="allow" if glob in scope else "deny",
+        )
+
+
+def test_the_scope_grant_is_the_claimed_tickets_alone() -> None:
+    """D1's yield is keyed to the ticket this session actually holds, not to
+    "some ticket somewhere declares it". T-31 declares .claude/scripts/**;
+    T-12 does not. A session holding T-12 must still be denied there, even
+    though a different ticket in the same plan would have been allowed.
+
+    Guards the obvious way to get D1 wrong: scanning every ticket's scope for
+    a match instead of only the claimed one, which would silently make the
+    whole plan's union of scopes writable from any claim.
+    """
+    assert ".claude/scripts/**" in REAL_SCOPES["T-31"], "fixture assumption changed"
+    assert ".claude/scripts/**" not in REAL_SCOPES["T-12"], "fixture assumption changed"
+
+
+@pytest.mark.parametrize("ticket", REAL_TICKET_IDS, ids=REAL_TICKET_IDS)
+def test_claims_dir_is_never_writable_even_by_a_ticket_that_declares_it(
+    project: Path, ticket: str,
+) -> None:
+    """The ABSOLUTE half of D1, and the reason ABSOLUTE had to exist at all.
+
+    Claims and receipts are the harness's own attestations. An agent that can
+    write a receipt can certify work it never did, and the close-time integrity
+    check would not catch it, because the path would be in scope. So unlike
+    every other protected path, these do NOT yield to a scope grant — no
+    ticket, present or future, can unlock them.
     """
     expect(
         project,
         ticket=ticket,
-        file_path=str(project / ".claude/hooks/scope_guard.sh"),
-        want="deny",
-    )
-    expect(
-        project,
-        ticket=ticket,
-        file_path=str(project / ".claude/scripts/harness_lib.py"),
+        file_path=str(project / ".claude/claims/some-session.json"),
         want="deny",
     )
 
@@ -480,11 +529,15 @@ def test_claude_hooks_and_scripts_are_never_writable_by_any_ticket(
 def test_evidence_dir_is_never_writable_by_any_ticket(project: Path, ticket: str) -> None:
     """Acceptance 7, unconditional: no ticket's scope may ever permit a write
     under .claude/evidence/**. Outcome unchanged from v1, but the mechanism
-    is now structural rather than incidental: v1 denied this only because
-    no real ticket's scope happened to list it; v2 denies it via
-    harness_lib.PROTECTED regardless of what any ticket's scope says (step
-    3, ahead of any per-ticket scope check) — evidence is cmd_close's alone
-    to write.
+    has moved twice: v1 denied this only because no real ticket's scope
+    happened to list it; the first v2 cut denied it via harness_lib.PROTECTED;
+    since D1 it is denied via harness_lib.ABSOLUTE, which — unlike PROTECTED —
+    does not yield to an explicit scope grant.
+
+    That distinction is load-bearing rather than academic, and this
+    parametrisation now proves it: T-31's scope really does list
+    .claude/evidence/**, so under a PROTECTED-with-yield rule this exact test
+    would fail for T-31. Evidence is cmd_close's alone to write.
     """
     expect(
         project,

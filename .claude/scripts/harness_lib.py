@@ -16,7 +16,16 @@ META_ALLOW = [r"^\.claude/NEEDS_HUMAN\.md$", r"^\.claude/monitor/.*$", r"^docs/T
 # Harness-written state: exempt from the close-time integrity diff (it changes at every
 # boundary by design) but still Edit/Write-DENIED via PROTECTED — only scripts write it.
 HARNESS_STATE = [r"^\.claude/claims/.*$", r"^\.claude/evidence/.*$", r"^\.claude/monitor/.*$"]
-# Plan + harness files: no session edits these via Edit/Write; changes are plan defects.
+# Receipts and claims: NEVER agent-writable, by any session, under any claim. These are
+# the harness's own attestations — an agent that can forge a receipt can certify anything,
+# so no ticket scope may unlock them. Checked before PROTECTED; never yields to scope.
+ABSOLUTE = [r"^\.claude/claims/.*$", r"^\.claude/evidence/.*$"]
+# Plan + harness files: denied by default — a session not given these in a ticket contract
+# has no business editing the plan or the harness. Unlike ABSOLUTE this YIELDS to an
+# explicit scope grant: if the CLAIMED ticket's own scope names the path, the plan has
+# sanctioned the edit and the close-time integrity check will attest it. Without that
+# yield, T-22/T-26/T-27/T-28/T-29 are unimplementable — their contracts name exactly the
+# paths the guard refuses (D1 in .claude/NEEDS_HUMAN.md).
 PROTECTED = [r"^docs/tickets\.json$", r"^docs/SPEC\.md$", r"^docs/DESIGN\.md$",
              r"^\.claude/hooks/.*$", r"^\.claude/scripts/.*$", r"^\.claude/settings\.json$",
              r"^\.claude/claims/.*$", r"^\.claude/evidence/.*$"]
@@ -252,8 +261,14 @@ if __name__ == "__main__":
                 print("allow"); sys.exit(0)          # out-of-repo scratchpads are allowed (jarvis/othram A1)
             rel = os.path.relpath(rp, root)
             if match_any(rel, META_ALLOW, raw=True): print("allow"); sys.exit(0)
+            if match_any(rel, ABSOLUTE, raw=True):
+                print("deny:%s is harness-written attestation state (claims and receipts). No ticket scope unlocks it — only the lifecycle scripts write here. If a receipt or claim looks wrong, say so in .claude/NEEDS_HUMAN.md." % rel); sys.exit(0)
             if match_any(rel, PROTECTED, raw=True):
-                print("deny:%s is a plan/harness file. These change only through sanctioned scripts or human-approved plan fixes — if this ticket needs it changed, that's a plan defect: record it in .claude/NEEDS_HUMAN.md and stop." % rel); sys.exit(0)
+                c0 = session_claim(sid) if os.path.exists(TICKETS) else None
+                t0 = ticket(c0["ticket"]) if c0 else None
+                if not (t0 and match_any(rel, t0["scope"])):
+                    print("deny:%s is a plan/harness file. These change only through sanctioned scripts, human-approved plan fixes, or a ticket whose own scope names them — if this ticket needs it changed, that's a plan defect: record it in .claude/NEEDS_HUMAN.md and stop." % rel); sys.exit(0)
+                print("allow"); sys.exit(0)           # sanctioned by the claimed ticket's contract
             if not os.path.exists(TICKETS):
                 print("allow"); sys.exit(0)           # no plan installed yet; harness inert except protected files
             c = session_claim(sid)
