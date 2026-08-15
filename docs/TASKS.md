@@ -144,7 +144,7 @@
 - **Depends on**: T-16 · **parallel_safe**: true
 - **Non-goals**: Does not create a droplet or perform a deploy — provisioning stays a human-authorised step; No change to the deploy stack itself (deploy/**); parallel_safe only holds once T-16 lands per-process DB isolation; before that, concurrent runs share one database; NOT parallel-safe with T-11: both declare scripts/verify_deploy.sh. T-11 is currently open (blocked on the droplet), so these two must not run concurrently
 
-### T-18: Classifier errors stop masquerading as escalations  `[queue]`
+### T-18: Classifier errors stop masquerading as escalations  `[resolved]`
 - **Objective**: run_classifier catches bare Exception and returns None, which is the pinned abstention condition and therefore a hard escalation trigger — so any bug in that path becomes a plausible-looking escalation, silently and unlogged.
 - **Acceptance**: 1) the except is narrowed to the API/timeout/parse/validation errors it actually intends to absorb; every swallow is logged with the exception type 2) a programming error raised inside the classifier path propagates instead of being converted to abstention (test asserts the exception escapes) 3) genuine abstention semantics are unchanged — a refusal or unparseable verdict still escalates, and every existing escalation test stays green 4) the three duplicated FakeLLMClient copies assert the classifier was consulted rather than only defaulting its response away, so an unanticipated call site is loud again
 - **Verify**: `uv run pytest -m "not live" backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q`
