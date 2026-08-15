@@ -224,7 +224,7 @@
 - **Depends on**: T-22 · **parallel_safe**: false
 - **Non-goals**: The Bash write path stays out of scope for the guard (documented limitation); integrity of plan files is T-26's snapshot, not a Bash sandbox
 
-### T-28: Legacy claim lines lose their authorizing power  `[queue]`
+### T-28: Legacy claim lines lose their authorizing power  `[resolved]`
 - **Objective**: Pre-T-13 bare claim lines still authorize: verify_gate's amnesty gates any session on an unattributed claim and stamps evidence for it, and stop_guard allows a stop regardless of evidence when the claim is legacy-shaped. The ledger's stale first line (bare T-13) keeps the format alive.
 - **Acceptance**: 1) verify_gate refuses to run a gate or write evidence for a claim record with no session attribution; the refusal names the offending record 2) stop_guard treats a legacy bare line as inert history: it neither blocks nor authorizes; current-claim resolution considers only JSON records 3) pre-authorized test edits, and ONLY these, per the justify-test-edit rule: test_legacy_claim_line_allows_regardless_of_evidence (stop_guard) and the verify_gate amnesty tests are rewritten to assert the new fail-closed behaviour with the same fixtures 4) the stale bare first line of .claude/active-ticket is retired via a sanctioned migration (JSON tombstone record or a dedicated migration commit); raw Edit/Write rewrites of the ledger remain denied 5) scope_guard may keep reading legacy lines for scope decisions (the 113 pre-T-13 scope tests stay valid); only gating and stopping authority is withdrawn
 - **Verify**: `uv run pytest backend/tests/hooks -q`
