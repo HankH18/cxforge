@@ -1,0 +1,8 @@
+{
+ "ticket": "T-18",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "note": "Next ready id after T-17, also unblocked by T-16. Remint \u2014 verify is the non-live product subset, green.",
+ "start_commit": "1366bf7e1e123277c280d728cf47fe736efe8f25",
+ "attempts": 0,
+ "ts": 1786761574
+}
