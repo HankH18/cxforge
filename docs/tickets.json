@@ -1000,6 +1000,39 @@
       ],
       "parallel_safe": false,
       "status": "open"
+    },
+    {
+      "id": "T-31",
+      "title": "Complete the harness-sync migration and preserve auditable closure history",
+      "objective": "The harness-sync commit removed the production claim parser, verification hook, and active-ticket ledger while retaining their contracts and tests; it also moved historical receipts to evidence-v1 although the new lifecycle recognizes only JSON receipts. The non-live suite is broken and historical closures now resolve as queued.",
+      "refs": [
+        "AUDIT#2026-08-15",
+        "T-13#acceptance",
+        "T-29#acceptance"
+      ],
+      "acceptance": [
+        "The active lifecycle, configured hooks, and hook tests agree on one supported claim/close protocol; the hook test suite passes without merely deleting coverage for ownership, close gating, or fail-closed behavior",
+        "Historical evidence-v1/*.pass is reconciled under an explicit migration policy: retain it as clearly labeled non-auditable legacy closure records that the lifecycle can recognize, or restore/remint receipt-bound records; the implementation must not fabricate commit hashes or fingerprints from historical bare timestamps",
+        "Every plan ticket marked closed has a lifecycle status consistent with the chosen migration policy; dependencies are not silently regressed to queue solely by the sync",
+        "Regression tests prove both a legacy closure record and a new fingerprint-bound JSON receipt behave as specified, and the full non-live suite passes"
+      ],
+      "verify": "uv run pytest -m \"not live\" -q",
+      "scope": [
+        ".claude/hooks/**",
+        ".claude/scripts/**",
+        ".claude/evidence-v1/**",
+        ".claude/evidence/**",
+        ".claude/settings.json",
+        "backend/tests/hooks/**",
+        "backend/tests/plan/**"
+      ],
+      "depends_on": [],
+      "non_goals": [
+        "No fabricated historical commit or fingerprint metadata",
+        "No changes to product behavior outside the harness and its tests"
+      ],
+      "parallel_safe": false,
+      "status": "open"
     }
   ]
 }

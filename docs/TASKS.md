@@ -200,7 +200,7 @@
 - **Depends on**: T-23 · **parallel_safe**: false
 - **Non-goals**: No change to schema naming or the orphan-schema reaper; No new dependency; pyproject.toml stays T-0's scope
 
-### T-25: The approval gate reads only the canonical labeled set  `[queue]`
+### T-25: The approval gate reads only the canonical labeled set  `[in_progress]`
 - **Objective**: evals.report evaluates approval against whatever --labeled-set points at, so a doctored copy yields a non-draft exit-0 run without any human approval; unapproved runs also write DRAFT artifacts into docs/eval-report/ by default.
 - **Acceptance**: 1) the approval decision is always evaluated against the committed evals/labeled_set.yaml regardless of any input-substitution argument; an alternate --labeled-set may drive rendering in tests but can never produce a non-draft exit-0 run 2) while unapproved, the report writes nothing under docs/: a draft render requires an explicit --output-dir outside docs/, and the default invocation exits non-zero without touching docs/eval-report/ 3) tests cover: doctored alternate file via --labeled-set still exits non-zero; a synthetic fully-approved fixture exercised without modifying the real file still exits zero, proving the gate's direction is unchanged 4) the three T-15 tripwire tests keep their intent; any assertion edit beyond what acceptance 2 directly forces is out of bounds
 - **Verify**: `uv run pytest backend/tests/evals -q`
@@ -247,3 +247,11 @@
 - **Scope**: `backend/src/escalation/rules.py, backend/src/data/**, backend/tests/data/**`
 - **Depends on**: T-24 · **parallel_safe**: false
 - **Non-goals**: Docstring-only change in escalation: no behaviour edits outside data/; No change to which exceptions the classifier absorbs (T-18 settled that)
+
+### T-31: Complete the harness-sync migration and preserve auditable closure history  `[queue]`
+- **Objective**: The harness-sync commit removed the production claim parser, verification hook, and active-ticket ledger while retaining their contracts and tests; it also moved historical receipts to evidence-v1 although the new lifecycle recognizes only JSON receipts. The non-live suite is broken and historical closures now resolve as queued.
+- **Acceptance**: 1) The active lifecycle, configured hooks, and hook tests agree on one supported claim/close protocol; the hook test suite passes without merely deleting coverage for ownership, close gating, or fail-closed behavior 2) Historical evidence-v1/*.pass is reconciled under an explicit migration policy: retain it as clearly labeled non-auditable legacy closure records that the lifecycle can recognize, or restore/remint receipt-bound records; the implementation must not fabricate commit hashes or fingerprints from historical bare timestamps 3) Every plan ticket marked closed has a lifecycle status consistent with the chosen migration policy; dependencies are not silently regressed to queue solely by the sync 4) Regression tests prove both a legacy closure record and a new fingerprint-bound JSON receipt behave as specified, and the full non-live suite passes
+- **Verify**: `uv run pytest -m "not live" -q`
+- **Scope**: `.claude/hooks/**, .claude/scripts/**, .claude/evidence-v1/**, .claude/evidence/**, .claude/settings.json, backend/tests/hooks/**, backend/tests/plan/**`
+- **Depends on**: none · **parallel_safe**: false
+- **Non-goals**: No fabricated historical commit or fingerprint metadata; No changes to product behavior outside the harness and its tests

@@ -85,7 +85,8 @@ from escalation.config import CLASSIFIER_CONFIDENCE_THRESHOLD  # noqa: E402
 
 LABELED_SET_PATH = _REPO_ROOT / "evals" / "labeled_set.yaml"
 CASES_PATH = _REPO_ROOT / "fixtures" / "cases.yaml"
-OUTPUT_DIR = _REPO_ROOT / "docs" / "eval-report"
+DOCS_DIR = _REPO_ROOT / "docs"
+OUTPUT_DIR = DOCS_DIR / "eval-report"
 
 CASE_ID_RE = re.compile(r"MFG-\d{4}-\d{4}")
 
@@ -182,6 +183,35 @@ def is_approved(header: dict[str, Any]) -> bool:
         and bool(approval.get("approved_by"))
         and bool(approval.get("approved_date"))
     )
+
+
+def canonical_approval_header() -> dict[str, Any]:
+    """The approval gate's ONLY input (T-25 acceptance 1).
+
+    ``--labeled-set`` substitutes the set that is *scored and rendered*; it
+    must never be able to answer the question "has a human approved these
+    labels?". That question is settled exclusively by the committed
+    ``evals/labeled_set.yaml`` at ``LABELED_SET_PATH``, so pointing the CLI
+    at a doctored copy with ``approval.status: APPROVED`` yields a DRAFT
+    render and a non-zero exit like any other unapproved run. To exercise
+    the approved direction of the gate, a test builds a synthetic repo tree
+    whose own ``evals/labeled_set.yaml`` is the approved fixture — there is
+    no flag, and no environment variable, that redirects this read."""
+    header, _ = load_labeled_set(LABELED_SET_PATH)
+    return header
+
+
+def writes_into_docs(output_dir: Path) -> bool:
+    """True when ``output_dir`` lands anywhere under the repo's ``docs/``.
+
+    ``docs/`` is the published, human-facing tree; T-25 acceptance 2 keeps
+    unapproved numbers out of it entirely rather than relying on a DRAFT
+    watermark inside a file that lives among the real deliverables."""
+    try:
+        output_dir.resolve().relative_to(DOCS_DIR.resolve())
+    except ValueError:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +556,10 @@ def render_report(
     approved: bool,
     image_filename: str,
 ) -> str:
-    approval = header.get("approval", {})
+    # The DRAFT paragraph must quote the status of the file the gate actually
+    # consulted, which is always the canonical set — never ``header``, which
+    # is whatever --labeled-set pointed at (T-25 acceptance 1).
+    approval = canonical_approval_header().get("approval", {})
     banner = report_status_banner(approved)
     lines: list[str] = []
     lines.append("# Escalation eval report — T-7")
@@ -540,6 +573,15 @@ def render_report(
             f"`{approval.get('status')!r}`, not `APPROVED`. Every number below is a DRAFT — "
             "proof the pipeline runs, not a real measurement. See `evals/REVIEW.md` for what "
             "the project owner needs to review before this can become a final report."
+        )
+        lines.append("")
+    scored_approval = (header.get("approval") or {}).get("status")
+    if scored_approval != approval.get("status"):
+        lines.append(
+            "> NOTE: the scored labeled set was substituted via `--labeled-set` and carries "
+            f"`approval.status` `{scored_approval!r}`. The substitution changes only which "
+            "tickets were scored below; it has no bearing on the approval banner above, which "
+            "reads `evals/labeled_set.yaml` and nothing else."
         )
         lines.append("")
     lines.append(f"Generated: {datetime.now(UTC).isoformat()}")
@@ -712,9 +754,26 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_arg_parser().parse_args(argv)
 
+    # The gate reads the committed set; args.labeled_set only drives what is
+    # scored and rendered (T-25 acceptance 1 — see canonical_approval_header).
+    canonical_header = canonical_approval_header()
+    approved = is_approved(canonical_header)
+
+    # Nothing unapproved reaches docs/ — not even watermarked (T-25
+    # acceptance 2). A draft render is still available, but the caller has to
+    # name an --output-dir outside docs/ and take the non-zero exit with it.
+    if not approved and writes_into_docs(args.output_dir):
+        print(
+            f"REFUSING to write to {args.output_dir}: {LABELED_SET_PATH} is not "
+            "human-approved, and docs/ holds published deliverables only. Re-run with "
+            "--output-dir pointing outside docs/ for a DRAFT render (still exits non-zero), "
+            "or get the labels approved first (see evals/REVIEW.md).",
+            file=sys.stderr,
+        )
+        return 1
+
     header, tickets = load_labeled_set(args.labeled_set)
     known_case_ids = load_known_case_ids(args.cases)
-    approved = is_approved(header)
 
     sweep = sweep_thresholds(tickets, known_case_ids)
     recommended = recommend_threshold(sweep)
@@ -746,7 +805,11 @@ def main(argv: list[str] | None = None) -> int:
 
     metrics = {
         "approved": approved,
-        "approval_status": header.get("approval", {}).get("status"),
+        # Sourced from the canonical set, not args.labeled_set: a doctored
+        # copy must not be able to stamp "APPROVED" into the artifacts either.
+        "approval_status": canonical_header.get("approval", {}).get("status"),
+        "scored_labeled_set": str(args.labeled_set),
+        "scored_labeled_set_is_canonical": args.labeled_set.resolve() == LABELED_SET_PATH.resolve(),
         "confusion_matrix": cm,
         "precision": precision,
         "recall": recall,
