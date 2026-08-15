@@ -137,8 +137,8 @@ def is_classifier_abstention(call: EscalationCall | None) -> bool:
     classifier failed to return a usable, schema-valid verdict.
     ``escalation.classifier.run_classifier`` returns ``None`` for exactly
     this case — but, since T-18, only for a NARROWED, logged set of
-    model-shaped failures: an ``openai.OpenAIError`` (API/connection/
-    timeout), the ``ValueError`` ``OpenAILLMClient.structured`` raises on
+    model-shaped failures: an ``anthropic.AnthropicError`` (API/connection/
+    timeout), the ``ValueError`` ``AnthropicLLMClient.structured`` raises on
     a refusal or truncated response, or a non-``EscalationCall`` return
     from ``structured()``. Each swallowed case is logged via
     ``logger.warning`` before ``None`` comes back, so an abstention is

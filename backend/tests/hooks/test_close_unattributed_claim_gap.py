@@ -13,10 +13,20 @@ can: valid JSON missing the `ticket` key, a `session` field that disagrees with 
 filename that is supposedly its attribution, unparseable JSON, an empty file, and a
 `start_commit` that is missing or names a commit that no longer/never existed.
 
-THE CENTRAL FINDING, established empirically below and load-bearing for every test in
-this file: **no hook in this repository's wiring ever runs before `cmd_close`, for any of
-the five cases, so no fix confined to `.claude/hooks/**` can make this acceptance's
-"refuses ... names the offending record" guarantee hold.**
+THE ORIGINAL FINDING, established empirically by the tests below: **no hook in this
+repository's wiring ever runs before `cmd_close`, for any of the five cases, so no fix
+confined to `.claude/hooks/**` could make this acceptance's "refuses ... names the
+offending record" guarantee hold.** That structural fact is still true, and
+`test_no_pretooluse_hook_matches_bash_tool_calls` still pins it.
+
+RESOLUTION: the gap was closed where it actually lived — in `harness_lib.py` itself,
+under a direct, explicitly authorised patch from the project owner (the file is
+PROTECTED, so no session could reach it through the normal lifecycle). All five cases
+now produce clean, named refusals and mint nothing. Every test below was written to pin
+the DEFECT and has been flipped to prove the FIX; each docstring records what it used to
+assert. The most serious case is the last one: a `start_commit` naming no real commit
+used to make the integrity check pass vacuously, silently disabling scope enforcement
+for the whole close while still minting a receipt.
 
   * `.claude/settings.json`'s only `PreToolUse` matchers are `"Edit|Write|NotebookEdit"`
     and `"TaskUpdate"` (`test_no_pretooluse_hook_matches_bash_tool_calls` reads the real
@@ -223,14 +233,15 @@ def test_no_pretooluse_hook_matches_bash_tool_calls() -> None:
 # ---------------------------------------------------------------------------
 # Case 1: valid JSON, no "ticket" key
 # ---------------------------------------------------------------------------
-def test_close_crashes_uncleanly_on_a_claim_record_missing_the_ticket_key(
+def test_close_refuses_by_name_on_a_claim_record_missing_the_ticket_key(
     tmp_path: Path,
 ) -> None:
-    """PINS A GAP, does not close it (see module docstring): `cmd_close` does
-    `tid, start = c["ticket"], c["start_commit"]` with no `.get`/try-except, so a claim
-    record with no `ticket` key raises an unhandled `KeyError`. That is a raw traceback
-    on stderr, not "refuses to run a gate ... naming the offending record" -- there is no
-    human-readable message and nothing names the claim file at all.
+    """T-28 acceptance 1 — GAP NOW CLOSED. This test previously pinned the defect:
+    `cmd_close` did `tid, start = c["ticket"], c["start_commit"]` with no guard, so a
+    record with no `ticket` key raised an unhandled `KeyError` — a raw traceback, not
+    "refuses to run a gate ... naming the offending record". The authorised harness
+    patch added a required-field check, so the same corruption now produces a clean,
+    named refusal and mints nothing.
     """
     proj = _make_project(tmp_path)
     sid = "session-no-ticket-key"
@@ -239,9 +250,9 @@ def test_close_crashes_uncleanly_on_a_claim_record_missing_the_ticket_key(
     result = _close(proj, sid)
 
     assert result.returncode == 1
-    assert result.stdout == ""
-    assert "KeyError" in result.stderr
-    assert "Traceback (most recent call last)" in result.stderr
+    assert "Traceback (most recent call last)" not in result.stderr
+    assert "missing required field" in result.stdout
+    assert "ticket" in result.stdout
     assert not _evidence_path(proj).exists()
 
 
@@ -279,11 +290,10 @@ def test_close_silently_mints_a_receipt_when_session_field_disagrees_with_filena
 # ---------------------------------------------------------------------------
 # Case 3: malformed / unparseable JSON
 # ---------------------------------------------------------------------------
-def test_close_crashes_uncleanly_on_unparseable_json(tmp_path: Path) -> None:
-    """PINS A GAP, does not close it (see module docstring): `session_claim` does
-    `json.load(f)` with no try/except, so a claim file containing unparseable bytes
-    raises an unhandled `json.decoder.JSONDecodeError`. Same class of failure as case 1:
-    a raw traceback, not a clean refusal that names the record.
+def test_close_refuses_by_name_on_unparseable_json(tmp_path: Path) -> None:
+    """T-28 acceptance 1 — GAP NOW CLOSED. `session_claim` previously did a bare
+    `json.load(f)`, so unparseable bytes raised an unhandled `JSONDecodeError`. The
+    patch wraps the read and refuses by name instead, minting nothing.
     """
     proj = _make_project(tmp_path)
     sid = "session-bad-json"
@@ -294,21 +304,18 @@ def test_close_crashes_uncleanly_on_unparseable_json(tmp_path: Path) -> None:
     result = _close(proj, sid)
 
     assert result.returncode == 1
-    assert result.stdout == ""
-    assert "json.decoder.JSONDecodeError" in result.stderr
-    assert "Traceback (most recent call last)" in result.stderr
+    assert "Traceback (most recent call last)" not in result.stderr
+    assert "unreadable" in result.stdout
     assert not _evidence_path(proj).exists()
 
 
 # ---------------------------------------------------------------------------
 # Case 4: empty claim file
 # ---------------------------------------------------------------------------
-def test_close_crashes_uncleanly_on_an_empty_claim_file(tmp_path: Path) -> None:
-    """PINS A GAP, does not close it (see module docstring): an empty claim file is
-    also unparseable JSON (`json.load` raises "Expecting value" on zero bytes) -- same
-    unhandled-crash shape as case 3, kept as its own test since T-28 names it as its own
-    case and an empty file is a distinct real-world corruption mode (e.g. a truncated
-    write) from malformed-but-non-empty content.
+def test_close_refuses_by_name_on_an_empty_claim_file(tmp_path: Path) -> None:
+    """T-28 acceptance 1 — GAP NOW CLOSED. An empty claim file is unparseable JSON and
+    now takes the same clean refusal path. Kept as its own case because a truncated
+    write is a distinct real-world corruption mode from malformed-but-non-empty content.
     """
     proj = _make_project(tmp_path)
     sid = "session-empty-claim"
@@ -319,20 +326,19 @@ def test_close_crashes_uncleanly_on_an_empty_claim_file(tmp_path: Path) -> None:
     result = _close(proj, sid)
 
     assert result.returncode == 1
-    assert result.stdout == ""
-    assert "json.decoder.JSONDecodeError" in result.stderr
-    assert "Traceback (most recent call last)" in result.stderr
+    assert "Traceback (most recent call last)" not in result.stderr
+    assert "unreadable" in result.stdout
     assert not _evidence_path(proj).exists()
 
 
 # ---------------------------------------------------------------------------
 # Case 5a: start_commit key missing
 # ---------------------------------------------------------------------------
-def test_close_crashes_uncleanly_on_a_claim_record_missing_start_commit(
+def test_close_refuses_by_name_on_a_claim_record_missing_start_commit(
     tmp_path: Path,
 ) -> None:
-    """PINS A GAP, does not close it (see module docstring): same unhandled `KeyError`
-    shape as case 1, this time on `c["start_commit"]`.
+    """T-28 acceptance 1 — GAP NOW CLOSED. Same required-field check as the missing
+    `ticket` case, applied to `start_commit`: a named refusal, not a raw `KeyError`.
     """
     proj = _make_project(tmp_path)
     sid = "session-no-start-commit"
@@ -341,28 +347,33 @@ def test_close_crashes_uncleanly_on_a_claim_record_missing_start_commit(
     result = _close(proj, sid)
 
     assert result.returncode == 1
-    assert result.stdout == ""
-    assert "KeyError" in result.stderr
-    assert "start_commit" in result.stderr
-    assert "Traceback (most recent call last)" in result.stderr
+    assert "Traceback (most recent call last)" not in result.stderr
+    assert "missing required field" in result.stdout
+    assert "start_commit" in result.stdout
     assert not _evidence_path(proj).exists()
 
 
 # ---------------------------------------------------------------------------
 # Case 5b: start_commit names a commit that does not exist
 # ---------------------------------------------------------------------------
-def test_close_silently_mints_a_receipt_when_start_commit_names_a_nonexistent_commit(
+def test_close_refuses_when_start_commit_names_a_nonexistent_commit(
     tmp_path: Path,
 ) -> None:
-    """PINS A GAP, does not close it (see module docstring): `changed_since(commit)`
-    shells out to `git diff --name-only <commit>` and `git diff --cached --name-only
-    <commit>` and reads `.stdout` without checking the return code. Against a
-    `start_commit` that names no real commit, both `git diff` invocations fail and
-    print nothing to stdout, so `changed_since` returns an EMPTY set -- the integrity
-    check (`integrity()`) then finds no "bad" files by construction, vacuously passes,
-    and `cmd_close` proceeds to run verify and mint a receipt exactly as if every file
-    ever changed under this ticket were in scope. A bogus `start_commit` doesn't just
-    go unrefused -- it silently DISABLES the out-of-scope integrity check entirely.
+    """The most serious of the five — GAP NOW CLOSED.
+
+    `changed_since(commit)` shelled out to `git diff --name-only <commit>` and read
+    `.stdout` without checking the return code. Against a `start_commit` naming no real
+    commit, both `git diff` calls failed and printed nothing, so `changed_since`
+    returned an EMPTY set — `integrity()` then found no out-of-scope files *by
+    construction*, passed VACUOUSLY, and `cmd_close` went on to mint a receipt as
+    though every file touched under the ticket had been in scope. A bogus
+    `start_commit` did not merely go unrefused: it silently DISABLED scope enforcement
+    for the entire close, which is the one thing a receipt is supposed to attest.
+
+    The patch resolves `start_commit` up front and refuses if it does not exist, and
+    `changed_since` now raises `IntegrityUnavailable` rather than reporting an
+    unanswerable diff as "nothing changed" — an unevaluable integrity check can no
+    longer be mistaken for a passing one.
     """
     proj = _make_project(tmp_path)
     sid = "session-bad-start-commit"
@@ -372,8 +383,6 @@ def test_close_silently_mints_a_receipt_when_start_commit_names_a_nonexistent_co
 
     result = _close(proj, sid)
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "closed" in result.stdout
-    assert _evidence_path(proj).exists()
-    receipt = json.loads(_evidence_path(proj).read_text())
-    assert receipt["ticket"] == TID
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "does not resolve to a commit" in result.stdout
+    assert not _evidence_path(proj).exists()

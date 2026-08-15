@@ -18,7 +18,7 @@ from agent.escalation_seam import (
     PlaceholderEscalationDecider,
 )
 from agent.graph import build_graph, run_agent
-from agent.llm import LLMClient, OpenAILLMClient
+from agent.llm import AnthropicLLMClient, LLMClient
 from agent.state import Route, RunState
 
 __all__ = [
@@ -26,7 +26,7 @@ __all__ = [
     "EscalationDecision",
     "EscalationTrigger",
     "LLMClient",
-    "OpenAILLMClient",
+    "AnthropicLLMClient",
     "PlaceholderEscalationDecider",
     "Route",
     "RunState",

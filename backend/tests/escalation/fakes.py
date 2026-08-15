@@ -18,7 +18,7 @@ are new to this suite:
   absorbing it, so it can only be used where ``.structured`` is never
   actually expected to be called.
 - ``AbstainingLLMClient`` raises a genuine, absorbable model-failure
-  exception (``ValueError``, mirroring ``OpenAILLMClient``'s own refusal/
+  exception (``ValueError``, mirroring ``AnthropicLLMClient``'s own refusal/
   truncation error) on every call — use it wherever a test wants
   ``run_classifier`` to actually run its except clause and abstain.
 - ``RecordingHelpdeskPort`` is a minimal ``HelpdeskPort`` double that

@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import openai
+import anthropic
 
 from agent.llm import LLMClient
 from escalation.schemas import EscalationCall
@@ -53,10 +53,12 @@ def run_classifier(
     llm: LLMClient, *, conversation: list[Message], topic: str
 ) -> EscalationCall | None:
     """Run the escalation classifier, or return ``None`` on any *absorbable*
-    failure to produce a usable verdict — an OpenAI SDK API/connection/
-    timeout/refusal-shaped error, or the ``ValueError``
-    ``OpenAILLMClient.structured`` itself raises on a refusal or truncated
-    response (see ``agent/llm.py``). ``None`` is exactly DESIGN's
+    failure to produce a usable verdict — an Anthropic SDK API/connection/
+    timeout/refusal-shaped error (``anthropic.AnthropicError``, the base of
+    the SDK's exception tree and the direct counterpart of the OpenAI base
+    this absorbed before the authorised provider pivot), or the
+    ``ValueError`` ``AnthropicLLMClient.structured`` itself raises on a
+    refusal or truncated response (see ``agent/llm.py``). ``None`` is exactly DESIGN's
     "classifier abstention" hard-rule condition (see
     ``escalation.rules.is_classifier_abstention``); callers must treat it
     as a hard escalation trigger, never as "no opinion, proceed normally."
@@ -77,7 +79,7 @@ def run_classifier(
     ]
     try:
         result = llm.structured(EscalationCall, messages)
-    except (openai.OpenAIError, ValueError) as exc:
+    except (anthropic.AnthropicError, ValueError) as exc:
         logger.warning(
             "Escalation classifier abstained after %s: %s", type(exc).__name__, exc
         )

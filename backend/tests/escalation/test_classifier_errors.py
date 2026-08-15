@@ -27,8 +27,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import httpx2
-import openai
+import anthropic
+import httpx
 import pytest
 from pydantic import BaseModel
 
@@ -45,7 +45,7 @@ class _BuggyLLMClient:
     """A second, unrelated programming-error type — not
     ``FakeLLMClient``'s unregistered-schema ``AssertionError`` — to prove
     the narrowed except propagates by *category* (anything that isn't
-    ``openai.OpenAIError``/``ValueError``), not just that one accident."""
+    ``anthropic.AnthropicError``/``ValueError``), not just that one accident."""
 
     def structured(
         self, schema: type[BaseModel], messages: list[dict[str, Any]], temperature: float = 0.0
@@ -54,19 +54,24 @@ class _BuggyLLMClient:
 
 
 class _APIFailingLLMClient:
-    """Raises a real OpenAI SDK exception — exactly the shape
-    ``OpenAILLMClient.structured`` (``agent/llm.py``) would raise if the
-    underlying ``chat.completions.parse`` call failed."""
+    """Raises a real Anthropic SDK exception — exactly the shape
+    ``AnthropicLLMClient.structured`` (``agent/llm.py``) would raise if the
+    underlying ``messages.parse`` call failed.
+
+    Updated with the authorised OpenAI -> Anthropic pivot. Only the provider's
+    exception CLASS moved; T-18's contract is untouched — a transport/API
+    failure is still absorbed to abstention, and a programming error still
+    propagates (``_BuggyLLMClient`` above)."""
 
     def structured(
         self, schema: type[BaseModel], messages: list[dict[str, Any]], temperature: float = 0.0
     ) -> BaseModel:
-        request = httpx2.Request("POST", "https://api.openai.com/v1/chat/completions")
-        raise openai.APIConnectionError(request=request)
+        request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        raise anthropic.APIConnectionError(request=request)
 
 
 class _RefusingParseLLMClient:
-    """Mirrors ``OpenAILLMClient.structured``'s own behavior on a refusal
+    """Mirrors ``AnthropicLLMClient.structured``'s own behavior on a refusal
     or truncated response: a bare ``ValueError``, not an SDK exception."""
 
     def structured(
@@ -102,7 +107,7 @@ def test_arbitrary_programming_error_propagates() -> None:
 # -- 3. genuine OpenAI API/connection failure absorbed -> None, logged -------
 
 
-def test_openai_api_error_is_absorbed_to_none_and_logged(
+def test_provider_api_error_is_absorbed_to_none_and_logged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with caplog.at_level(logging.WARNING):

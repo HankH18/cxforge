@@ -4,10 +4,11 @@ Single source of truth for the three values DESIGN and the T-5 ticket
 require to live in "one config constant" rather than scattered through the
 graph:
 
-- ``OPENAI_MODEL`` — DESIGN §LLMClient: "model version pinned in one config
-  constant." Not itself pinned by DESIGN to a specific value; chosen here
-  (see the module docstring in ``agent.llm``) and never exercised live in
-  this environment (no ``OPENAI_API_KEY``).
+- ``ANTHROPIC_MODEL`` / ``ANTHROPIC_MAX_TOKENS`` — DESIGN §LLMClient:
+  "model version pinned in one config constant." DESIGN pins the
+  *requirement*, not a provider or a specific model name, so the authorised
+  pivot from OpenAI to Anthropic changes the value here and nothing else.
+  See the module docstring in ``agent.llm``.
 - ``VERIFIER_THRESHOLD`` — DESIGN §Agent graph: "verifier_score < 0.7" is a
   hard escalation trigger for KB drafts.
 - ``GATE_SETTING_KEY`` — the ``settings.key`` row the ``decide`` node reads
@@ -18,11 +19,15 @@ graph:
 from __future__ import annotations
 
 # DESIGN pins strict structured outputs + "one config constant" for the
-# model version, not a specific model name. gpt-4o-mini-2024-07-18 is a
-# deliberate choice (not DESIGN-pinned): SPEC's cost constraints apply
-# broadly ("Actions cost is a real constraint") and a support-triage/
-# templating workload doesn't need a larger model. Change only here.
-OPENAI_MODEL = "gpt-4o-mini-2024-07-18"
+# model version, not a provider or a specific model name. Change only here.
+ANTHROPIC_MODEL = "claude-opus-5"
+
+# Anthropic counts thinking tokens against max_tokens, and thinking is on by
+# default on this model — so this is sized for "reasoning plus a structured
+# verdict", not for the verdict alone. Too small a budget truncates the
+# response mid-structure, which surfaces as a refusal-shaped ValueError from
+# AnthropicLLMClient rather than as an obvious error.
+ANTHROPIC_MAX_TOKENS = 16000
 
 # DESIGN §Agent graph, pinned verbatim: "threshold read from a config
 # constant ... verifier_score < 0.7 is a hard escalation trigger."
