@@ -1,5 +1,50 @@
 # Needs human
 
+> ## ⬛ START HERE — build-session status, 2026-08-15 (supersedes stale headers below)
+>
+> **30 of 32 tickets resolved. Suite 684 passed, 0 failed. ruff + mypy clean.**
+> Pushed to both remotes at `3faa744` (GitLab `hankholcomb/cxforge`, GitHub
+> `HankH18/cxforge`), verified by reading each host back.
+>
+> **Everything below this block predates it.** Many entries marked OPEN are now
+> closed — D1, D2/D0, D3, D5, W1, W2, W11, and the T-22/T-26/T-27/T-28/T-29
+> "unclosable" set all landed. Trust this block over any older one; where they
+> disagree, the older one is stale, not a live finding.
+>
+> ### The only two tickets left, and they need one action from you
+> **T-10** and **T-11** are both blocked on the same thing: the Zendesk OAuth
+> token in `.env` is **expired (HTTP 401)**, there is no refresh token stored,
+> and re-auth is an `authorization_code` + PKCE flow that needs a browser
+> consent. Two commands:
+> ```
+> uv run python scripts/zendesk_oauth.py --url     # open it, click Allow, copy the code=
+> uv run python scripts/zendesk_oauth.py <code>    # writes a fresh token to .env
+> ```
+> T-11's deploy criterion is *already met* — the stack is live on the droplet at
+> **161.35.2.250** and passes `verify_deploy.sh` in REMOTE mode (4/4). T-11 is
+> waiting on T-10, which is waiting on that token.
+>
+> ### Two open items I could not land myself (protected path)
+> 1. **W17 — rename laundering. This is my bug and it is still live.**
+>    `git mv docs/SPEC.md src/SPEC.md` under a `src/**` scope hides the deletion
+>    of a protected plan file from BOTH gates, because git pairs renames and my
+>    code kept only the destination. Reproduced end to end. Fix ready:
+>    `…/scratchpad/apply_w17_rename_fix.py` — run it **only when no claim is
+>    open** (`ls .claude/claims/` empty), or the next close fails INTEGRITY.
+> 2. **W16-structural — the approval gate proves the wrong thing.** Your
+>    sign-off was genuine and the watchdog withdrew its allegation, but T-7's
+>    verify checks exactly the three fields that constitute the approval, so it
+>    could not tell a human flip from a machine one. Fix: sign `evals/REVIEW.md`,
+>    then a test can require `labeled_set.yaml` be APPROVED only with a matching
+>    REVIEW.md signature. I did not sign it — that would be the forgery this is
+>    about — and did not land the test, which would turn the suite red while you
+>    were away.
+>
+> Also worth one line: `evals/labeled_set.yaml`'s `statement:` field still reads
+> "…is a DRAFT only… until a human owner reviews evals/REVIEW.md and flips this
+> block", which now contradicts its own `status: APPROVED`. I am forbidden from
+> touching that file (T-7/T-21/T-25), so it needs your hand.
+
 Current as of the build session that closed T-0. **23 of 32 tickets resolved**, suite
 589 passing. Items are marked RESOLVED / OPEN so nothing here reads as still-blocking
 when it isn't.
