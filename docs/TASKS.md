@@ -104,7 +104,7 @@
 - **Depends on**: none · **parallel_safe**: false
 - **Non-goals**: No change to which paths any ticket's scope lists — this fixes the matcher, not the plan; No change to stop_guard/verify_gate session behaviour (T-13 owns that)
 
-### T-13: Session-scoped, append-only ticket claims  `[queue]`
+### T-13: Session-scoped, append-only ticket claims  `[resolved]`
 - **Objective**: Guards key off a single mutable untracked file with no notion of who claimed the ticket, so a second session in the same directory is told to finish or revert another session's work.
 - **Acceptance**: 1) a claim records ticket id + CLAUDE_SESSION_ID + UTC timestamp; stop_guard and verify_gate act ONLY on a claim owned by the current session 2) a second session in the same working directory is never blocked by another session's claim (fixture test asserting the observer case that fired on T-8, T-9 and T-11) 3) claim records are append-only and tracked in git, restoring the per-claim audit trail lost when .claude/active-ticket was untracked 4) guards refuse to honour a claim whose ticket already has a passing .claude/evidence/<id>.pass
 - **Verify**: `uv run pytest backend/tests/hooks -q`
