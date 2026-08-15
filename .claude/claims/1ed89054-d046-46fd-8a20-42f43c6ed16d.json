@@ -1,8 +1,0 @@
-{
- "ticket": "T-25",
- "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
- "note": "Re-claim after the concurrent-monitor integrity collision (see NEEDS_HUMAN.md). Same ordering rationale: T-25 is the only ready ticket whose deps are empty, whose verify string lints clean, and whose scope is neither write-protected nor gated on the 204 harness-swap-broken hooks tests.",
- "start_commit": "30c6193facd582dc5b2337ae5c025ecc9da3a3c1",
- "attempts": 0,
- "ts": 1786757988
-}

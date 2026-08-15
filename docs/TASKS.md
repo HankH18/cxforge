@@ -200,7 +200,7 @@
 - **Depends on**: T-23 · **parallel_safe**: false
 - **Non-goals**: No change to schema naming or the orphan-schema reaper; No new dependency; pyproject.toml stays T-0's scope
 
-### T-25: The approval gate reads only the canonical labeled set  `[in_progress]`
+### T-25: The approval gate reads only the canonical labeled set  `[resolved]`
 - **Objective**: evals.report evaluates approval against whatever --labeled-set points at, so a doctored copy yields a non-draft exit-0 run without any human approval; unapproved runs also write DRAFT artifacts into docs/eval-report/ by default.
 - **Acceptance**: 1) the approval decision is always evaluated against the committed evals/labeled_set.yaml regardless of any input-substitution argument; an alternate --labeled-set may drive rendering in tests but can never produce a non-draft exit-0 run 2) while unapproved, the report writes nothing under docs/: a draft render requires an explicit --output-dir outside docs/, and the default invocation exits non-zero without touching docs/eval-report/ 3) tests cover: doctored alternate file via --labeled-set still exits non-zero; a synthetic fully-approved fixture exercised without modifying the real file still exits zero, proving the gate's direction is unchanged 4) the three T-15 tripwire tests keep their intent; any assertion edit beyond what acceptance 2 directly forces is out of bounds
 - **Verify**: `uv run pytest backend/tests/evals -q`
