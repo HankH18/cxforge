@@ -1,0 +1,8 @@
+{
+ "ticket": "T-15",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "note": "Next ready id after T-12 with no deps and a verify (evals + hooks) that passes on the current tree; unblocks T-14. Only evidence today is an inert v1 .pass record.",
+ "start_commit": "8c536664ad9a6d4c42f75435d262fea1c2015ffd",
+ "attempts": 0,
+ "ts": 1786760721
+}
