@@ -1,0 +1,8 @@
+{
+ "ticket": "T-28",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "note": "Unblocked by T-27's receipt; lowest ready id and gates T-29. v2 removed the legacy claim-line format entirely, so the work is proving the authorising power is gone rather than withdrawing it \u2014 plus retiring the stale ledger artifact if one survives.",
+ "start_commit": "aaddeabe6cdd51ea8dab0c25955bbcd80ecbd0d6",
+ "attempts": 0,
+ "ts": 1786826328
+}

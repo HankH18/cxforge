@@ -113,6 +113,66 @@ is not by itself evidence of tampering.
   a protected file gets flagged while it is still uncommitted, before a
   release/re-claim could absorb it into a `ticket-start:` commit.
 
+## 2026-08-15T20:41Z — cycle 2: T-27 closed, T-28 opened
+
+### T-27 — verdict CONFIRMED (no finding)
+
+The strongest close in the log so far. Checked, not taken on trust:
+
+- Receipt binds to `c9c47be ticket-close: T-27`, ancestor of HEAD, subject
+  matches. Fingerprint recomputes **exactly**. Receipt `verify` matches the plan.
+- 14 files in the close range, **zero out of scope**.
+- **Verify re-run independently by me** (not the build session):
+  `uv run pytest backend/tests/hooks -q` → **297 passed**. Not a claim I inherited.
+- **Green is evidence of the real thing.** `conftest.py` `_build_project` copies
+  the *real* `.claude/scripts/` and `.claude/hooks/` into a disposable project and
+  drives those (conftest.py:125-131) — not stubs. And the one thing a copy-based
+  suite would miss, the live wiring, is covered separately:
+  `test_settings_json_matcher_includes_notebookedit` reads the **real**
+  `.claude/settings.json` and asserts NotebookEdit was *added to* rather than
+  *replacing* `Edit|Write`. Live matcher confirmed `Edit|Write|NotebookEdit`.
+- All three declared defects genuinely fixed: pathless deny-by-default with a
+  documented empty allowlist; NotebookEdit both wired and normalised; stop guard
+  fails closed on an unidentifiable session.
+
+**Test-weakening check — passed, and this is the part worth reading.** One test
+disappeared: `test_unidentifiable_session_never_blocked_via_any_claim`. It was
+not deleted — it was renamed and **inverted** to
+`test_unidentifiable_session_fails_closed_and_blocks`. Its previous form had
+deliberately pinned the *bug*, with a docstring saying the behaviour was asserted
+"so a future change to this behaviour is a conscious decision, not an accident."
+T-27 is that conscious decision, and the new docstring says so explicitly. Two
+counter-case tests were added so failing closed cannot deadlock a session
+(identified-but-claimless still stops; `stop_hook_active` retains priority).
+Net +33 tests, zero skips, zero xfails. This is how a test inversion should look.
+
+### T-28 — pre-flight: three of five acceptance criteria have no target
+
+Claimed at 20:38Z, same session, note acknowledging supersession. Verified
+against the tree — the contract names artifacts that no longer exist:
+
+| Acceptance | Names | Reality |
+|---|---|---|
+| 1 | `verify_gate` refuses to run a gate | no `verify_gate` hook exists; not in `settings.json` |
+| 3 | `test_legacy_claim_line_allows_regardless_of_evidence` | no such test in the tree |
+| 4 | retire the bare first line of `.claude/active-ticket` | file deleted in `c44f9af cc-factory: harness sync` — **and out of T-28's scope** (`.claude/hooks/**`, `backend/tests/hooks/**`) |
+
+NEEDS_HUMAN already predicted this class ("T-22, T-28, T-29 satisfied by
+supersession, unclosable as written"); this is the concrete confirmation. The
+risk to watch at close is **not** dishonesty — it is that a ticket whose targets
+are absent can be closed with absence-assertions that pass trivially, producing
+green that proves nothing. T-27 handled exactly this shape well (it inverted a
+test and said why). I will audit T-28's close specifically for: whether the new
+tests would fail if the legacy authority *were* restored, and whether test edits
+stayed inside acceptance 3's explicit pre-authorisation.
+
+### Confirmed by observation
+
+My own writes to `.claude/monitor/REPORT.md` and `.claude/NEEDS_HUMAN.md` landed
+*inside* T-27's attested commit range and did not fail its integrity check —
+empirical confirmation of the META_ALLOW/HARNESS_STATE exemption claimed at
+cycle 0. Watchdog reporting is safe to run concurrently with a live close.
+
 ### Live state at cycle 0
 
 T-27 claimed by session `1ed89054` since 20:09Z, 0 attempts, actively working

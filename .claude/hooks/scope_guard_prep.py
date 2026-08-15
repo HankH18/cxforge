@@ -69,7 +69,11 @@ def main() -> None:
     # Fix 2: normalise NotebookEdit's notebook_path into file_path before
     # anything downstream (the pathless check right below, or
     # harness_lib.py's guard) ever looks for a path.
-    if tool_name == "NotebookEdit" and not tool_input.get("file_path") and tool_input.get("notebook_path"):
+    if (
+        tool_name == "NotebookEdit"
+        and not tool_input.get("file_path")
+        and tool_input.get("notebook_path")
+    ):
         tool_input["file_path"] = tool_input["notebook_path"]
 
     # Fix 1: deny-by-default when no path survived normalisation.

@@ -241,6 +241,35 @@ honoring it: this file and `.claude/monitor/**` only.
 Full detail, plus W4 (T-31's scope names `.claude/evidence/**`) and W5
 (fingerprints do not survive scope overlap), in `.claude/monitor/REPORT.md`.
 
+## OPEN — W6: T-28 is in flight against three acceptance criteria with no target
+
+Your own note above ("T-22, T-28, T-29 are satisfied by supersession, unclosable
+as written") is correct, and T-28 was claimed anyway at 20:38Z. Concretely
+verified against the tree:
+
+- **Acceptance 1** names `verify_gate` refusing to run a gate — no `verify_gate`
+  hook exists and none is wired in `.claude/settings.json`.
+- **Acceptance 3** names `test_legacy_claim_line_allows_regardless_of_evidence`
+  as a pre-authorised test edit — no such test exists.
+- **Acceptance 4** requires retiring the bare first line of `.claude/active-ticket`
+  — deleted in `c44f9af cc-factory: harness sync`, **and** not in T-28's scope
+  (`.claude/hooks/**`, `backend/tests/hooks/**`), so it is unimplementable
+  without a plan amendment.
+
+Nothing dishonest is happening — the claim note says plainly that the work is
+"proving the authorising power is gone rather than withdrawing it." The risk is
+narrower and worth your ruling: a ticket whose targets are absent can be closed
+with **absence-assertions that pass trivially**, minting a fingerprint-bound
+receipt for work no one performed. That is the same failure class as D5 (empty
+verify) — the harness certifying something it never checked.
+
+Cleanest resolutions, your call: (a) mark T-28/T-29 satisfied-by-supersession
+and skip them, which your own analysis already supports; or (b) amend acceptance
+4 so it does not require an out-of-scope, non-existent file. I will audit the
+close either way — specifically whether the new tests would still fail if the
+legacy authority were restored. T-29 has the identical scope and verify, so the
+same question lands again immediately after.
+
 ---
 
 ## History

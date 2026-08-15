@@ -1,0 +1,379 @@
+"""T-28 acceptance 1: "verify_gate refuses to run a gate or write evidence for a claim
+record with no session attribution; the refusal names the offending record."
+
+v1's `verify_gate.sh` (a bare-timestamp `.pass`-writing script gated on the shared,
+session-blind `.claude/active-ticket` ledger) is gone -- deleted whole by commit c44f9af
+("cc-factory: harness sync"). Its "run the gate, write the evidence" responsibility now
+lives entirely in `harness_lib.py`'s `cmd_close`, reached ONLY through
+`.claude/scripts/claim.sh close` (see `test_verify_gate.py`'s own docstring, part A: "via
+`.claude/scripts/claim.sh close`"). Under v2 a claim's session attribution IS its
+filename (`.claude/claims/<session_id>.json`), so v1's exact "bare line with no session"
+shape cannot recur -- but an unattributed-in-substance or malformed claim record still
+can: valid JSON missing the `ticket` key, a `session` field that disagrees with the
+filename that is supposedly its attribution, unparseable JSON, an empty file, and a
+`start_commit` that is missing or names a commit that no longer/never existed.
+
+THE CENTRAL FINDING, established empirically below and load-bearing for every test in
+this file: **no hook in this repository's wiring ever runs before `cmd_close`, for any of
+the five cases, so no fix confined to `.claude/hooks/**` can make this acceptance's
+"refuses ... names the offending record" guarantee hold.**
+
+  * `.claude/settings.json`'s only `PreToolUse` matchers are `"Edit|Write|NotebookEdit"`
+    and `"TaskUpdate"` (`test_no_pretooluse_hook_matches_bash_tool_calls` reads the real
+    file and pins this). `claim.sh close` runs through the **Bash** tool -- per
+    `.claude/rules/harness-protocol.md` rule 2, "All ticket lifecycle goes through
+    `.claude/scripts/claim.sh`" -- which is a tool name neither matcher names, so no
+    `PreToolUse` hook is ever invoked before `cmd_close` runs, whether a human types the
+    command at a shell or an agent session runs it via the Bash tool.
+  * The one hook that unconditionally fires on a Bash call, `PostToolUse` ->
+    `heartbeat.sh`, fires strictly AFTER the tool has already executed -- by which point
+    `cmd_close` has already either crashed (having written nothing) or, in the two cases
+    below where it does not crash, already minted a receipt. It structurally cannot
+    "refuse to run a gate or write evidence"; that already happened by the time it sees
+    anything.
+  * Wiring a new `PreToolUse` matcher for `Bash` would close the gap, but
+    `.claude/settings.json` is in `harness_lib.PROTECTED` and is not named in T-28's
+    scope (`.claude/hooks/**`, `backend/tests/hooks/**`) -- `scope_guard.sh` denies that
+    edit. `cmd_close` itself lives in `harness_lib.py`, also out of T-28's scope to edit.
+
+Per T-28's own escape valve ("If a case is genuinely unreachable through any hook ...
+say so plainly in your report rather than inventing a hook that cannot fire"), this file
+does NOT attempt a hook-layer fix -- there is no hook in the path for one to live in. What
+it does instead is pin the exact, currently-real behaviour of `cmd_close` for all five
+named cases as durable, checked evidence (not an "absence assertion that passes
+trivially" -- every test below drives the real `cmd_close` through the real
+`claim.sh close` with a genuinely malformed claim record and asserts on what it actually
+does), so a future ticket with scope over `harness_lib.py`/`.claude/settings.json` has a
+concrete regression suite to turn green. THESE TESTS PASSING DOES NOT MEAN ACCEPTANCE 1 IS
+MET -- see the module- and test-level docstrings; every test name says outright whether
+it pins a crash or a silent wrong-receipt.
+
+Self-contained like `test_verify_gate.py`: builds its own synthetic git project per test
+in `tmp_path` (real git repo, hand-authored `docs/tickets.json`, copies of the real
+`.claude/scripts/` and `.claude/scripts/claim.sh`) and never touches the real repo's
+`.claude/claims/`, `.claude/evidence/`, `docs/tickets.json`, or git history -- this
+session holds a LIVE claim on T-28 there right now.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+HARNESS_LIB = REPO_ROOT / ".claude" / "scripts" / "harness_lib.py"
+CLAIM_SH = REPO_ROOT / ".claude" / "scripts" / "claim.sh"
+GEN_TASKS = REPO_ROOT / ".claude" / "scripts" / "gen_tasks.py"
+SETTINGS_JSON = REPO_ROOT / ".claude" / "settings.json"
+
+# Well outside the real plan's real range (T-0..T-31) so it can never collide.
+TID = "T-9100"
+
+
+@pytest.fixture(autouse=True)
+def _never_touch_the_real_repos_live_harness_state() -> Iterator[None]:
+    """Hermeticity guard, mirroring `test_verify_gate.py`'s own: this session holds a
+    LIVE claim on T-28 in the real repo's `.claude/claims/` right now, and other
+    sessions may concurrently claim/close other real tickets while this suite runs, so
+    this cannot snapshot-and-diff the whole directory. Instead it asserts, before and
+    after every test, that this file's synthetic ticket id never shows up as a real
+    claim or receipt -- the one leak signature that would prove a subprocess call escaped
+    its `tmp_path` project.
+    """
+
+    def _check() -> None:
+        assert not (REPO_ROOT / ".claude" / "evidence" / f"{TID}.json").exists()
+        claims_dir = REPO_ROOT / ".claude" / "claims"
+        if claims_dir.is_dir():
+            for p in claims_dir.glob("*.json"):
+                try:
+                    doc = json.loads(p.read_text())
+                except (OSError, json.JSONDecodeError):
+                    continue
+                assert doc.get("ticket") != TID
+
+    _check()
+    yield
+    _check()
+
+
+# ---------------------------------------------------------------------------
+# Synthetic-project builder + drivers (self-contained; see module docstring)
+# ---------------------------------------------------------------------------
+def _run_git(proj: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=proj, capture_output=True, text=True, check=True)
+
+
+def _make_project(tmp_path: Path) -> Path:
+    proj = tmp_path / "proj"
+    (proj / "docs").mkdir(parents=True)
+    (proj / ".claude" / "scripts").mkdir(parents=True)
+    (proj / ".claude" / "claims").mkdir(parents=True)
+    (proj / ".claude" / "evidence").mkdir(parents=True)
+    (proj / "src").mkdir(parents=True)
+    shutil.copy2(HARNESS_LIB, proj / ".claude" / "scripts" / "harness_lib.py")
+    shutil.copy2(CLAIM_SH, proj / ".claude" / "scripts" / "claim.sh")
+    shutil.copy2(GEN_TASKS, proj / ".claude" / "scripts" / "gen_tasks.py")
+    tickets_doc = {
+        "project": "close-unattributed-claim-gap-test",
+        "tickets": [
+            {
+                "id": TID,
+                "title": "synthetic ticket",
+                "objective": "exercise cmd_close against a malformed claim record",
+                "acceptance": ["synthetic acceptance criterion"],
+                "scope": ["src/**"],
+                "depends_on": [],
+                "verify": "true",
+            }
+        ],
+    }
+    (proj / "docs" / "tickets.json").write_text(json.dumps(tickets_doc))
+    (proj / "src" / "module.txt").write_text("a")
+
+    _run_git(proj, "init", "-q", "-b", "main")
+    _run_git(proj, "config", "user.email", "hooktest@example.com")
+    _run_git(proj, "config", "user.name", "hook-test")
+    _run_git(proj, "config", "commit.gpgsign", "false")
+    _run_git(proj, "add", "-A")
+    _run_git(proj, "commit", "-q", "-m", "initial")
+    return proj
+
+
+def _env(proj: Path, session_id: str) -> dict[str, str]:
+    env = dict(os.environ)
+    env["CLAUDE_PROJECT_DIR"] = str(proj)
+    env["CLAUDE_CODE_SESSION_ID"] = session_id
+    return env
+
+
+def _claim_path(proj: Path, session_id: str) -> Path:
+    return proj / ".claude" / "claims" / f"{session_id}.json"
+
+
+def _evidence_path(proj: Path) -> Path:
+    return proj / ".claude" / "evidence" / f"{TID}.json"
+
+
+def _claim(proj: Path, session_id: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(proj / ".claude" / "scripts" / "claim.sh"), "claim", TID, "note"],
+        cwd=proj, capture_output=True, text=True, env=_env(proj, session_id), timeout=30,
+    )
+
+
+def _close(proj: Path, session_id: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(proj / ".claude" / "scripts" / "claim.sh"), "close"],
+        cwd=proj, capture_output=True, text=True, env=_env(proj, session_id), timeout=30,
+    )
+
+
+def _claim_then_corrupt(proj: Path, session_id: str, mutate: Any) -> None:
+    """Run a real `claim.sh claim` to produce a genuinely well-formed claim record
+    (real start_commit, real session id), then apply `mutate` to it -- so every case
+    below tests a record that was legitimately created and then became malformed /
+    misattributed, exactly the shape T-28 acceptance 1 is about, not a hand-forged
+    fixture that never went through the real lifecycle.
+    """
+    claimed = _claim(proj, session_id)
+    assert claimed.returncode == 0, claimed.stdout + claimed.stderr
+    path = _claim_path(proj, session_id)
+    record = json.loads(path.read_text())
+    mutate(record)
+    path.write_text(json.dumps(record))
+
+
+# ---------------------------------------------------------------------------
+# Structural proof: no PreToolUse hook can ever see a `claim.sh close` Bash call
+# ---------------------------------------------------------------------------
+def test_no_pretooluse_hook_matches_bash_tool_calls() -> None:
+    """Pins the architectural fact the whole file's "unreachable via hooks" finding
+    rests on: reads the REAL `.claude/settings.json` and asserts none of its
+    `PreToolUse` entries would ever fire for a Bash tool call (the only way
+    `claim.sh close` -- and so `cmd_close` -- is ever invoked, per harness-protocol.md
+    rule 2). If a future change wires a `PreToolUse` hook onto `Bash`, this test starts
+    failing, which is exactly the signal that a hook-layer fix for T-28 acceptance 1
+    becomes possible again.
+    """
+    settings = json.loads(SETTINGS_JSON.read_text())
+    pretooluse = settings["hooks"]["PreToolUse"]
+    assert pretooluse, "expected at least one PreToolUse entry"
+    for entry in pretooluse:
+        matcher = entry.get("matcher", "")
+        tool_names = matcher.split("|") if matcher else []
+        assert "Bash" not in tool_names, (
+            f"a PreToolUse hook now matches Bash ({entry!r}) -- cmd_close is reachable "
+            "via a hook again; T-28 acceptance 1 may now be fixable in .claude/hooks/**"
+        )
+    # And the converse, so this test cannot pass vacuously on an empty/renamed file:
+    # scope_guard.sh's own matcher is exactly what we expect it to be today.
+    matchers = {entry.get("matcher", "") for entry in pretooluse}
+    assert "Edit|Write|NotebookEdit" in matchers
+    assert "TaskUpdate" in matchers
+
+
+# ---------------------------------------------------------------------------
+# Case 1: valid JSON, no "ticket" key
+# ---------------------------------------------------------------------------
+def test_close_crashes_uncleanly_on_a_claim_record_missing_the_ticket_key(
+    tmp_path: Path,
+) -> None:
+    """PINS A GAP, does not close it (see module docstring): `cmd_close` does
+    `tid, start = c["ticket"], c["start_commit"]` with no `.get`/try-except, so a claim
+    record with no `ticket` key raises an unhandled `KeyError`. That is a raw traceback
+    on stderr, not "refuses to run a gate ... naming the offending record" -- there is no
+    human-readable message and nothing names the claim file at all.
+    """
+    proj = _make_project(tmp_path)
+    sid = "session-no-ticket-key"
+    _claim_then_corrupt(proj, sid, lambda record: record.pop("ticket"))
+
+    result = _close(proj, sid)
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "KeyError" in result.stderr
+    assert "Traceback (most recent call last)" in result.stderr
+    assert not _evidence_path(proj).exists()
+
+
+# ---------------------------------------------------------------------------
+# Case 2: "session" field disagrees with the claim's own filename
+# ---------------------------------------------------------------------------
+def test_close_silently_mints_a_receipt_when_session_field_disagrees_with_filename(
+    tmp_path: Path,
+) -> None:
+    """PINS A GAP, does not close it (see module docstring): `cmd_close` never reads
+    `c["session"]` at all -- it resolves identity purely from `_sid()` (the filename it
+    already used to look the record up) and writes THAT into the evidence record. So a
+    claim file whose internal `session` field disagrees with its own filename is not
+    refused, not flagged, not even noticed: `close` succeeds normally and mints a normal
+    receipt, with no acknowledgment anywhere that the record was internally
+    inconsistent. This is not a crash -- it is a true silent pass-through of a malformed
+    record, worse than the crash cases in that nothing at all signals a problem existed.
+    """
+    proj = _make_project(tmp_path)
+    sid = "session-real-owner"
+    _claim_then_corrupt(proj, sid, lambda record: record.__setitem__("session", "impostor"))
+
+    result = _close(proj, sid)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "closed" in result.stdout
+    assert _evidence_path(proj).exists()
+    receipt = json.loads(_evidence_path(proj).read_text())
+    # The receipt is minted for the record it read, silently ignoring the mismatch --
+    # it does not even preserve the impostor value anywhere for a human to spot later.
+    assert receipt["session"] == sid
+    assert receipt["ticket"] == TID
+
+
+# ---------------------------------------------------------------------------
+# Case 3: malformed / unparseable JSON
+# ---------------------------------------------------------------------------
+def test_close_crashes_uncleanly_on_unparseable_json(tmp_path: Path) -> None:
+    """PINS A GAP, does not close it (see module docstring): `session_claim` does
+    `json.load(f)` with no try/except, so a claim file containing unparseable bytes
+    raises an unhandled `json.decoder.JSONDecodeError`. Same class of failure as case 1:
+    a raw traceback, not a clean refusal that names the record.
+    """
+    proj = _make_project(tmp_path)
+    sid = "session-bad-json"
+    claimed = _claim(proj, sid)
+    assert claimed.returncode == 0, claimed.stdout + claimed.stderr
+    _claim_path(proj, sid).write_text("{not valid json")
+
+    result = _close(proj, sid)
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "json.decoder.JSONDecodeError" in result.stderr
+    assert "Traceback (most recent call last)" in result.stderr
+    assert not _evidence_path(proj).exists()
+
+
+# ---------------------------------------------------------------------------
+# Case 4: empty claim file
+# ---------------------------------------------------------------------------
+def test_close_crashes_uncleanly_on_an_empty_claim_file(tmp_path: Path) -> None:
+    """PINS A GAP, does not close it (see module docstring): an empty claim file is
+    also unparseable JSON (`json.load` raises "Expecting value" on zero bytes) -- same
+    unhandled-crash shape as case 3, kept as its own test since T-28 names it as its own
+    case and an empty file is a distinct real-world corruption mode (e.g. a truncated
+    write) from malformed-but-non-empty content.
+    """
+    proj = _make_project(tmp_path)
+    sid = "session-empty-claim"
+    claimed = _claim(proj, sid)
+    assert claimed.returncode == 0, claimed.stdout + claimed.stderr
+    _claim_path(proj, sid).write_text("")
+
+    result = _close(proj, sid)
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "json.decoder.JSONDecodeError" in result.stderr
+    assert "Traceback (most recent call last)" in result.stderr
+    assert not _evidence_path(proj).exists()
+
+
+# ---------------------------------------------------------------------------
+# Case 5a: start_commit key missing
+# ---------------------------------------------------------------------------
+def test_close_crashes_uncleanly_on_a_claim_record_missing_start_commit(
+    tmp_path: Path,
+) -> None:
+    """PINS A GAP, does not close it (see module docstring): same unhandled `KeyError`
+    shape as case 1, this time on `c["start_commit"]`.
+    """
+    proj = _make_project(tmp_path)
+    sid = "session-no-start-commit"
+    _claim_then_corrupt(proj, sid, lambda record: record.pop("start_commit"))
+
+    result = _close(proj, sid)
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "KeyError" in result.stderr
+    assert "start_commit" in result.stderr
+    assert "Traceback (most recent call last)" in result.stderr
+    assert not _evidence_path(proj).exists()
+
+
+# ---------------------------------------------------------------------------
+# Case 5b: start_commit names a commit that does not exist
+# ---------------------------------------------------------------------------
+def test_close_silently_mints_a_receipt_when_start_commit_names_a_nonexistent_commit(
+    tmp_path: Path,
+) -> None:
+    """PINS A GAP, does not close it (see module docstring): `changed_since(commit)`
+    shells out to `git diff --name-only <commit>` and `git diff --cached --name-only
+    <commit>` and reads `.stdout` without checking the return code. Against a
+    `start_commit` that names no real commit, both `git diff` invocations fail and
+    print nothing to stdout, so `changed_since` returns an EMPTY set -- the integrity
+    check (`integrity()`) then finds no "bad" files by construction, vacuously passes,
+    and `cmd_close` proceeds to run verify and mint a receipt exactly as if every file
+    ever changed under this ticket were in scope. A bogus `start_commit` doesn't just
+    go unrefused -- it silently DISABLES the out-of-scope integrity check entirely.
+    """
+    proj = _make_project(tmp_path)
+    sid = "session-bad-start-commit"
+    _claim_then_corrupt(
+        proj, sid, lambda record: record.__setitem__("start_commit", "deadbeef" * 5)
+    )
+
+    result = _close(proj, sid)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "closed" in result.stdout
+    assert _evidence_path(proj).exists()
+    receipt = json.loads(_evidence_path(proj).read_text())
+    assert receipt["ticket"] == TID
