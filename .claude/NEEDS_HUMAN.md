@@ -127,6 +127,51 @@ and let a build session pick them up between tickets.
   addition of T-17 to T-11's `depends_on`. Its scope also names `docs/tickets.json`,
   so it hits D1 as well.
 
+### D0. Verbal authorization to override D1/D2 could not be applied — two commands needed
+
+Hank authorized the build session to bypass the harness protections described in D1/D2. The
+authorization cannot take effect from inside the session: `docs/tickets.json` and
+`.claude/scripts/**` are blocked by TWO independent mechanisms, neither of which a verbal
+instruction reaches.
+
+1. The project's own `scope_guard.sh` PreToolUse hook returns a hard `deny` for every
+   `PROTECTED` path, before it ever looks at the claimed ticket's scope.
+2. Claude Code's auto-mode permission classifier separately denies the Bash equivalent
+   (`python3 -c "...p.write_text(...)"`), independently of the hook.
+
+Rather than defeat either, here is the exact change that unblocks the most work. Run it with the
+`!` prefix, or grant the permission and the session will do it:
+
+```
+python3 -c "import pathlib; p=pathlib.Path('docs/tickets.json'); s=p.read_text(); assert s.count('cd portal && npm run build && npm test')==3; p.write_text(s.replace('cd portal && npm run build && npm test','(cd portal && npm run build && npm test)'))"
+```
+
+That is the D2 fix — the parenthesised form the harness lint itself recommends. It makes T-0, T-9
+and T-19 claimable, and through T-0 it frees the entire T-1…T-11 product chain for reminting.
+
+For D1 (needed for T-22, T-26, T-27, T-28), drop `docs/tickets\.json` and `\.claude/scripts/.*`
+from the `PROTECTED` list in `.claude/scripts/harness_lib.py`, or add a permission rule for
+`Bash(python3 -c:*)` in `.claude/settings.local.json`.
+
+### D6. Latent sibling of the schema-inheritance bug T-23 fixed
+
+T-23 fixed a real and severe bug: `backend/tests/evals/test_no_docs_writes.py` spawned a child
+pytest that inherited `OTHRAM_TEST_SCHEMA` from its parent and then, at its own teardown,
+`DROP SCHEMA ... CASCADE`'d the schema the still-running parent suite was using. It was masked
+because `get_connection()` re-issues `CREATE SCHEMA IF NOT EXISTS` on every connect, so the name
+reappears instantly — empty. Fixed by giving the child its own environment with the variable
+stripped, so it derives and owns its own schema.
+
+The same pattern survives at `backend/tests/test_skip_db_tests_relocation.py:42-52`
+(`_run_with_skip_db_tests`): it does `env = os.environ.copy()` and spawns a child pytest without
+stripping `OTHRAM_TEST_SCHEMA`. It is inert TODAY only because it sets `SKIP_DB_TESTS=1`, which
+independently disables the schema create/drop path, and because none of its current targets touch
+the database. Change either of those facts and the parent-schema-drop returns.
+
+Both T-16 and T-23 — the tickets whose scope covers `backend/tests/**` — are now closed, so no
+open ticket owns this file. It needs either a small plan amendment or a one-line fix authorised
+directly.
+
 ### D5. What T-31's receipt does and does not attest
 
 The suite went from 206 failed / 343 passed to **578 passed**, and T-31 is being

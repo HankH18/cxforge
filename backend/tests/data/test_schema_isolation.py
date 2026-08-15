@@ -18,6 +18,19 @@ subprocess is as close to "the production code path, outside pytest" as a
 test can faithfully simulate, and it must resolve ``current_schema()`` to
 ``public``, exactly as a real deployment would.
 
+``test_get_connection_outside_pytest_with_override_set_still_uses_default_
+schema`` (T-24 acceptance 2) proves the sharper, actually-dangerous case
+that test above does not cover: a *leaked* ``OTHRAM_TEST_SCHEMA`` value
+present in a non-pytest process's environment. Before T-24, ``data.db.
+get_connection`` honored the override wherever it appeared, so a leaked
+env var would silently redirect a production process's queries to a test
+schema; this is the regression proof that it no longer can, because the
+override is now gated on ``PYTEST_VERSION`` (see ``data.db``'s module
+docstring for why that signal, and not ``PYTEST_CURRENT_TEST``, was
+chosen) also being present, and a bare ``python -c`` subprocess — with
+``PYTEST_VERSION`` explicitly stripped, exactly like ``OTHRAM_TEST_SCHEMA``
+is stripped in the sibling test — never sets it.
+
 The remaining tests in this module prove the isolation itself works
 end-to-end for the CURRENT (test) process: two different
 ``OTHRAM_TEST_SCHEMA`` values really do land rows in two different,
@@ -80,6 +93,42 @@ def test_get_connection_outside_pytest_uses_the_default_schema() -> None:
     assert result.stdout.strip() == "public", (
         f"expected the default schema outside pytest, got {result.stdout!r} "
         f"(stderr: {result.stderr!r})"
+    )
+
+
+def test_get_connection_outside_pytest_with_override_set_still_uses_default_schema() -> None:
+    """T-24 acceptance 2: the actual leaked-env-var scenario the ticket
+    defends against — ``OTHRAM_TEST_SCHEMA`` IS present (deliberately set
+    here, not merely absent as in the sibling test above) in a process
+    that is not itself pytest. ``PYTEST_VERSION`` is explicitly popped
+    (mirroring how the sibling test pops ``OTHRAM_TEST_SCHEMA``) so this
+    subprocess is a faithful stand-in for a real production process that
+    happens to have inherited a leaked test-schema value from its
+    environment: ``get_connection()`` must still resolve to the default
+    (``public``) schema, proving the override cannot fire without the
+    test-context signal also being present.
+    """
+    env = os.environ.copy()
+    env.pop("PYTEST_VERSION", None)
+    env[TEST_SCHEMA_ENV_VAR] = "leaked_schema_should_never_be_used"
+    # pytest's own [tool.pytest.ini_options] pythonpath (backend/src, .) is
+    # a pytest-only mechanism, not inherited by a bare subprocess — set
+    # PYTHONPATH explicitly so `from data.db import ...` resolves exactly
+    # as it does for every production entry point (main.py, evals/report.py).
+    env["PYTHONPATH"] = os.pathsep.join([str(BACKEND_SRC), str(REPO_ROOT)])
+
+    result = subprocess.run(
+        [sys.executable, "-c", _SUBPROCESS_SNIPPET],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "public", (
+        f"expected the default schema even with {TEST_SCHEMA_ENV_VAR} leaked into a "
+        f"non-pytest process's environment, got {result.stdout!r} (stderr: {result.stderr!r})"
     )
 
 

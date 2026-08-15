@@ -1,0 +1,8 @@
+{
+ "ticket": "T-24",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "note": "Unblocked by T-23's receipt and the only ready ticket whose scope needs no protected path: T-0/T-9/T-19 remain lint-blocked and T-22/T-26/T-27/T-28/T-29 all need .claude/hooks or docs/tickets.json writes that both the scope guard and the permission classifier deny. T-24 also unblocks T-30.",
+ "start_commit": "52b3548bbe317f9b108a76c4259d0edddf60749a",
+ "attempts": 0,
+ "ts": 1786764716
+}
