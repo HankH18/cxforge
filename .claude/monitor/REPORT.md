@@ -477,6 +477,24 @@ reversible with the commands in NEEDS_HUMAN; nothing has been pushed.
 
 ---
 
+# RUN 2 — resumed 2026-08-15T23:0xZ, 20 cycles at 15-minute intervals (~5h)
+
+Watch resumed at Hank's instruction. Baseline: 27 receipts, **T-21 claimed**
+(start `23973561`, 0 attempts), HEAD `2397356 ticket-start: T-21`.
+
+Cadence retuned for the longer interval: stall threshold raised 10min → 45min
+(at a 900s poll, a 10-minute silence would fire on almost any ordinary gap
+between tool calls and report noise rather than a real stall), and the liveness
+ping moved to hourly.
+
+**Priority target: T-21's close.** It is the ticket its own claim note calls
+"the highest-stakes ticket in the plan ... docs/eval-report/ would publish
+fabricated metrics", and per W15 the specific thing to check is whether its
+verify writes anything under `docs/` that the pre-verify integrity check cannot
+see. The run-1 summary below does NOT cover T-21.
+
+---
+
 # SESSION SUMMARY — 2026-08-15, cycles 0–~48
 
 ## Verdict

@@ -121,7 +121,7 @@ def _base_env(extra: dict[str, str | None] | None = None) -> dict[str, str]:
 
 
 def _run_report(
-    *extra_args: str, env: dict[str, str] | None = None
+    *extra_args: str, env: dict[str, str | None] | None = None
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "evals.report", *extra_args],
@@ -155,7 +155,7 @@ def _synthetic_repo(root: Path, labeled_set_yaml: str) -> Path:
 
 
 def _run_report_in(
-    repo: Path, *extra_args: str, env: dict[str, str] | None = None
+    repo: Path, *extra_args: str, env: dict[str, str | None] | None = None
 ) -> subprocess.CompletedProcess[str]:
     run_env = _base_env(env)
     run_env["PYTHONPATH"] = os.pathsep.join(
@@ -660,6 +660,38 @@ def test_report_fails_loudly_and_writes_nothing_without_a_usable_key(tmp_path: P
         "a run with no usable key must write nothing at all, not even a DRAFT — "
         f"found {output_dir}"
     )
+
+
+def test_fake_llm_escape_hatch_refuses_outside_a_pytest_process(tmp_path: Path) -> None:
+    """The TEST-ONLY fixed-verdict escape hatch (``EVALS_REPORT_FAKE_LLM_
+    FOR_TESTS_ONLY``) requires a SECOND, independent signal that this is
+    genuinely a test process — ``PYTEST_VERSION`` in the environment, the
+    same structural gate ``backend/src/data/db.py`` uses for
+    ``OTHRAM_TEST_SCHEMA`` — not the env var alone. A leaked or
+    accidentally-exported value of that variable in a real shell must not
+    be able to produce a report of entirely fabricated verdicts; that is
+    the exact defect T-21 removed when it deleted the stub tables, and a
+    convention-only gate (the env var by itself) would quietly reintroduce
+    it. Simulated here by explicitly stripping ``PYTEST_VERSION`` from the
+    child's environment while still setting the fake verdict — i.e. "the
+    env var is set, but nothing proves this is a test run."."""
+    repo = _synthetic_repo(tmp_path / "repo", APPROVED_HEADER + TWO_TICKETS)
+    output_dir = tmp_path / "out"
+
+    result = _run_report_in(
+        repo,
+        "--output-dir",
+        str(output_dir),
+        env={
+            "EVALS_REPORT_FAKE_LLM_FOR_TESTS_ONLY": DEFAULT_FAKE_LLM_VERDICT,
+            "PYTEST_VERSION": None,
+            "ANTHROPIC_API_KEY": "",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "EVALS_REPORT_FAKE_LLM_FOR_TESTS_ONLY" in result.stderr
+    assert not output_dir.exists()
 
 
 @pytest.mark.live
