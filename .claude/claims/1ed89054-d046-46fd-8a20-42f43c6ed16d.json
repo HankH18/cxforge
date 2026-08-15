@@ -1,8 +1,0 @@
-{
- "ticket": "T-20",
- "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
- "note": "Last of the T-16-unblocked remints (T-19 is unclaimable \u2014 its verify string fails the harness lint, see NEEDS_HUMAN.md D2). Verify is the non-live product subset, green.",
- "start_commit": "d6e2ccf348aa6522764d4d4a5a4bb7834d0472ef",
- "attempts": 0,
- "ts": 1786761608
-}

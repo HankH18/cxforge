@@ -160,7 +160,7 @@
 - **Depends on**: T-16 · **parallel_safe**: true
 - **Non-goals**: No redesign of the API shape or the portal UI; No new endpoints; parallel_safe only holds once T-16 lands per-process DB isolation; before that, concurrent runs share one database
 
-### T-20: Versioned schema migrations  `[queue]`
+### T-20: Versioned schema migrations  `[resolved]`
 - **Objective**: A single ad-hoc _MIGRATIONS string now re-executes in full on every production container start, with no record of what has been applied; it survives only because its one statement happens to be idempotent.
 - **Acceptance**: 1) numbered migration files plus a schema_migrations ledger table recording what has been applied, so each migration runs exactly once 2) the existing runs.reasons column is expressed as the first migration; a database created before it still upgrades in place, and a fresh database ends in the identical schema (both proven by test) 3) container bootstrap applies only unapplied migrations rather than re-running the full list on every boot 4) a deliberately non-idempotent migration is applied exactly once across repeated init_schema calls (test) 5) a test proves a pre-existing database created WITHOUT runs.reasons is upgraded in place, run against a database built from the pre-T-8 schema
 - **Verify**: `uv run pytest -m "not live" backend/tests/data backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q`
