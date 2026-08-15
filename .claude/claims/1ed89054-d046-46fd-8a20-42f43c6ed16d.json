@@ -1,8 +1,0 @@
-{
- "ticket": "T-6",
- "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
- "note": "Unblocked by T-5; lowest ready id. Remint \u2014 escalation engine; unblocks T-7, T-8 and T-10.",
- "start_commit": "9308b751fb4ef5cf23a2e7ddad37530794273bfa",
- "attempts": 0,
- "ts": 1786819638
-}

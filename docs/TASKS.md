@@ -48,7 +48,7 @@
 - **Depends on**: T-1, T-2 · **parallel_safe**: false
 - **Non-goals**: No checkpointing/interrupts/subgraphs; No escalation rule logic beyond calling T-6's interface (stub until T-6 lands)
 
-### T-6: Escalation engine  `[queue]`
+### T-6: Escalation engine  `[resolved]`
 - **Objective**: Hard rules + classifier + internal-note composition (R6).
 - **Acceptance**: 1) hard rules exactly as pinned, deterministic, unit-tested individually 2) classifier via LLMClient emitting EscalationCall 3) final-decision combinator (rule OR classifier >= threshold) 4) internal note contains summary, grounded facts, reason enum; customer notice posted 5) wired into T-5's decide/act
 - **Verify**: `uv run pytest -m "not live" backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q`
