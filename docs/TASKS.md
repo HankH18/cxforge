@@ -152,7 +152,7 @@
 - **Depends on**: T-16 · **parallel_safe**: true
 - **Non-goals**: No change to the hard-rule set, the combinator, or the confidence threshold; No change to which conditions escalate — only to which FAILURES are allowed to look like them; parallel_safe only holds once T-16 lands per-process DB isolation; before that, concurrent runs share one database; NOT parallel-safe with T-7: both declare backend/src/escalation/**. T-7 is currently open (blocked on label approval), so these two must not run concurrently
 
-### T-19: Bind the portal API contract  `[queue]`
+### T-19: Bind the portal API contract  `[resolved]`
 - **Objective**: portal/src/api.ts and backend/src/portal/schemas.py agree today purely by hand; nothing — no test, codegen step or CI job — fails if they drift, so a renamed field breaks only the live UI.
 - **Acceptance**: 1) the TypeScript request/response types are GENERATED from the FastAPI OpenAPI schema by a committed script — a hand-written parity assertion is explicitly not acceptable, since re-deriving the duplication by hand is the defect 2) regenerating against the current backend produces types byte-identical to what is committed 3) a deliberate backend field rename FAILS the check (demonstrate in the test, not by hand) 4) the parity check is wired into .github/workflows/ci.yml, asserted by a test that reads the workflow file 5) the parity check is demonstrated FAILING against a deliberately renamed backend field before being wired into CI
 - **Verify**: `uv run pytest -m "not live" backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q && (cd portal && npm run build && npm test)`

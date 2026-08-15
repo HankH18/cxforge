@@ -1,8 +1,0 @@
-{
- "ticket": "T-19",
- "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
- "note": "Newly claimable after the authorised verify-string amendment (dep T-16 already had a receipt). Remint \u2014 binds the portal API contract across backend and frontend.",
- "start_commit": "87a275c64d45191b59c44009b4438121c5cde2f0",
- "attempts": 0,
- "ts": 1786819748
-}
