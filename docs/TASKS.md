@@ -168,7 +168,7 @@
 - **Depends on**: T-16 · **parallel_safe**: false
 - **Non-goals**: No schema changes beyond formalising the existing runs.reasons migration; No ORM adoption — this is migration bookkeeping only
 
-### T-21: Escalation eval measures the real engine  `[queue]`
+### T-21: Escalation eval measures the real engine  `[resolved]`
 - **Objective**: evals/report.py never imports EscalationEngine or run_classifier — it reimplements the precedence and fills the rest from three hand-authored replay tables, so its 1.0 scores grade a parallel implementation rather than the shipped engine. Requires a human-provided OPENAI_API_KEY and human-approved labels (T-7) before it can start.
 - **Acceptance**: 1) the report calls escalation.engine.EscalationEngine.evaluate directly; STUB_CLASSIFIER_VERDICTS, STUB_STRUCTURAL_REASON and STUB_ABSTENTION_IDS are deleted, not merely bypassed 2) the classifier half runs against a live LLMClient when OPENAI_API_KEY is present; without it the report FAILS rather than silently substituting fabricated verdicts 3) a test asserts the report and the engine cannot diverge — the report has no escalation decision logic of its own 4) the recommended threshold, the sample size, and the UTC timestamp of the run that produced it are written as fields in docs/eval-report/metrics.json — not prose in report.md — so they are machine-checkable 5) recall >= 0.95 on the hard-trigger subset is measured against the real engine, per T-7 acceptance 4
 - **Verify**: `uv run pytest backend/tests/evals -q`

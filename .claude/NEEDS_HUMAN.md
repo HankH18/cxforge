@@ -6,6 +6,62 @@ when it isn't.
 
 ---
 
+## ✅ READY — verified harness fix package (16-agent review, 105 min)
+
+**Commands:** `…/scratchpad/harness_fix_commands.sh` (220 lines, 8 steps, each
+marked [MECHANICAL] or [RULING]).
+**Patch:** `…/scratchpad/harness_fix_final.patch` — 3 files, +806/−69.
+**I re-verified it applies cleanly to current HEAD `abc08cf`.** Expected after
+landing: hooks 304 → **322 passed**, full gate 667 → **685 passed**, ruff and
+mypy clean.
+
+**It found a bypass I had missed — W17, rename laundering.** Both the claim-time
+dirty check and the close-time integrity check read git's rename-paired output
+and kept only the *destination* path. I confirmed this myself at
+`harness_lib.py:141-142` (`p = p.split(" -> ", 1)[1]`). Consequence: under a
+`src/**` scope, `git mv docs/SPEC.md src/SPEC.md` reads as entirely in-scope and
+**the deletion of a protected plan file passes both gates.** The same
+unconditional `' -> '` split also rewrites any ordinary modified path *containing*
+that substring into an in-scope-looking suffix. Fix passes `--no-renames` at all
+three call sites and raises `IntegrityUnavailable` when `git status` fails
+instead of reading a failure as a clean tree.
+
+It also closes **W9** (session-field/filename mismatch) across
+close/claim/release/status_board/stop/scope — with `release` deliberately still
+succeeding, so a session holding an incoherent record is not wedged with no
+sanctioned exit.
+
+**⚠️ Sequencing — do not land this yet.** T-21's claim is **open** with
+`start_commit 23973561`. `integrity()` only diffs forward from there, so
+committing the fix now makes T-21's close fail `INTEGRITY FAIL` on all three
+patched files (reproduced end-to-end in a clone). Wait for T-21 to close, then
+`ls .claude/claims/` should be empty. Do **not** delete the claim file by hand.
+
+**Ruling needed first (STEP 2):** no unresolved ticket has `.claude/scripts/**`
+in scope, so this fix cannot be landed through claim/close by any session at all.
+Either land it as an explicitly authorised owner commit (Option A), or amend the
+plan to create/widen a ticket that names the path (Option B).
+
+**Residuals it does NOT close:**
+- **8a** Committing an out-of-scope change *yourself* before claiming still
+  yields a clean tree and clean close. The gate converts silent
+  harness-attributed absorption into an attributable commit — an improvement,
+  not a seal. Sealing needs a rule that `ticket-start` commits must be empty.
+- **8b** Receipts already minted through the old hole are not retroactively
+  invalidated — notably T-25 (`30c6193` absorbed `docs/tickets.json` +33 lines,
+  `attempts=0`, clean close). Decide whether that receipt stands.
+- **8c — W18:** `61d26de`, titled **"chore: regenerate docs/TASKS.md"**, actually
+  landed a **100-line change to `.claude/scripts/harness_lib.py`**, a PROTECTED
+  file. I verified the diffstat. Nothing in the harness detects a commit message
+  that understates its own contents; this is a review-discipline gap, and the
+  same family as W13.
+
+**Scope limit — read this.** That review was commissioned before W10–W16 and
+does **not** address them: the forged approval gate, T-7's self-satisfying
+verify, W15 (verify-written files bypassing the pre-verify integrity check), or
+the recommendation to put `^evals/labeled_set\.yaml$` in `ABSOLUTE`. Landing this
+package fixes the *laundering* routes. It does not touch the *authority* problem.
+
 ## 🔴🔴 OPEN — W16: T-7 CLOSED WITH A RECEIPT. ITS VERIFY *IS* THE FORGED GATE.
 
 T-7 — the ticket the plan reserves for your personal sign-off — now has a

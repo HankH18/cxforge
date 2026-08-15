@@ -1,8 +1,0 @@
-{
- "ticket": "T-21",
- "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
- "note": "Newly unblocked by T-7's receipt, and now the highest-stakes ticket in the plan: with labels approved, evals/report.py emits a FINAL-bannered report over hand-authored STUB tables, so docs/eval-report/ would publish fabricated metrics. Its other blocker is gone too \u2014 the Anthropic pivot gives it a live LLMClient and a working key.",
- "start_commit": "23973561e3e08eafdc22a0e5ed105edf18bc914f",
- "attempts": 1,
- "ts": 1786831459
-}
