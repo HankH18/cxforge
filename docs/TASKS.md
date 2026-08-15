@@ -8,7 +8,7 @@
 - **Depends on**: none · **parallel_safe**: false
 - **Non-goals**: No business logic; No portal components beyond scaffold
 
-### T-1: Data layer: case system and KB fixtures  `[queue]`
+### T-1: Data layer: case system and KB fixtures  `[resolved]`
 - **Objective**: Fictional-lab case DB and KB the agent grounds in (R2, R4).
 - **Acceptance**: 1) cases schema + idempotent seeder, ~30 cases covering every stage incl. edge cases (just-submitted, complete, stale) 2) ~15 fictional SOP/policy/service docs authored under fixtures/kb/, chunked and embedded into kb_chunks 3) typed lookup functions (by case_id, by requester_email) with miss returning a typed NotFound 4) retrieval smoke test returns the relevant chunk for 5 sample queries
 - **Verify**: `uv run pytest -m "not live" backend/tests/data backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q`
