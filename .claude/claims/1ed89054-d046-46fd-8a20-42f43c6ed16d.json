@@ -1,8 +1,0 @@
-{
- "ticket": "T-27",
- "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
- "note": "Unblocked by T-22's receipt and the only remaining ticket with real defects rather than paperwork: hook-scope allows pathless payloads, NotebookEdit bypasses the guard entirely, and v2's stop guard fails OPEN where v1 failed closed. Also gates T-28 and T-29.",
- "start_commit": "232a79dd39be1190daba5ff24de324c8ffa4e3c5",
- "attempts": 0,
- "ts": 1786824592
-}

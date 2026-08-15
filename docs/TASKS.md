@@ -216,7 +216,7 @@
 - **Depends on**: T-22 · **parallel_safe**: false
 - **Non-goals**: No re-litigating any closed ticket's contract; the snapshot pins what exists; status fields are excluded from the snapshot (T-22's hooks own them)
 
-### T-27: Guards fail closed on every input they cannot judge  `[queue]`
+### T-27: Guards fail closed on every input they cannot judge  `[resolved]`
 - **Objective**: scope_guard exits 0 (allow) when its python3 realpath helper fails, silently allows payloads lacking tool_input.file_path, and the Edit|Write matcher misses NotebookEdit entirely.
 - **Acceptance**: 1) failure of the realpath helper (python3 absent or erroring) produces a deny naming the infra failure, not a silent allow; test simulates via PATH manipulation 2) a PreToolUse payload whose tool_input carries no file_path is denied unless the tool is on an explicit commented pathless allowlist in the hook 3) NotebookEdit is added to the settings.json matcher and its notebook_path is honoured by the guard; tests drive the real hook with NotebookEdit payloads 4) the hook header's coverage-limitation note is updated to reflect the narrowed gaps
 - **Verify**: `uv run pytest backend/tests/hooks -q`
