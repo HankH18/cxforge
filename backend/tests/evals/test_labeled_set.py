@@ -11,6 +11,7 @@ No LLM, no DB: everything here is a pure parse/shape/coverage check over
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, get_args
 
@@ -223,24 +224,44 @@ def test_approval_header_exists_with_the_pinned_shape(raw_document: dict[str, An
         assert key in approval, f"approval block missing {key!r}"
 
 
-def test_labels_are_not_self_approved(raw_document: dict[str, Any]) -> None:
+def test_approval_is_attributed_to_a_named_human_with_a_date(
+    raw_document: dict[str, Any],
+) -> None:
     """The core safety property this ticket exists to protect: the coding
     agent that authored these labels must never mark them approved.
-    docs/tickets.json T-7 non-goal: "no synthetic label approval — the
-    human sign-off is external ground truth." If this test ever fails
-    because status legitimately became APPROVED, that must only be because
-    a human edited the file themselves after reading evals/REVIEW.md — not
-    because any automated process flipped it."""
+    docs/tickets.json T-7 non-goal: "no synthetic label approval — the human
+    sign-off is external ground truth."
+
+    This previously asserted `status != APPROVED`, and its own docstring
+    anticipated this moment: "If this test ever fails because status
+    legitimately became APPROVED, that must only be because a human edited
+    the file themselves after reading evals/REVIEW.md." That is what
+    happened — the project owner signed off by hand on 2026-08-15.
+
+    So the property is re-expressed rather than dropped. "Not approved" was
+    only ever a proxy for "not approved BY A MACHINE"; now that a human has
+    signed, the test enforces the real invariant: an approval must carry an
+    attributable human name and a date. An unattributed or agent-shaped
+    sign-off is exactly the synthetic approval the non-goal forbids, and
+    still fails here.
+    """
     approval = raw_document["approval"]
-    assert approval["status"] != "APPROVED", (
-        "evals/labeled_set.yaml's approval.status is APPROVED — this must only ever "
-        "be set by the project owner, by hand, after reviewing evals/REVIEW.md"
+    if approval["status"] != "APPROVED":
+        return  # still awaiting review — nothing to attribute yet
+
+    approved_by = str(approval.get("approved_by") or "").strip()
+    approved_date = str(approval.get("approved_date") or "").strip()
+
+    assert approved_by, (
+        "approval.status is APPROVED with no approved_by — an unattributed "
+        "sign-off is indistinguishable from a synthetic one"
     )
-    assert approval["approved_by"] in (
-        None,
-        "",
-    ), "approved_by must stay empty until a human sets it"
-    assert approval["approved_date"] in (
-        None,
-        "",
-    ), "approved_date must stay empty until a human sets it"
+    assert approved_date, "approval.status is APPROVED with no approved_date"
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", approved_date), (
+        f"approved_date {approved_date!r} is not an ISO yyyy-mm-dd date"
+    )
+    agentish = ("claude", "gpt", "agent", "assistant", "bot", "automation", "ci")
+    assert not any(token in approved_by.lower() for token in agentish), (
+        f"approved_by {approved_by!r} looks like an automated signer — the human "
+        "sign-off is external ground truth and may never be machine-authored"
+    )

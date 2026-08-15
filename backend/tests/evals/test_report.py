@@ -37,6 +37,21 @@ approval:
   approved_date: "2026-08-13"
 """
 
+# The real evals/labeled_set.yaml was APPROVED by the project owner on
+# 2026-08-15. Every test below that needs to exercise the UNAPPROVED path
+# therefore builds a synthetic repo whose own canonical set carries this
+# header, instead of leaning on the real file's state. That is strictly
+# better than what those tests did before: they silently depended on the
+# repo happening to be unapproved, so the day a human signed off they all
+# went red at once. Pinned to a fixture, the refuse-while-unapproved
+# guarantee is testable forever, in either direction.
+UNAPPROVED_HEADER = """\
+approval:
+  status: PROPOSED_AWAITING_HUMAN_REVIEW
+  approved_by: ""
+  approved_date: ""
+"""
+
 TWO_TICKETS = """\
 meta: {}
 tickets:
@@ -118,15 +133,29 @@ def _docs_eval_report_snapshot() -> dict[str, bytes]:
     return {p.name: p.read_bytes() for p in sorted(REAL_DOCS_EVAL_REPORT.iterdir()) if p.is_file()}
 
 
-def test_labeled_set_yaml_is_actually_not_approved_right_now() -> None:
-    """Sanity precondition for every other test in this module: if this
-    ever fails, it's because a human genuinely approved the labels (see
-    evals/REVIEW.md) — not something this suite should silently tolerate
-    without the rest of its assertions changing meaning."""
+def test_real_labeled_set_approval_state_is_pinned() -> None:
+    """Sanity precondition for the rest of this module: whatever state the
+    real labeled set is in, the suite knows about it.
+
+    This used to assert `status != APPROVED`, and warned that a failure here
+    would mean "a human genuinely approved the labels — not something this
+    suite should silently tolerate without the rest of its assertions
+    changing meaning." That is exactly what happened (owner sign-off,
+    2026-08-15), and the rest of this module's assertions did change with
+    it: every test that needs the UNAPPROVED path now builds a synthetic
+    repo carrying UNAPPROVED_HEADER rather than depending on the real file.
+
+    What remains worth pinning is that an APPROVED real set is attributed —
+    an unattributed approval is the synthetic sign-off T-7's non-goal
+    forbids. The shape of the attribution itself is enforced in
+    test_labeled_set.py::test_approval_is_attributed_to_a_named_human_with_a_date.
+    """
     import yaml
 
-    raw = yaml.safe_load(REAL_LABELED_SET.read_text())
-    assert raw["approval"]["status"] != "APPROVED"
+    approval = yaml.safe_load(REAL_LABELED_SET.read_text())["approval"]
+    if approval["status"] == "APPROVED":
+        assert approval.get("approved_by"), "APPROVED with no approved_by"
+        assert approval.get("approved_date"), "APPROVED with no approved_date"
 
 
 def test_report_generator_runs_end_to_end_and_exits_zero(tmp_path: Path) -> None:
@@ -190,12 +219,20 @@ def test_metrics_json_has_the_expected_shape(tmp_path: Path) -> None:
 
 
 def test_report_refuses_a_final_report_while_labels_are_unapproved(tmp_path: Path) -> None:
-    """The core "refuse" requirement: against the real (unapproved) fixture,
-    the generator must produce a DRAFT-watermarked report, not one that
-    reads as an authoritative measurement — and must still exit 0 (this is
-    expected, correct behavior, not a failure)."""
+    """The core "refuse" requirement: while the canonical labeled set is
+    unapproved, the generator must produce a DRAFT-watermarked report rather
+    than one that reads as an authoritative measurement, and must exit
+    non-zero.
+
+    Driven through a synthetic repo whose OWN canonical set is unapproved.
+    It previously used the real file and silently depended on the repo
+    happening to be unapproved — so the moment the owner signed off, the
+    test went red without the guarantee itself having changed. Pinned to a
+    fixture, this holds in both directions, forever.
+    """
+    repo = _synthetic_repo(tmp_path / "repo", UNAPPROVED_HEADER + TWO_TICKETS)
     output_dir = tmp_path / "out"
-    result = _run_report("--output-dir", str(output_dir))
+    result = _run_report_in(repo, "--output-dir", str(output_dir))
     assert result.returncode != 0
 
     metrics = json.loads((output_dir / "metrics.json").read_text())
@@ -385,15 +422,24 @@ def test_classifier_confidence_threshold_is_untouched_by_this_ticket() -> None:
 def test_a_doctored_labeled_set_passed_via_the_flag_cannot_produce_an_exit_zero_run(
     tmp_path: Path,
 ) -> None:
-    """T-25 acceptance 1/3: the exact attack the ticket names. A copy of the
-    real labeled set with ``approval.status`` flipped to APPROVED and signoff
-    fields filled in, handed to ``--labeled-set``, used to yield a non-draft
-    exit-0 run with no human anywhere in the loop. The gate now reads the
-    committed file, so the substituted set is scored and rendered but the run
-    is still a DRAFT and still exits non-zero."""
+    """T-25 acceptance 1/3: the exact attack the ticket names. A labeled set
+    with ``approval.status`` flipped to APPROVED and signoff fields filled in,
+    handed to ``--labeled-set``, used to yield a non-draft exit-0 run with no
+    human anywhere in the loop. The gate reads the canonical committed file,
+    so the substituted set is scored and rendered but the run is still a
+    DRAFT and still exits non-zero.
+
+    Run against a synthetic repo whose canonical set is UNAPPROVED. Using the
+    real repo would no longer test anything now that the owner has approved
+    the real labels: exit 0 would be correct for the canonical file's own
+    sake, so a passing run could not distinguish "the flag was ignored" from
+    "the flag worked". The attack is only observable while canonical is
+    unapproved — which is precisely when it would have mattered.
+    """
     import yaml
 
-    doctored = yaml.safe_load(REAL_LABELED_SET.read_text())
+    repo = _synthetic_repo(tmp_path / "repo", UNAPPROVED_HEADER + TWO_TICKETS)
+    doctored = yaml.safe_load((repo / "evals" / "labeled_set.yaml").read_text())
     doctored["approval"] = {
         "status": "APPROVED",
         "approved_by": "Not A Real Reviewer",
@@ -403,7 +449,8 @@ def test_a_doctored_labeled_set_passed_via_the_flag_cannot_produce_an_exit_zero_
     doctored_path.write_text(yaml.safe_dump(doctored, sort_keys=False))
     output_dir = tmp_path / "out"
 
-    result = _run_report(
+    result = _run_report_in(
+        repo,
         "--labeled-set",
         str(doctored_path),
         "--output-dir",
@@ -423,37 +470,60 @@ def test_a_doctored_labeled_set_passed_via_the_flag_cannot_produce_an_exit_zero_
     assert "substituted via `--labeled-set`" in report_text
 
 
-def test_default_invocation_while_unapproved_writes_nothing_under_docs() -> None:
+def test_default_invocation_while_unapproved_writes_nothing_under_docs(
+    tmp_path: Path,
+) -> None:
     """T-25 acceptance 2: the default invocation (no ``--output-dir``) used to
-    render DRAFT artifacts straight into ``docs/eval-report/``. It must now
-    refuse before writing anything, leaving the published tree byte-identical.
+    render DRAFT artifacts straight into ``docs/eval-report/``. It must refuse
+    before writing anything, leaving the published tree byte-identical.
 
-    Deliberately runs with the real defaults — that is the invocation the
-    ticket is about — and proves non-interference by snapshot comparison
-    rather than by trusting the exit code."""
-    before = _docs_eval_report_snapshot()
-    result = _run_report()
+    Runs in a synthetic repo whose canonical set is unapproved, and proves
+    non-interference by snapshot comparison rather than by trusting the exit
+    code. It previously ran against the real repo's defaults — which was
+    correct while the real labels were unapproved, but is now actively wrong:
+    with them approved, the default invocation SHOULD write to docs, so
+    against the real tree this test would either fail or (worse) pass while
+    silently rewriting published artifacts on every suite run.
+    """
+    repo = _synthetic_repo(tmp_path / "repo", UNAPPROVED_HEADER + TWO_TICKETS)
+    docs_dir = repo / "docs" / "eval-report"
+    real_docs_before = _docs_eval_report_snapshot()
+
+    result = _run_report_in(repo)
+
     assert result.returncode != 0
     assert "REFUSING to write" in result.stderr
-    assert _docs_eval_report_snapshot() == before
+    assert not docs_dir.exists(), (
+        f"unapproved default run created {docs_dir} — nothing unapproved may "
+        "reach the published docs tree, not even watermarked"
+    )
+    # ...and the REAL published tree is untouched, proving the synthetic repo
+    # genuinely rooted itself in tmp_path rather than falling back to this one.
+    assert _docs_eval_report_snapshot() == real_docs_before
 
 
 def test_a_draft_render_must_name_an_output_dir_outside_docs(tmp_path: Path) -> None:
-    """T-25 acceptance 2, the general rule behind the default case: any
-    ``--output-dir`` that lands under ``docs/`` is refused while unapproved,
-    including a fresh subdirectory that does not exist yet — the refusal
-    happens before the directory is created."""
-    target = REPO_ROOT / "docs" / "eval-report-t25-should-never-exist"
+    """T-25 acceptance 2, the general rule behind the default case: while the
+    canonical set is unapproved, any ``--output-dir`` landing under ``docs/``
+    is refused — including a fresh subdirectory that does not exist yet, so
+    the refusal demonstrably happens before the directory is created.
+
+    Moved into a synthetic unapproved repo for the same reason as the default
+    -invocation test above: against the now-approved real repo this path is
+    permitted, so testing it there would assert the opposite of the rule.
+    """
+    repo = _synthetic_repo(tmp_path / "repo", UNAPPROVED_HEADER + TWO_TICKETS)
+    target = repo / "docs" / "eval-report-t25-should-never-exist"
     assert not target.exists(), "stale artifact from a previous run"
 
-    result = _run_report("--output-dir", str(target))
+    result = _run_report_in(repo, "--output-dir", str(target))
     assert result.returncode != 0
     assert "REFUSING to write" in result.stderr
     assert not target.exists()
 
     # ...and the same run outside docs/ still produces its draft.
     output_dir = tmp_path / "out"
-    assert _run_report("--output-dir", str(output_dir)).returncode != 0
+    assert _run_report_in(repo, "--output-dir", str(output_dir)).returncode != 0
     assert "DRAFT" in (output_dir / "report.md").read_text()
 
 
