@@ -1,8 +1,0 @@
-{
- "ticket": "T-12",
- "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
- "note": "First remint now that the suite is green: T-12 has no deps, its verify (backend/tests/hooks) passes on the current tree, and reminting from the lowest ready id upward is the order docs/TASKS.md defines. Its only evidence today is an inert v1 .pass record.",
- "start_commit": "db482b4c13bbf1a8faaaef198f9aacaf5beb07f9",
- "attempts": 0,
- "ts": 1786760667
-}
