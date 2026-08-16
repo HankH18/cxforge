@@ -168,6 +168,38 @@
 >    about — and did not land the test, which would turn the suite red while you
 >    were away.
 >
+> ### T-11 has a SECOND blocker besides Zendesk — already known, but easy to lose
+> I first wrote this up as an undiscovered blocker. That was wrong and I am
+> correcting it: `docs/demo-script.md` already documents it thoroughly (the
+> preamble at lines 10–11, and all of "Shot 8"), including that the portal's
+> trace link lands on a Langfuse 404. Credit where due. It is repeated here only
+> because it is the one T-11 blocker that the Zendesk re-auth does **not** clear,
+> and the handoff notes had reduced T-11 to "waiting on the token".
+>
+> T-11 acceptance 3 asks the demo script to cover "…**one Langfuse trace**
+> showing tool result to templated reply". **Langfuse is not instrumented
+> anywhere in this repo.** `backend/src/portal/service.py::_trace_url` says so:
+> > "No Langfuse instrumentation is actually wired anywhere in this repo yet —
+> > `agent.nodes.act` mints `trace_id` as a bare `uuid.uuid4().hex` and never
+> > reports it to Langfuse … so this constructs a conventional-shape URL … that
+> > may not resolve to a real trace."
+>
+> So the portal shows a `trace_url` that will 404. `LANGFUSE_PUBLIC_KEY` and
+> `LANGFUSE_SECRET_KEY` are both set in `.env`, which makes this easy to miss —
+> the credentials are there, the instrumentation is not.
+>
+> **Stating the severity honestly:** the acceptance criterion is about the demo
+> *script/shot list*, so the document can be written. What cannot happen is the
+> demo itself — you cannot film a trace that was never emitted. So this is not
+> necessarily a close-time failure for T-11; it is a "the demo will break on
+> camera" defect, which is worse in the way that matters.
+>
+> It is also **out of T-11's scope to fix** (`docs/**`, `deploy/**`,
+> `scripts/verify_deploy.sh`, `README.md` — instrumenting Langfuse means editing
+> `backend/src/agent/**`). By rule 4 that makes it a plan defect, which is why it
+> is here rather than fixed. Your options: instrument Langfuse under a new
+> ticket, or amend acceptance 3 to drop the trace shot.
+>
 > ### Eval report — sound, but two small gaps worth your call
 > I checked it rather than assuming the pivot had rotted it, and it holds up:
 > `classifier_source: live`, 36 real classifier calls, it names the live
