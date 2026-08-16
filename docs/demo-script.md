@@ -203,20 +203,45 @@ templated `compose` output — i.e., visually confirm the R9 story
 
 | Shot | Recordable today? | Blocker |
 |---|---|---|
-| 1–5 (five live scenarios) | No | Zendesk OAuth token expired (401) — needs re-auth. Droplet is no longer a blocker |
-| 6 (gate flip + edited-approve) | **Yes**, against the local stack or the droplet | None — rehearse now |
-| 7 (metrics panel) | **Yes**, against the local stack or the droplet | None — rehearse now |
+| 1–5 (five live scenarios) | No | Zendesk re-auth **and** the ingress→agent wiring below. Droplet is no longer a blocker |
+| 6a (gate flip) | **Yes** — verified in a real browser against the droplet | None — rehearse now |
+| 6b (edited-approve) | No | There are no drafts. `runs` is empty on the droplet *and* locally |
+| 7 (metrics panel) | Renders, but empty | Same cause: 0 runs, so every figure is 0 and "No escalations recorded" |
 | 8 (Langfuse trace) | No | No Langfuse instrumentation exists in the code |
 
-Shots 6 and 7 are genuinely ready to record today and don't need to wait
-on anything — and they can now be recorded against the live droplet
-(`161.35.2.250`) rather than a laptop, which is better for recording
-stability. Shots 1–5 need a human to re-authorize the expired Zendesk
-OAuth token (`uv run python scripts/zendesk_oauth.py`, per
-`docs/zendesk-runbook.md`); the droplet that used to be the other half of
-this blocker now exists (`docs/deploy.md`). Shot 8 needs actual
-engineering work — adding Langfuse instrumentation — before it exists to
-record at all.
+**Corrected after actually opening the portal in a browser.** An earlier
+version of this table said shots 6 and 7 were "genuinely ready to record
+today and don't need to wait on anything." That was too optimistic, and a
+later edit made it worse by adding "or the droplet." What is true:
+
+- **Shot 6a is real and verified.** Clicking the gate checkbox on the
+  droplet issues `PUT /api/settings/gate` → 200, and the server then
+  reports `{"enabled":true}`. The label flips to "Gate is ON — every reply
+  is held as a draft for approve/edit/reject." That is filmable today.
+- **Shot 6b and shot 7 are not.** Both need runs, and `runs` is empty
+  everywhere. `seed_all` loads only `cases` and `kb_chunks`; nothing seeds
+  runs. The metrics panel renders correctly but shows 0% / 0.0s / 0.0s and
+  "No escalations recorded" — technically a working panel, not a demo.
+
+The reason there are no runs is **not** the Zendesk token: the webhook
+ingress validates, dedups and returns `202 accepted` without ever starting
+an agent run, and `agent.graph.run_agent` has no production caller at all
+(every call site is a test). Re-authorizing Zendesk gets tickets created
+and webhooks accepted, and still produces no reply and no draft. See
+`.claude/NEEDS_HUMAN.md` — connecting ingress to the agent is outside every
+existing ticket's scope and needs a plan decision.
+
+So shots 1–5 need two things, not one: the Zendesk re-auth
+(`uv run python scripts/zendesk_oauth.py`, per `docs/zendesk-runbook.md`)
+**and** that wiring. Shot 8 needs Langfuse instrumentation before it exists
+to record at all.
+
+One presentational note, since the camera will show it: the portal has no
+stylesheet at all — no `.css` file, no CSS import, no `className` anywhere
+in `portal/src/`, and the browser requests no stylesheet. It renders as
+unstyled default-serif HTML. T-9's non-goal capped styling at
+"clean-and-readable" so this breaks no acceptance criterion, but it is
+worth a deliberate decision before filming rather than a surprise.
 
 See `docs/architecture.md` for the full pipeline these scenarios exercise,
 `docs/grounding.md` for the adversarial story Shot 5 is a live instance

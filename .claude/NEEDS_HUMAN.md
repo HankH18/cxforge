@@ -39,6 +39,63 @@
 > **161.35.2.250** and passes `verify_deploy.sh` in REMOTE mode (4/4). T-11 is
 > waiting on T-10, which is waiting on that token.
 >
+> ### 🔴🔴 THE CORE LOOP IS NOT CONNECTED. Found by browser-testing the portal.
+> I opened the deployed portal in a real browser for the first time. The UI works
+> — it renders, the token is baked correctly, `/api/feed`, `/api/metrics` and
+> `/api/settings/gate` all return 200, and I flipped the gate ON in the UI,
+> confirmed `PUT /api/settings/gate` → 200, confirmed `{"enabled":true}`
+> server-side, then flipped it back to OFF. That half is genuinely solid.
+>
+> But the feed said **"No runs yet"** and every metric was zero, so I went
+> looking. **`run_agent` has no production caller anywhere in the codebase.**
+> ```
+> $ grep -rn "run_agent" backend/src/
+> backend/src/agent/graph.py:89:def run_agent(          <- the definition
+> backend/src/agent/__init__.py:20,34                   <- the export
+> ...three docstring mentions...
+> ```
+> Every actual call site is a test. `backend/src/ingress/__init__.py` verifies the
+> HMAC, validates the payload, drops self-authored events, dedups into
+> `tickets_seen`, and **returns `{"status": "accepted"}` — that is the whole
+> handler.** The webhook never starts an agent run. 0 rows in `runs` on the
+> droplet *and* locally; `seed_all` only loads `cases` + `kb_chunks`, and nothing
+> in `backend/src/` inserts into `runs` except `agent/store.py`, which only the
+> untriggered graph calls.
+>
+> **Nobody owns the wiring, and that is a plan defect rather than anyone's
+> mistake.** The ingress docstring says it plainly: *"starting the agent run is
+> T-5's job (LangGraph), deliberately never invoked from here."* But T-5's scope
+> is `backend/src/agent/**` + graph/grounding tests — it **cannot** edit
+> `backend/src/ingress/**`, and its own acceptance says the scenarios are covered
+> "end-to-end **in-process**". T-4 is the only ticket scoped to
+> `backend/src/ingress/**`, and it declared the wiring out of its job. So the one
+> ticket that *could* connect it said "not mine", and the ticket it pointed at
+> was structurally unable to. No other ticket's scope includes that path.
+>
+> **This is why T-10 is not merely blocked on the Zendesk token.** T-10 acceptance
+> 3 is "emits latency report (p50/p95 **webhook to reply**)" — which requires the
+> webhook to cause a reply. It cannot. And T-10's scope
+> (`backend/tests/live/**`, `scripts/scenario_runner.py`) cannot add the wiring
+> either. **Re-authorizing Zendesk will not unblock T-10.** You would get tickets
+> created, webhooks accepted with a 202, and nothing else ever happening.
+>
+> **What it takes:** a ticket scoped to `backend/src/ingress/**` (plus wherever
+> the run is dispatched from) that calls the agent on an accepted webhook —
+> background task or queue, since the handler is `async` and returns 202. I did
+> not write it: it is new product code with real design choices (sync vs
+> background, retry, failure semantics), it is outside every existing scope, and
+> rule 4 makes an unowned file a plan defect rather than something to improvise.
+>
+> ### Portal ships zero CSS — not a bug, but read this before filming
+> No `.css` file exists in `portal/`, there is no CSS import, and there is not one
+> `className` in `portal/src/`. The built bundle is `index-*.js` and nothing else,
+> and the browser confirms it: no stylesheet is ever requested. The portal renders
+> as unstyled default-serif HTML. **T-9's non-goal was "no styling beyond
+> clean-and-readable", so this is not a violated acceptance criterion** — it sits
+> at the floor of that allowance rather than below it. Flagging it only because
+> demo shots 6 and 7 are meant to be filmed, and an unstyled page is a choice you
+> should make deliberately rather than discover on camera.
+>
 > ### Full watchdog triage — every finding, current state
 > | Finding | State |
 > |---|---|
