@@ -15,7 +15,15 @@ EVID = os.path.join(ROOT, ".claude", "evidence")
 META_ALLOW = [r"^\.claude/NEEDS_HUMAN\.md$", r"^\.claude/monitor/.*$", r"^docs/TASKS\.md$"]
 # Harness-written state: exempt from the close-time integrity diff (it changes at every
 # boundary by design) but still Edit/Write-DENIED via PROTECTED — only scripts write it.
-HARNESS_STATE = [r"^\.claude/claims/.*$", r"^\.claude/evidence/.*$", r"^\.claude/monitor/.*$"]
+# NOTE (W15 route 2): `.claude/evidence/` was deliberately REMOVED from this list.
+# It was exempt here and gitignored, so a receipt written by a ticket's verify
+# command appeared in no diff either integrity() call takes -- one line in a verify
+# could mint receipts for arbitrary other tickets and nothing could see it. W23 made
+# receipts tracked, which is what lets them be diffed now. The real receipt is written
+# AFTER both integrity calls and after the close commit, so honest closes are
+# unaffected, and claim-time is unaffected because working_tree_dirty() filters
+# evidence via W1_EXEMPT. ABSOLUTE still forbids agent writes there.
+HARNESS_STATE = [r"^\.claude/claims/.*$", r"^\.claude/monitor/.*$"]
 # Receipts and claims: NEVER agent-writable, by any session, under any claim. These are
 # the harness's own attestations — an agent that can forge a receipt can certify anything,
 # so no ticket scope may unlock them. Checked before PROTECTED; never yields to scope.
@@ -257,15 +265,22 @@ def changed_since(commit):
     # moved a protected plan file out of the way during a ticket was invisible to the
     # close-time check and the receipt was minted clean. Off, both paths are listed.
     subprocess.run(["git", "add", "-A"], cwd=ROOT)
-    r = subprocess.run(["git", "diff", "--name-only", "--no-renames", commit], capture_output=True, text=True, cwd=ROOT)
-    s = subprocess.run(["git", "diff", "--name-only", "--no-renames", "--cached", commit], capture_output=True, text=True, cwd=ROOT)
+    # -z for the same reason working_tree_dirty() passes it: without it git
+    # C-QUOTES any path containing non-ASCII bytes -- `"src/caf\303\251.txt"`,
+    # quotes and octal escapes included. That form matches no scope glob, so a
+    # legitimately in-scope file was reported OUT of scope and the close refused.
+    # The refusal then left the verify's output staged, blocking every later claim
+    # via the W1 dirty check, without incrementing `attempts` so the 2-strikes
+    # release never tripped. With -z the paths arrive raw, NUL-separated.
+    r = subprocess.run(["git", "diff", "--name-only", "-z", "--no-renames", commit], capture_output=True, text=True, cwd=ROOT)
+    s = subprocess.run(["git", "diff", "--name-only", "-z", "--no-renames", "--cached", commit], capture_output=True, text=True, cwd=ROOT)
     if r.returncode != 0 or s.returncode != 0:
         raise IntegrityUnavailable(
             "git could not diff against start_commit %r (%s). The integrity check "
             "cannot be evaluated, so this close is refused rather than passed."
             % (commit, (r.stderr or s.stderr).strip()[:200])
         )
-    return sorted(set(r.stdout.splitlines()) | set(s.stdout.splitlines()))
+    return sorted({p for p in r.stdout.split("\0") if p} | {p for p in s.stdout.split("\0") if p})
 
 def integrity(tid, start_commit):
     """Every file changed during the ticket must be in scope or meta-allowed.
