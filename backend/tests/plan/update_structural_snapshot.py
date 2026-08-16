@@ -27,7 +27,15 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from _snapshot_lib import SNAPSHOT_PATH, build_snapshot, load_tickets  # noqa: E402
+# The sys.path insertion above is a RUNTIME effect, so mypy cannot resolve this
+# import statically. The plain top-level form is the deliberate design documented
+# in the module docstring -- it is what lets this run as a standalone script. The
+# ignore is narrowed to the one error code so a real import break still surfaces.
+from _snapshot_lib import (  # type: ignore[import-not-found] # noqa: E402
+    SNAPSHOT_PATH,
+    build_snapshot,
+    load_tickets,
+)
 
 
 def main() -> None:

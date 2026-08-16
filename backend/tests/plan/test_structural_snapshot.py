@@ -40,6 +40,7 @@ fails specifically because of the stale snapshot and not unconditionally.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from ._planlib import load_tickets
 from ._snapshot_lib import SNAPSHOT_PATH, build_snapshot, diff_snapshot, load_snapshot
@@ -86,7 +87,7 @@ def test_snapshot_path_is_where_the_amendment_workflow_says_it_is() -> None:
     assert str(SNAPSHOT_PATH).endswith(_REPO_ROOT_RELATIVE_SNAPSHOT_PATH)
 
 
-def test_snapshot_diff_catches_a_synthetic_silent_depends_on_edit(tmp_path) -> None:
+def test_snapshot_diff_catches_a_synthetic_silent_depends_on_edit(tmp_path: Path) -> None:
     """T-26 acceptance 3. Never touches the real docs/tickets.json."""
     live_tickets = load_tickets()
     baseline_snapshot = load_snapshot()

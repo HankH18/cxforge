@@ -8,8 +8,11 @@ synthetic project built by ``project``/``make_project`` contains its OWN
 copies of ``.claude/hooks/`` and ``.claude/scripts/``.
 
 T-31 (v2 harness migration) replaced the entire v1 harness in commit
-c44f9af ("cc-factory: harness sync") -- see T31-brief.md for the full
-migration narrative. DELETED: .claude/hooks/claim.sh, claim_lookup.py,
+c44f9af ("cc-factory: harness sync"). CORRECTION (W7): earlier text here and
+in three places below cited a "T31-brief.md" as an authoritative summary of
+harness_lib.py's contract. No such file exists, in the working tree or in
+history. Those citations are removed rather than re-pointed; the authority
+is harness_lib.py itself and commit c44f9af. DELETED: .claude/hooks/claim.sh, claim_lookup.py,
 verify_gate.sh, and the single append-only .claude/active-ticket ledger.
 REPLACED BY: .claude/scripts/harness_lib.py (the entire contract -- read it
 end to end), a 4-line .claude/scripts/claim.sh wrapper, and four 2-line
@@ -51,7 +54,7 @@ for the authoritative version of each):
     renamed continuation of it -- see run_verify_hook's own docstring for
     exactly what changed. Helpers: run_verify_hook / verify_decision (kept
     for any caller still importing them; the tests that exercise this hook
-    belong to a different file per T31-brief.md, so this module does not
+    belong to a different file, so this module does not
     itself add coverage here).
 
 Claims (the replacement for v1's single, session-blind, append-only
@@ -628,8 +631,8 @@ def run_verify_hook(
     """Invoke the real (synthetic-project-local) task_gate.sh
     (hook-taskgate).
 
-    v1's verify_gate.sh is GONE (deleted by commit c44f9af; see
-    T31-brief.md) -- it ran a ticket's full verify command itself AND wrote
+    v1's verify_gate.sh is GONE (deleted by commit c44f9af)
+    -- it ran a ticket's full verify command itself AND wrote
     .claude/evidence/<tid>.pass, gated by ownership of the (now also gone)
     .claude/active-ticket claim. v2 splits that responsibility in two:
     harness_lib.py's ``close`` verb (driven through claim.sh -- see
@@ -642,7 +645,7 @@ def run_verify_hook(
 
     This helper (and verify_decision below) are kept, reimplemented against
     hook-taskgate, purely so their NAMES survive for any caller still
-    importing them -- per T31-brief.md the tests that actually exercise
+    importing them -- the tests that actually exercise
     this hook belong to a different file owned by a different agent, so
     this module does not itself add coverage here.
 

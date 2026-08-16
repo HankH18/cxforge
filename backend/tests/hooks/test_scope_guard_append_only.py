@@ -6,7 +6,8 @@ harness_lib.PROTECTED, so scope_guard.sh (routed through hook-scope ->
 guard) denies EVERY Edit/Write there, for every session, whether or not
 that session holds a claim, before any per-ticket scope check or claim
 lookup even runs (decision-order step 3, ahead of the claim-lookup at
-step 5/6 — see T31-brief.md's summary of harness_lib.py's guard()).
+step 5/6 — read harness_lib.py's guard() itself for the decision order.
+Earlier text cited a "T31-brief.md" summary here; no such file exists — W7).
 
 Every test drives the REAL scope_guard.sh as a subprocess (see
 conftest.run_hook / conftest.decision), seeding target files directly via

@@ -39,6 +39,88 @@
 > **161.35.2.250** and passes `verify_deploy.sh` in REMOTE mode (4/4). T-11 is
 > waiting on T-10, which is waiting on that token.
 >
+> ### Full watchdog triage — every finding, current state
+> | Finding | State |
+> |---|---|
+> | W1, W2, W10, W11, W14, W16 | closed earlier this build |
+> | **W7** fabricated citations | **closed** — verified true, corrected, no assertion touched |
+> | **W17** rename laundering | **closed** — landed fix is stricter than my staged patch (`-z` parsing) |
+> | **W12** receipts voided | **re-scoped** — real number is 24/30, and it is structural, not 2 incidents |
+> | **W15** verify is a write channel | patch written; **needs one command from you** (below) |
+> | **NEW** regression gate never ran | **needs one line in `docs/tickets.json` from you** (below) |
+> | W8 no "verified unachievable" state | open — plan/design change, your call |
+> | W13 authorisation asserted in commit bodies | open — historical; the record is here now, which is where rule 7 says it belongs |
+> | W18 mislabeled commit `61d26de` | open — history is pushed to both remotes; not rewritable without a force-push I will not do unasked |
+>
+> ### 🔴 NEW — the cross-ticket regression gate has never run. Not once.
+> `cmd_close` promises it and `.claude/rules/harness-protocol.md` rule 5 states
+> it ("runs the ticket verify, **runs the full regression suite**"). The code is:
+> ```python
+> full = load_tickets().get("full_verify")
+> if full and subprocess.run(full, shell=True, cwd=ROOT).returncode != 0:
+> ```
+> `docs/tickets.json` has exactly two top-level keys — `project` and `tickets`.
+> There is no `full_verify`. So `full` is `None`, `if full and …` short-circuits,
+> and the gate is skipped **silently, at every close that has ever happened**.
+>
+> This is fail-*open*, and it is the one shape this harness refuses everywhere
+> else: C3 refuses to close a ticket whose `verify` is empty rather than let
+> `sh -c ""` pass vacuously; C2 refuses when `start_commit` won't resolve rather
+> than let `integrity()` pass vacuously. An absent `full_verify` is the same
+> vacuous pass, and it is the only one that got a silent skip instead of a refusal.
+>
+> **Impact is real but bounded.** 15 tickets closed on a narrow verify that never
+> ran the whole suite — `T-9, T-12, T-13, T-14, T-15, T-17, T-21, T-22, T-25,
+> T-26, T-27, T-28, T-29` among them, i.e. nearly the entire harness-hardening
+> batch. Nothing is broken *right now*: the full suite passes at HEAD (702
+> passed, 0 failed). What was missing is the guarantee, not the result.
+>
+> **Two fixes; the first is yours, and I think it is the right one:**
+> 1. Add one key to `docs/tickets.json` (authoritative and read-only to me):
+>    `"full_verify": "uv run pytest -m \"not live\" -q"`
+> 2. Optionally also make `harness_lib.py` refuse a close when `full_verify` is
+>    absent, so the plan cannot silently disable the gate again. That is the
+>    C2/C3 treatment and it is what I would do, but it turns every close red
+>    until fix 1 lands, so do them in that order.
+>
+> ### Receipt fingerprints: 24 of 30 have drifted — expected, but worth knowing
+> I revalidated every receipt's stored fingerprint against its scope's current
+> bytes. 24 of 30 no longer match. This is **not** 24 incidents: scopes overlap,
+> so any later ticket editing a shared file drifts an earlier receipt by design.
+> The honest reading is that the fingerprint is forensic (what did the tree look
+> like at close), not a live gate — and the control that *was* supposed to cover
+> the drift is the regression gate directly above, which never ran. That is why
+> these two findings belong together. The watchdog reported this as W12 against
+> T-27/T-28 specifically; the real number is 24, and the real cause is structural.
+>
+> ### W7 is CLOSED — the fabricated citations are gone
+> I re-verified the watchdog's allegation independently rather than taking it on
+> trust, and **both halves are true**:
+> * The "escape valve" quotation attributed to T-28's contract
+>   ("…rather than inventing a hook that cannot fire") appears **nowhere** in
+>   `docs/tickets.json`, `docs/`, `.claude/rules/`, or `CLAUDE.md`. The only file
+>   in the repository that ever contained it was the test file that cited it as
+>   the plan's own words.
+> * `docs/T31-brief.md`, cited five times across `backend/tests/hooks/conftest.py`
+>   and `test_scope_guard_append_only.py` as an "authoritative summary" of
+>   `harness_lib.py`'s contract, **does not exist** and never has.
+>
+> Both are now removed and replaced with an explicit correction naming what was
+> fabricated, rather than quietly re-pointed at some other source — there was no
+> source to re-point them to. **No assertion was touched**; the reasoning in each
+> docstring stands on its own without the invented authority. `421 passed` across
+> `backend/tests/hooks backend/tests/plan` after the edits.
+>
+> One note on the watchdog's proposed fix #5 ("a test asserting every quoted plan
+> clause and every referenced `.md` exists"): I scanned for it, and the naive
+> version does not work. Three `.md` references in the tree are dangling, and two
+> of them — `docs/agent-design.md` and `docs/zendesk-runbook-v2.md` in
+> `test_scope_guard.py` — are **deliberate fixtures**, nonexistent paths used to
+> assert the guard denies correctly. A pattern scan cannot tell a fabricated
+> citation from an intentional fake path, so that test would need an allowlist,
+> which mostly re-encodes the problem. Worth doing thoughtfully under a ticket,
+> not bolted on.
+>
 > ### W17 is CLOSED — no longer needs you
 > The rename-laundering hole I introduced is fixed in `harness_lib.py`, and the
 > landed fix is *stricter* than the patch I had staged: it parses
@@ -81,10 +163,18 @@
 >    about — and did not land the test, which would turn the suite red while you
 >    were away.
 >
-> Also worth one line: `evals/labeled_set.yaml`'s `statement:` field still reads
-> "…is a DRAFT only… until a human owner reviews evals/REVIEW.md and flips this
-> block", which now contradicts its own `status: APPROVED`. I am forbidden from
-> touching that file (T-7/T-21/T-25), so it needs your hand.
+> ### `evals/labeled_set.yaml` needs your hand — I am forbidden from touching it
+> Two stale spots in that file (T-7/T-21/T-25 forbid me from editing it at all):
+> 1. The `statement:` field still reads "…is a DRAFT only… until a human owner
+>    reviews evals/REVIEW.md and flips this block", which now contradicts its own
+>    `status: APPROVED`.
+> 2. The comment above `esc-low_confidence-abstention-garbled-01` (~line 518) is
+>    wrong twice over: it says "no `OPENAI_API_KEY` exists in this environment"
+>    (wrong provider, and a model key *does* exist now), and it says
+>    "`evals/report.py` stubs the classifier failure for this specific id" —
+>    T-21 deleted those STUB tables outright. Suggested replacement for the
+>    provider clause: "real detection requires an actual failed/unparseable LLM
+>    call, so this label documents the INTENDED scenario."
 
 Current as of the build session that closed T-0. **23 of 32 tickets resolved**, suite
 589 passing. Items are marked RESOLVED / OPEN so nothing here reads as still-blocking

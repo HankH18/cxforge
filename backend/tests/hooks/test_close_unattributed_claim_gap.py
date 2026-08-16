@@ -46,9 +46,17 @@ for the whole close while still minting a receipt.
     scope (`.claude/hooks/**`, `backend/tests/hooks/**`) -- `scope_guard.sh` denies that
     edit. `cmd_close` itself lives in `harness_lib.py`, also out of T-28's scope to edit.
 
-Per T-28's own escape valve ("If a case is genuinely unreachable through any hook ...
-say so plainly in your report rather than inventing a hook that cannot fire"), this file
-never attempted a hook-layer fix -- there is no hook in the path for one to live in. It
+CORRECTION (W7): earlier revisions of this docstring justified the paragraph above by
+quoting an "escape valve" from T-28's own contract. **No such clause exists.** T-28's
+fields are id, title, objective, refs, acceptance, verify, scope, depends_on, non_goals,
+parallel_safe, status, and that sentence appears nowhere in docs/tickets.json, docs/,
+.claude/rules/, or CLAUDE.md -- the only file that ever contained it was this one, which
+attributed it to the plan. A permission the plan never granted was quoted as though it
+had been. The quotation is removed rather than re-sourced, because there is nothing to
+re-source it to.
+
+The underlying reason still stands on its own and needs no citation: this file never
+attempted a hook-layer fix because there is no hook in the path for one to live in. It
 originally pinned the exact, currently-real behaviour of `cmd_close` for every named case
 as durable, checked evidence, so that an authorised change to `harness_lib.py` itself had
 a concrete regression suite to turn green. ALL SIX CASES HAVE NOW BEEN TURNED GREEN: each
