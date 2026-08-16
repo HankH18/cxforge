@@ -191,7 +191,16 @@ class IntegrityUnavailable(Exception):
 W1_IGNORED_SEGMENTS = ("__pycache__", ".pytest_cache", ".ruff_cache", ".venv", "node_modules")
 W1_IGNORED_SUFFIXES = (".pyc", ".pyo", ".DS_Store")
 # Inert legacy closure records: same class as HARNESS_STATE, never source, never plan.
-W1_EXEMPT = [r"^\.claude/evidence-v1/.*$"]
+# `.claude/evidence/` joins the v1 entry here for the W23 reason: receipts became
+# tracked so the attestation chain survives a clone, and a receipt is minted
+# AFTER the close commit (it records that commit's hash), so it is left
+# uncommitted and would otherwise leave the tree dirty and refuse the NEXT
+# claim. The next ticket-start commit absorbs it, exactly as it always has for
+# .claude/claims/. No hole: W1 exists to stop an agent laundering its own
+# pre-existing work into a start commit, and receipts are not agent-writable at
+# all (.claude/evidence/** is in ABSOLUTE); they were already exempt from the
+# close-time integrity check via HARNESS_STATE.
+W1_EXEMPT = [r"^\.claude/evidence-v1/.*$", r"^\.claude/evidence/.*$"]
 
 
 def _w1_noise(path):
@@ -407,15 +416,13 @@ def cmd_close():
            {"ticket": tid, "session": sid, "verify": t["verify"], "commit": _head(),
             "fingerprint": fp, "attempts": int(c.get("attempts") or 0), "ts": int(time.time())})
     os.remove(os.path.join(CLAIMS, f"{sid}.json"))
-    # W23: the receipt is the permanent record of this close and has to travel
-    # with the repository -- status() derives "resolved" from receipt presence,
-    # so an untracked receipt means a fresh clone reports every ticket queued.
-    # It is written AFTER the close commit above (it records that commit's
-    # hash), so it needs a commit of its own. The claim removal rides along, so
-    # a close ends with a clean tree and the next claim's dirty-tree check does
-    # not trip over this one's leftovers.
-    _git("add", "--force", "--", EVID, CLAIMS)
-    _git("commit", "-q", "--allow-empty", "-m", f"evidence: {tid} receipt @ {fp[:12]}")
+    # NOTE (W23): the receipt is deliberately NOT committed here. It records the
+    # close commit's own hash, so committing it would move HEAD past the commit
+    # it certifies and break the receipt-binds-to-HEAD invariant T-29 enforces
+    # (three tests assert exactly that). It is tracked, and the next
+    # `ticket-start` commit absorbs it -- the same lifecycle .claude/claims/ has
+    # always had. `.claude/evidence/` is exempt from the claim-time dirty check
+    # so that pending receipt cannot block the next claim.
     try:
         subprocess.run([sys.executable, os.path.join(ROOT, ".claude/scripts/gen_tasks.py")],
                        capture_output=True, cwd=ROOT)
