@@ -2,9 +2,24 @@
 
 > ## ⬛ START HERE — build-session status, 2026-08-15 (supersedes stale headers below)
 >
-> **30 of 32 tickets resolved. Suite 684 passed, 0 failed. ruff + mypy clean.**
-> Pushed to both remotes at `3faa744` (GitLab `hankholcomb/cxforge`, GitHub
-> `HankH18/cxforge`), verified by reading each host back.
+> **30 of 32 tickets resolved. Suite 702 passed, 0 failed. ruff + mypy clean.**
+>
+> **The deployed stack now actually reaches Claude — it did not before.** The
+> provider pivot changed the client but stopped at the process boundary:
+> `deploy/docker-compose.yml` forwarded `OPENAI_API_KEY` and never forwarded
+> `ANTHROPIC_API_KEY`, so the droplet came up healthy, served `/health` and the
+> portal, and passed `verify_deploy.sh` 4/4 **with no model credential at all**
+> (confirmed in the container: `ANTHROPIC_API_KEY len 0`). Every deploy check we
+> had was blind to it, because none of them make a model call. Fixed in
+> `2499645`, and proven by a real `client.messages.parse()` call against
+> `claude-opus-5` from inside the running container returning a validated
+> structured verdict. That is the first live evidence the pivot works anywhere
+> other than tests against a fake client.
+>
+> A caution for whoever redeploys next: `docs/deploy.md:139` requires
+> `set -a; source .env; set +a` **before** `docker compose … up`. Skip it and
+> every `${VAR}` silently falls back to its compose default — I did skip it, and
+> the stack came back up on the literal `dev-portal-token`.
 >
 > **Everything below this block predates it.** Many entries marked OPEN are now
 > closed — D1, D2/D0, D3, D5, W1, W2, W11, and the T-22/T-26/T-27/T-28/T-29
@@ -24,14 +39,40 @@
 > **161.35.2.250** and passes `verify_deploy.sh` in REMOTE mode (4/4). T-11 is
 > waiting on T-10, which is waiting on that token.
 >
-> ### Two open items I could not land myself (protected path)
-> 1. **W17 — rename laundering. This is my bug and it is still live.**
->    `git mv docs/SPEC.md src/SPEC.md` under a `src/**` scope hides the deletion
->    of a protected plan file from BOTH gates, because git pairs renames and my
->    code kept only the destination. Reproduced end to end. Fix ready:
->    `…/scratchpad/apply_w17_rename_fix.py` — run it **only when no claim is
->    open** (`ls .claude/claims/` empty), or the next close fails INTEGRITY.
-> 2. **W16-structural — the approval gate proves the wrong thing.** Your
+> ### W17 is CLOSED — no longer needs you
+> The rename-laundering hole I introduced is fixed in `harness_lib.py`, and the
+> landed fix is *stricter* than the patch I had staged: it parses
+> `git status --porcelain -z -uall --no-renames` (NUL-separated), so neither a
+> rename pair nor a path containing the literal `" -> "` can launder a
+> deletion past the gates. `apply_w17_rename_fix.py` is obsolete; ignore it.
+>
+> ### Open items I could not land myself (protected path)
+> 1. **W15 — a ticket's verify command is an unaudited write channel.** The
+>    watchdog's #1 structural finding, demonstrated live by T-7. `cmd_close`
+>    runs `integrity()`, *then* runs the verify (arbitrary shell), *then*
+>    `git add -A` and mints the receipt — so anything the verify writes is
+>    committed and attested having never been scope-checked. Fix written and
+>    anchor-checked; it re-runs the same `integrity()` after the verify and
+>    before the commit. I could not apply it: the sandbox classifier blocks me
+>    executing a script that writes `.claude/scripts/**`, and I did not route
+>    around that. One command, **only when no claim is open**:
+>    ```
+>    python3 /private/tmp/claude-501/-Users-hankholcomb-Documents-code-parent-folders-gauntlet-repos-cxforge/1ed89054-d046-46fd-8a20-42f43c6ed16d/scratchpad/apply_w15_post_verify_integrity.py
+>    ```
+>    It is idempotent and refuses loudly if the anchor moved. Then:
+>    `uv run pytest backend/tests/hooks backend/tests/plan -q`.
+> 2. **Recommended, but genuinely your call: move the approval gate out of
+>    reach.** `evals/labeled_set.yaml` is in neither `ABSOLUTE` nor `PROTECTED`,
+>    so any ticket scoped to `evals/**` can still rewrite the approved gate —
+>    the root cause behind W10/W14/W16. The watchdog's fix is to add
+>    `^evals/labeled_set\.yaml$` to `ABSOLUTE`, which no ticket scope unlocks.
+>    I did **not** do this unilaterally for two reasons: `docs/tickets.json`
+>    (authoritative, read-only) names that file in T-7's scope, so this puts the
+>    harness in conflict with the plan; and it requires inverting the guard
+>    assertion at `backend/tests/hooks/test_scope_guard.py:76`, and unilaterally
+>    rewriting a guard test is exactly the pattern the watchdog flagged as W14.
+>    That needs your ruling, not my judgement.
+> 3. **W16-structural — the approval gate proves the wrong thing.** Your
 >    sign-off was genuine and the watchdog withdrew its allegation, but T-7's
 >    verify checks exactly the three fields that constitute the approval, so it
 >    could not tell a human flip from a machine one. Fix: sign `evals/REVIEW.md`,
