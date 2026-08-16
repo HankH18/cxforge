@@ -46,13 +46,37 @@
 > | **W7** fabricated citations | **closed** — verified true, corrected, no assertion touched |
 > | **W17** rename laundering | **closed** — landed fix is stricter than my staged patch (`-z` parsing) |
 > | **W12** receipts voided | **re-scoped** — real number is 24/30, and it is structural, not 2 incidents |
-> | **W15** verify is a write channel | patch written; **needs one command from you** (below) |
-> | **NEW** regression gate never ran | **needs one line in `docs/tickets.json` from you** (below) |
+> | **W15** verify is a write channel | **CLOSED** — owner applied the patch; `integrity()` now re-runs after the verify, before the commit (`ee5325c`) |
+> | **regression gate never ran** | **CLOSED** — owner added `full_verify` to `docs/tickets.json`; the gate is armed for every future close (`7c61391`) |
+> | **W23** receipts are gitignored | **open, and the most urgent one** — fix script ready, see below |
 > | W8 no "verified unachievable" state | open — plan/design change, your call |
 > | W13 authorisation asserted in commit bodies | open — historical; the record is here now, which is where rule 7 says it belongs |
 > | W18 mislabeled commit `61d26de` | open — history is pushed to both remotes; not rewritable without a force-push I will not do unasked |
 >
-> ### 🔴 NEW — the cross-ticket regression gate has never run. Not once.
+> ### 🔴 W23 — receipts are gitignored; the submission looks empty. ONE COMMAND.
+> Filed by the peer review session, verified by me from git directly, and the
+> consequence measured by actually cloning the repo:
+> **a fresh clone reports `0 resolved, 32 queued`.** Anyone who clones the
+> GitLab submission sees a project with nothing completed. 30 receipts sit on
+> disk, 0 are tracked, and no commit has ever touched `.claude/evidence/`
+> (`.gitignore:18`). `.claude/claims/` meanwhile *is* tracked, across 61
+> commits — the transient record is versioned and the permanent one is not.
+>
+> **Do not just delete the ignore line.** `cmd_close` writes the receipt *after*
+> its close commit, because the receipt records that commit's hash. Un-ignoring
+> alone leaves every close with an untracked receipt → dirty tree →
+> `working_tree_dirty()` refuses the *next* claim. That is almost certainly why
+> it was ignored, and it trades a broken clone for a broken claim flow.
+>
+> The script does all three parts together (ignore line, `cmd_close` commits the
+> receipt + claim removal so a close ends clean, and commits the 30 existing
+> receipts). It changes no receipt's contents, and `.claude/evidence/**` stays in
+> `ABSOLUTE` so agents still cannot write receipts:
+> ```
+> python3 /private/tmp/claude-501/-Users-hankholcomb-Documents-code-parent-folders-gauntlet-repos-cxforge/1ed89054-d046-46fd-8a20-42f43c6ed16d/scratchpad/fix_w23_receipts_are_gitignored.py
+> ```
+>
+> ### ✅ CLOSED — the cross-ticket regression gate never ran. Now it does.
 > `cmd_close` promises it and `.claude/rules/harness-protocol.md` rule 5 states
 > it ("runs the ticket verify, **runs the full regression suite**"). The code is:
 > ```python
@@ -134,20 +158,15 @@
 > deletion past the gates. `apply_w17_rename_fix.py` is obsolete; ignore it.
 >
 > ### Open items I could not land myself (protected path)
-> 1. **W15 — a ticket's verify command is an unaudited write channel.** The
->    watchdog's #1 structural finding, demonstrated live by T-7. `cmd_close`
->    runs `integrity()`, *then* runs the verify (arbitrary shell), *then*
->    `git add -A` and mints the receipt — so anything the verify writes is
->    committed and attested having never been scope-checked. Fix written and
->    anchor-checked; it re-runs the same `integrity()` after the verify and
->    before the commit. I could not apply it: the sandbox classifier blocks me
->    executing a script that writes `.claude/scripts/**`, and I did not route
->    around that. One command, **only when no claim is open**:
->    ```
->    python3 /private/tmp/claude-501/-Users-hankholcomb-Documents-code-parent-folders-gauntlet-repos-cxforge/1ed89054-d046-46fd-8a20-42f43c6ed16d/scratchpad/apply_w15_post_verify_integrity.py
->    ```
->    It is idempotent and refuses loudly if the anchor moved. Then:
->    `uv run pytest backend/tests/hooks backend/tests/plan -q`.
+> 1. ~~**W15 — a ticket's verify command is an unaudited write channel.**~~
+>    **CLOSED (`ee5325c`).** The watchdog's #1 structural finding, demonstrated
+>    live by T-7: `cmd_close` ran `integrity()`, *then* the verify (arbitrary
+>    shell), *then* `git add -A` and minted the receipt — so anything the verify
+>    wrote was committed and attested having never been scope-checked. The owner
+>    applied the patch; `integrity()` now re-runs against the same start commit
+>    after both verifies and before the commit, and `IntegrityUnavailable`
+>    refuses rather than reading as clean. Both calls are live (harness_lib.py
+>    lines 366 and 394). 421 passed across hooks + plan.
 > 2. **Recommended, but genuinely your call: move the approval gate out of
 >    reach.** `evals/labeled_set.yaml` is in neither `ABSOLUTE` nor `PROTECTED`,
 >    so any ticket scoped to `evals/**` can still rewrite the approved gate —
@@ -300,6 +319,98 @@ when REVIEW.md carries a matching signature and date. That converts
 self-assertion into corroboration — and it is what makes item 1 and item 2 safe.
 
 ---
+
+## ⚠️ W15 IS NOT CLOSED — `ee5325c` fixes the headline case and leaves three same-class routes open
+
+`ee5325c` ("a ticket's verify command is no longer an unaudited write channel")
+adds 18 lines re-running `integrity(tid, start)` after the verify. **It genuinely
+closes the T-7 case** — a verify writing `docs/eval-report/**` outside scope is
+now refused, and it correctly treats `IntegrityUnavailable` as "unevaluable is
+not clean." Good fix, and it was written independently of mine.
+
+But it calls `integrity()`, which allows scope ∪ `META_ALLOW` ∪ `HARNESS_STATE`.
+My 15-agent review returned **NEEDS_WORK** on exactly this shape and reproduced
+three surviving routes end-to-end in synthetic projects:
+
+- **A verify can still rewrite the escalation channel.** `docs/TASKS.md`,
+  `.claude/NEEDS_HUMAN.md`, `.claude/monitor/REPORT.md` and *another session's*
+  `.claude/claims/*.json` are all `META_ALLOW`/`HARNESS_STATE`-exempt, so a
+  verify writing them closes clean and they land in the attested range. Rule 7
+  makes NEEDS_HUMAN.md the only channel to you; a verify that can rewrite it can
+  edit what you are told.
+- **A verify can mint receipts for arbitrary tickets — invisibly.** This is the
+  severe one, and it is W23's consequence: `.claude/evidence/**` is in
+  `HARNESS_STATE` *and* gitignored, so receipts appear in **no diff either
+  integrity call takes**. Reproduced: one line in a verify → `status('T-VICTIM')`
+  is `resolved` and `claim T-VICTIM` refuses with "already has a receipt".
+  Neither the pre- nor the post-verify check can see it, because there is
+  nothing in the diff to see. **Fixing W23 is what closes this.**
+- **A non-ASCII in-scope path is refused as out-of-scope.**
+  `git diff --name-only` C-quotes such paths, so they fail the match and the
+  close refuses an artifact that was legitimately in scope. Worse, the refusal
+  leaves the verify's output staged, which then blocks *every subsequent claim*
+  via the W1 dirty-tree check — and it does **not** increment `attempts`, so the
+  2-strikes/release rule never trips. Recoverable only if the message says how.
+
+**Do not mark W15 done.** Treat `ee5325c` as the first of two commits.
+
+## Handoff — what is fixed, what is not (as of this cycle)
+
+| Finding | State |
+|---|---|
+| W7 citations | ✅ fixed, committed `d8f3858` |
+| W17 rename laundering, W9 claim attribution | ✅ fixed, committed `3faa744` |
+| W21 mypy | ✅ fixed |
+| W22 regression gate | ✅ `full_verify` now set (uncommitted) — still worth making a *missing* key a hard failure, not a silent skip |
+| W15 verify write channel | ⚠️ **partial** — see above |
+| W23 receipts gitignored | ❌ open, and it is what makes the W15 receipt-forging route work |
+| W8 supersede, W10 signed gate, W12 revalidate, W16 self-verify | ❌ open — exist only in my patch |
+
+**`FIX_IT_2.sh` is now STALE — do not run it.** `ee5325c` touched
+`harness_lib.py:352`, the same region, so `authority_fix_final.patch` no longer
+applies (its own guard will stop it safely). Its residual value is W8/W10/W12/W16,
+none of which exist in the tree (`supersede`, `revalidate`, `self_verif`,
+`allowed_signers` → 0 files each). It needs a rebase onto `ee5325c` before it is
+usable; the W15 hunks in it should be reconciled with `ee5325c` rather than
+stacked on top.
+
+## 🔴 W23 — ALL 30 RECEIPTS ARE GITIGNORED. THE ATTESTATION CHAIN IS LOCAL-ONLY.
+
+Surfaced by the 15-agent authority review, verified by me from git directly.
+
+`.gitignore:18` is `.claude/evidence/`. Consequences, all measured:
+
+- **30 receipts on disk, 0 tracked by git, 0 commits have ever touched
+  `.claude/evidence/`.** The entire record of what this build completed exists
+  only on this machine, in ignored files.
+- **On a fresh clone every ticket derives as `queue`.** `status()` keys off
+  receipt presence, so a collaborator, a CI run, or the GitLab submission target
+  sees a project with **zero tickets completed**. Nothing about the 30 closes
+  survives leaving this disk.
+- **It makes the W15 write-channel unfixable-in-kind.** `.claude/evidence/**` is
+  in `HARNESS_STATE` *and* gitignored, so receipts appear in **no diff any
+  harness check takes**. The review reproduced the consequence end-to-end: one
+  line in any ticket's `verify` writes receipts for arbitrary other tickets,
+  `status()` reports them `resolved`, and `claim` then refuses them with
+  "already has a receipt" — invisible to both the pre- and post-verify integrity
+  checks, because there is nothing in the diff to see.
+
+**Being precise about what this does NOT taint.** T-13's acceptance 3 ("claim
+records are append-only and tracked in git") is about **claim records**, and it
+holds: 30 commits added a claim file, 61 touched `.claude/claims/`, so the
+per-claim audit trail genuinely exists in history. Receipts are the untracked
+half, and no acceptance criterion claims otherwise. T-13's receipt stands.
+
+**Fix (needs your ruling — it changes what gets committed):** drop
+`.claude/evidence/` from `.gitignore` and commit the 30 existing receipts, so the
+attestation chain travels with the repo. Then `.claude/evidence/**` can come out
+of `HARNESS_STATE` for diff purposes, which is what closes the receipt-forging
+channel above. `ABSOLUTE` already prevents agent Edit/Write there and should stay.
+
+**My own miss, again the same shape as W22.** I audited 30 receipts for commit
+binding, fingerprint match, scope compliance and verify-string agreement — and
+never checked whether the receipts were *in the repository at all*. I verified
+the contents of the attestation without verifying its existence to anyone but me.
 
 ## ✅ READY — verified harness fix package (16-agent review, 105 min)
 
