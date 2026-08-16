@@ -15,7 +15,6 @@ portal/dist/
 .env.local
 
 # Build protocol state (hook-written verification timestamps)
-.claude/evidence/
 
 # OS
 .DS_Store

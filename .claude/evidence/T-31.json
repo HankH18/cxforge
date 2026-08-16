@@ -1,0 +1,9 @@
+{
+ "ticket": "T-31",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "verify": "uv run pytest -m \"not live\" -q",
+ "commit": "56cdecb337f12f20fdb89ceefcfdd377d47c1967",
+ "fingerprint": "98b340f661ae5f5f004fc4275125e0b7abf790fecf87162834c1b397c05eeb38",
+ "attempts": 0,
+ "ts": 1786760634
+}

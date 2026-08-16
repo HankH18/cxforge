@@ -407,6 +407,15 @@ def cmd_close():
            {"ticket": tid, "session": sid, "verify": t["verify"], "commit": _head(),
             "fingerprint": fp, "attempts": int(c.get("attempts") or 0), "ts": int(time.time())})
     os.remove(os.path.join(CLAIMS, f"{sid}.json"))
+    # W23: the receipt is the permanent record of this close and has to travel
+    # with the repository -- status() derives "resolved" from receipt presence,
+    # so an untracked receipt means a fresh clone reports every ticket queued.
+    # It is written AFTER the close commit above (it records that commit's
+    # hash), so it needs a commit of its own. The claim removal rides along, so
+    # a close ends with a clean tree and the next claim's dirty-tree check does
+    # not trip over this one's leftovers.
+    _git("add", "--force", "--", EVID, CLAIMS)
+    _git("commit", "-q", "--allow-empty", "-m", f"evidence: {tid} receipt @ {fp[:12]}")
     try:
         subprocess.run([sys.executable, os.path.join(ROOT, ".claude/scripts/gen_tasks.py")],
                        capture_output=True, cwd=ROOT)

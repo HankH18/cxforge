@@ -1,0 +1,9 @@
+{
+ "ticket": "T-8",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "verify": "uv run pytest -m \"not live\" backend/tests/data backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q",
+ "commit": "bf2bd26efcffd87d41853282412f2b0bde3ac8ef",
+ "fingerprint": "dc040281d84b4e7ac87dd20b10d29ca09b83061bd6bb52702b9f3ad077ea7a91",
+ "attempts": 0,
+ "ts": 1786819732
+}

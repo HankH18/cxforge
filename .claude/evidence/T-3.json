@@ -1,0 +1,9 @@
+{
+ "ticket": "T-3",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "verify": "uv run pytest -m \"not live\" -q",
+ "commit": "cc1933d762466f12b06189c6df8c175f5c6d816e",
+ "fingerprint": "4458484a0ae0253e81c58ed13f6fc5374b96ac29675737c9947446fa187bf548",
+ "attempts": 0,
+ "ts": 1786819580
+}

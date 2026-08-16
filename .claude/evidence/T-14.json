@@ -1,0 +1,9 @@
+{
+ "ticket": "T-14",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "verify": "uv run pytest backend/tests/plan backend/tests/hooks -q",
+ "commit": "67827aeebfd6474e6b72b6c01fd2e68d5a0b3a08",
+ "fingerprint": "a5ff18dc8b96fb50abc548002211c12b93ff4dd7d8cf6a6169eccb25cdb65462",
+ "attempts": 0,
+ "ts": 1786761559
+}

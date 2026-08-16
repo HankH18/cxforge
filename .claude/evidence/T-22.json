@@ -1,0 +1,9 @@
+{
+ "ticket": "T-22",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "verify": "uv run pytest backend/tests/plan backend/tests/hooks -q",
+ "commit": "7062b7244288f89a0642c6db96f4bb138a6d4599",
+ "fingerprint": "ada0f36c3595bfdf3a0af83f1ca9f59f1c11d98fe599e6c10df47a6926207e84",
+ "attempts": 0,
+ "ts": 1786824584
+}

@@ -1,0 +1,9 @@
+{
+ "ticket": "T-7",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "verify": "uv run python -c \"import yaml; a=yaml.safe_load(open('evals/labeled_set.yaml'))['approval']; import sys; sys.exit(0 if a.get('status')=='APPROVED' and a.get('approved_by') and a.get('approved_date') else 1)\" && uv run python -m evals.report && uv run pytest -m \"not live\" backend/tests/escalation backend/tests/evals backend/tests/graph backend/tests/grounding backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q",
+ "commit": "be08848d193cdccdc8c6c0296db23c67684c0454",
+ "fingerprint": "ef45e52ca277e9b9cf12c88a5fe95d2780f17d1ff74eec81b0277b520f8246e7",
+ "attempts": 0,
+ "ts": 1786831433
+}

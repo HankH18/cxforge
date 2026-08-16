@@ -1,0 +1,9 @@
+{
+ "ticket": "T-21",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "verify": "uv run pytest backend/tests/evals -q",
+ "commit": "53aaadbcf3774c7bd71ccb057142ecdca8ce712b",
+ "fingerprint": "798137cb3a9eb2f39a09bfffff10170bc287e8ff96dfd44c8f44b908d7ec5cff",
+ "attempts": 1,
+ "ts": 1786835193
+}

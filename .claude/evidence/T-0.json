@@ -1,0 +1,9 @@
+{
+ "ticket": "T-0",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "verify": "docker compose up -d db && uv run pytest -m \"not live\" && uv run ruff check . && uv run mypy backend && (cd portal && npm run build && npm test)",
+ "commit": "6ce15bc354fcdf70ac03a9d7ecc3fe2b25754c81",
+ "fingerprint": "3c8d4571d821e8e7489c80a0d1be6969052a55c6ea2747f55a84e0cd33369726",
+ "attempts": 0,
+ "ts": 1786819296
+}

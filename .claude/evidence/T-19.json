@@ -1,0 +1,9 @@
+{
+ "ticket": "T-19",
+ "session": "1ed89054-d046-46fd-8a20-42f43c6ed16d",
+ "verify": "uv run pytest -m \"not live\" backend/tests/ingress backend/tests/portal backend/tests/test_bootstrap.py -q && (cd portal && npm run build && npm test)",
+ "commit": "8cc7cc19ed86ca703af05f16714a96f2bad39361",
+ "fingerprint": "62e47b8ff67866d6785339d99d40d1b39e1d92c3b719aa4c9d67839fdd9d118b",
+ "attempts": 0,
+ "ts": 1786819762
+}
