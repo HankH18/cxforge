@@ -7,8 +7,11 @@ prompts:
   - "Placeholder — T-7 supplies the escalation classifier prompt."
 
 providers:
-  - id: openai:chat:gpt-4o-mini
-    config:
-      temperature: 0
+  # Kept in step with backend/src/agent/config.py's ANTHROPIC_MODEL — the
+  # eval is worthless if it measures a different model than the one the
+  # agent actually runs. No `temperature` here on purpose: this model
+  # family rejects the sampling knobs with a 400, which is why
+  # backend/src/agent/llm.py drops them too.
+  - id: anthropic:messages:claude-opus-5
 
 tests: []

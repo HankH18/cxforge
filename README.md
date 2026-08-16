@@ -22,7 +22,7 @@ separate terminal at the same time, to confirm the two never collide (see
 
 ```bash
 cp .env.example .env            # fill in as each ticket's docs/*-runbook.md requires;
-                                 # empty Zendesk/OpenAI values are fine to start —
+                                 # empty Zendesk/Anthropic values are fine to start —
                                  # see "Status" below for what that does and doesn't unlock
 
 # 1. Dev database (Postgres 16 + pgvector) — the root docker-compose.yml
@@ -52,7 +52,7 @@ npm run dev
 ```
 
 Seeding the case/KB fixture data the portal and grounding logic read
-(`data.seed.seed_all`, offline — no `OPENAI_API_KEY` needed, see
+(`data.seed.seed_all`, offline — no `ANTHROPIC_API_KEY` needed, see
 `backend/src/data/embeddings.py`'s `HashingEmbedder`):
 
 ```bash
@@ -119,16 +119,12 @@ Said plainly, not overstated:
   itself IS verified (the production image starts and serves `/health`
   with zero Zendesk credentials set), but the real trigger→webhook→
   reply round trip against a live Zendesk instance is not.
-- **The escalation eval report is a DRAFT.** `docs/eval-report/report.md`
-  says so at the top: `evals/labeled_set.yaml`'s `approval.status` is
-  `PROPOSED_AWAITING_HUMAN_REVIEW`, not `APPROVED` — per T-7's own rule,
-  only the project owner may flip that, after reviewing `evals/REVIEW.md`.
-  Every number in that report is proof the measurement pipeline runs
-  correctly, not yet a real, human-approved measurement.
-- **`OPENAI_API_KEY` is empty.** The agent graph's LLM-backed nodes have
-  never been exercised against the real OpenAI API in this environment —
-  every graph/grounding test runs against a fake `LLMClient`
-  (`backend/tests/graph/fakes.py`).
+- **The agent graph's LLM-backed nodes are not exercised in CI.** Every
+  graph/grounding test runs against a fake `LLMClient`
+  (`backend/tests/graph/fakes.py`), so a green suite says nothing about
+  real model behaviour. Real calls go to the Anthropic Messages API
+  (`backend/src/agent/llm.py`'s `AnthropicLLMClient`, model pinned in
+  `backend/src/agent/config.py`) and need `ANTHROPIC_API_KEY` set.
 
 ## Portability: the HelpdeskPort boundary
 

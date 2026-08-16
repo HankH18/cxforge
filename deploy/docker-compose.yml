@@ -84,12 +84,17 @@ services:
       ZENDESK_OAUTH_TOKEN: ${ZENDESK_OAUTH_TOKEN:-}
       ZENDESK_AI_USER_ID: ${ZENDESK_AI_USER_ID:-}
       ZENDESK_WEBHOOK_SIGNING_SECRET: ${ZENDESK_WEBHOOK_SIGNING_SECRET:-}
-      # Also unused/empty in this environment (no OPENAI_API_KEY) — the
-      # agent graph (backend/src/agent/llm.py's OpenAILLMClient) is
+      # The agent graph (backend/src/agent/llm.py's AnthropicLLMClient) is
       # constructed lazily and never touches the network until a real
       # `.structured()` call, which nothing on the ingress path triggers
-      # yet (see backend/src/ingress/__init__.py's module docstring).
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # yet (see backend/src/ingress/__init__.py's module docstring) — so
+      # an empty value still starts and serves /health. It is NOT optional
+      # for real work, though: with it unset the first reply generation
+      # fails, so a deploy meant to answer tickets must set it in .env.
+      # (Was OPENAI_API_KEY before the provider pivot; the backend no
+      # longer reads that name at all, so forwarding it deployed a stack
+      # that could not reach the model.)
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}

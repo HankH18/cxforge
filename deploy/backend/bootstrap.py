@@ -26,9 +26,9 @@ Controlled by the ``SEED_ON_START`` env var (default ``true``):
   what makes a fresh deploy immediately demo-able: the portal feed and KB
   grounding have real fixture content on first boot, not an empty DB.
   Seeding uses ``HashingEmbedder`` (``backend/src/data/embeddings.py``) —
-  a fully offline, deterministic lexical embedder — so no
-  ``OPENAI_API_KEY`` is required, consistent with this environment having
-  none.
+  a fully offline, deterministic lexical embedder — so seeding needs no
+  model credentials at all: it runs identically whether or not
+  ``ANTHROPIC_API_KEY`` is set.
 - ``false``: create the schema if missing and stop there. Use this on a
   restart of an already-seeded, already-in-use deploy (real ``runs``/
   ``drafts`` rows exist) where re-seeding ``cases``/``kb_chunks`` on every
