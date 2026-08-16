@@ -48,33 +48,47 @@
 > | **W12** receipts voided | **re-scoped** — real number is 24/30, and it is structural, not 2 incidents |
 > | **W15** verify is a write channel | **CLOSED** — owner applied the patch; `integrity()` now re-runs after the verify, before the commit (`ee5325c`) |
 > | **regression gate never ran** | **CLOSED** — owner added `full_verify` to `docs/tickets.json`; the gate is armed for every future close (`7c61391`) |
-> | **W23** receipts are gitignored | **open, and the most urgent one** — fix script ready, see below |
+> | **W23** receipts are gitignored | **CLOSED** — 30 receipts tracked and pushed; a fresh clone now reports 30 resolved / 2 queued (`db8f211`) |
 > | W8 no "verified unachievable" state | open — plan/design change, your call |
 > | W13 authorisation asserted in commit bodies | open — historical; the record is here now, which is where rule 7 says it belongs |
 > | W18 mislabeled commit `61d26de` | open — history is pushed to both remotes; not rewritable without a force-push I will not do unasked |
 >
-> ### 🔴 W23 — receipts are gitignored; the submission looks empty. ONE COMMAND.
+> ### ✅ CLOSED — W23: the attestation chain now survives a clone
 > Filed by the peer review session, verified by me from git directly, and the
-> consequence measured by actually cloning the repo:
-> **a fresh clone reports `0 resolved, 32 queued`.** Anyone who clones the
-> GitLab submission sees a project with nothing completed. 30 receipts sit on
-> disk, 0 are tracked, and no commit has ever touched `.claude/evidence/`
-> (`.gitignore:18`). `.claude/claims/` meanwhile *is* tracked, across 61
-> commits — the transient record is versioned and the permanent one is not.
+> consequence measured by cloning rather than reasoning: a fresh clone used to
+> report **`0 resolved, 32 queued`** — anyone cloning the GitLab submission saw a
+> project with nothing completed. 30 receipts sat on disk, 0 tracked, no commit
+> had ever touched `.claude/evidence/` (`.gitignore:18`), while `.claude/claims/`
+> *was* tracked across 61 commits: the transient record versioned, the permanent
+> one not.
 >
-> **Do not just delete the ignore line.** `cmd_close` writes the receipt *after*
-> its close commit, because the receipt records that commit's hash. Un-ignoring
-> alone leaves every close with an untracked receipt → dirty tree →
-> `working_tree_dirty()` refuses the *next* claim. That is almost certainly why
-> it was ignored, and it trades a broken clone for a broken claim flow.
+> **Fixed and verified (`db8f211`): a fresh clone now reports `30 resolved,
+> 2 queued`** — the 2 being T-10 and T-11, which matches local reality. 30
+> receipts are tracked on both remotes. No receipt's contents changed, and
+> `.claude/evidence/**` stays in `ABSOLUTE`, so agents still cannot write them.
 >
-> The script does all three parts together (ignore line, `cmd_close` commits the
-> receipt + claim removal so a close ends clean, and commits the 30 existing
-> receipts). It changes no receipt's contents, and `.claude/evidence/**` stays in
-> `ABSOLUTE` so agents still cannot write receipts:
-> ```
-> python3 /private/tmp/claude-501/-Users-hankholcomb-Documents-code-parent-folders-gauntlet-repos-cxforge/1ed89054-d046-46fd-8a20-42f43c6ed16d/scratchpad/fix_w23_receipts_are_gitignored.py
-> ```
+> **The part that took four attempts, recorded because the next person will hit
+> it too.** My first fix had `cmd_close` commit the receipt right after writing
+> it. That moves HEAD past the commit the receipt records in its own `commit`
+> field — the exact invariant T-29 exists to enforce — and three tests caught it
+> (`test_receipt_commit_equals_head_at_close_time` and its two siblings). They
+> were right; I reverted rather than touching them.
+>
+> The real constraint is narrower: a tracked-but-uncommitted receipt makes the
+> tree dirty, and `working_tree_dirty()` runs at the top of `cmd_claim`, so the
+> next claim gets refused. The correct fix is to exempt `.claude/evidence/` from
+> the **claim-time** dirty check exactly as `.claude/evidence-v1/` already is, and
+> let the next `ticket-start` commit absorb the receipt — the lifecycle
+> `.claude/claims/` has always had. That opens no hole: W1 exists to stop an agent
+> laundering its own pre-existing work into a start commit, and receipts are not
+> agent-writable at all.
+>
+> **Worth doing next, deliberately not bundled in:** now that receipts are
+> tracked, dropping `.claude/evidence/` from `HARNESS_STATE` would let the new
+> W15 post-verify integrity check catch a *verify* that forges receipts, while a
+> legitimate receipt — written after that check runs — stays invisible. That is a
+> real hardening and it closes the "unfixable-in-kind" half of the original W23
+> report. It is a second design change, so it wants its own pass.
 >
 > ### ✅ CLOSED — the cross-ticket regression gate never ran. Now it does.
 > `cmd_close` promises it and `.claude/rules/harness-protocol.md` rule 5 states
