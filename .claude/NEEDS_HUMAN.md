@@ -63,6 +63,11 @@
 > There is no `full_verify`. So `full` is `None`, `if full and …` short-circuits,
 > and the gate is skipped **silently, at every close that has ever happened**.
 >
+> This is not an inference. I walked all **19 revisions** of `docs/tickets.json`
+> in git history and `full_verify` appears in **none** of them, and
+> `harness_lib.py` reads that key in exactly one place (line 383). The gate has
+> provably never fired, once, in the entire life of this repository.
+>
 > This is fail-*open*, and it is the one shape this harness refuses everywhere
 > else: C3 refuses to close a ticket whose `verify` is empty rather than let
 > `sh -c ""` pass vacuously; C2 refuses when `start_commit` won't resolve rather
@@ -162,6 +167,25 @@
 >    REVIEW.md signature. I did not sign it — that would be the forgery this is
 >    about — and did not land the test, which would turn the suite red while you
 >    were away.
+>
+> ### Eval report — sound, but two small gaps worth your call
+> I checked it rather than assuming the pivot had rotted it, and it holds up:
+> `classifier_source: live`, 36 real classifier calls, it names the live
+> **Anthropic** classifier correctly, and it excludes the 6 unmeasured tickets
+> instead of guessing them. No action needed on those. Two things I did **not**
+> change on my own, because both would mean regenerating an artifact you have
+> already approved (and spending live API calls to do it):
+> 1. **`metrics.json` records no model identifier.** It stores
+>    `classifier_source: live` but not *which* model produced the numbers. Post-
+>    pivot that is a real provenance gap — nothing in the stored artifact
+>    distinguishes a GPT-era run from a `claude-opus-5` one. One extra field in
+>    `evals/report.py` fixes it, but it only takes effect on a re-run.
+> 2. **Precision, recall and F1 are all exactly 1.000**, with no sentence saying
+>    what that does and does not mean. On 45 tickets, with the labels and the
+>    engine authored in the same build, a clean sweep is better read as "the
+>    labeled set does not yet contain a case this engine gets wrong" than as a
+>    perfect classifier. Someone reviewing this will ask; one honest sentence in
+>    `report.md` is worth more than the 1.000 itself.
 >
 > ### `evals/labeled_set.yaml` needs your hand — I am forbidden from touching it
 > Two stale spots in that file (T-7/T-21/T-25 forbid me from editing it at all):
