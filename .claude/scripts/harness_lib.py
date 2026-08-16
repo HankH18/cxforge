@@ -383,6 +383,24 @@ def cmd_close():
     full = load_tickets().get("full_verify")
     if full and subprocess.run(full, shell=True, cwd=ROOT).returncode != 0:
         return fail(" (cross-ticket regression gate)")
+    # W15: the two commands above are arbitrary shell, and integrity() ran BEFORE
+    # them. Anything they wrote — a regenerated report, a rewritten fixture, an
+    # edited gate artifact — would otherwise reach the `git add -A` below having
+    # never been scope-checked, and be attested by the receipt. Re-check against
+    # the same start commit so a verify cannot be a side door into an attested
+    # commit. Both calls must agree; passing the first and failing this one means
+    # the verify itself wrote out of scope.
+    try:
+        bad_after = integrity(tid, start)
+    except IntegrityUnavailable as e:
+        # Same rule as the pre-verify call: unevaluable is not the same as clean.
+        return str(e), 2
+    if bad_after:
+        return ("INTEGRITY FAIL (post-verify) — %s's verify command wrote outside its scope:\n  %s\n"
+                "These files were written by the verify itself, after the pre-verify check passed, so "
+                "no scope check had been applied to them. A verify may not be a write channel into the "
+                "commit it certifies. Fix the verify command or the ticket's scope, or record the plan "
+                "defect in .claude/NEEDS_HUMAN.md." % (tid, "\n  ".join(bad_after))), 2
     _git("add", "-A"); _git("commit", "-q", "--allow-empty", "-m", f"ticket-close: {tid}")
     fp = fingerprint(t["scope"])
     _write(os.path.join(EVID, f"{tid}.json"),
