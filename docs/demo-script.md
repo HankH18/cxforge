@@ -2,16 +2,21 @@
 
 > **Read this section first.** SPEC success criterion 1 requires all five
 > scenarios below to run "end-to-end against the live Zendesk trial, on
-> camera." **As of this writing, none of them can be recorded.**
-> `ZENDESK_OAUTH_TOKEN`, `ZENDESK_WEBHOOK_SIGNING_SECRET`, and
-> `ZENDESK_AI_USER_ID` are all empty in `.env` — no Zendesk trial has been
-> signed up for (`docs/zendesk-runbook.md` is written but not yet followed
-> by a human), and no droplet exists (`docs/deploy.md`'s status note). The
-> Langfuse trace shot is separately un-recordable for an independent
-> reason: no Langfuse instrumentation exists in the code at all (see
-> "Shot 7" below). This document is written so it is **immediately usable
-> once both gaps close** — it names exact UI actions and exact files to
-> point at, not placeholders to fill in later.
+> camera." **As of this writing, none of them can be recorded.** The
+> reason has changed, though, and narrowed: a Zendesk trial *has* been
+> signed up for and `docs/zendesk-runbook.md` *has* been followed, so
+> `ZENDESK_SUBDOMAIN`, `ZENDESK_OAUTH_TOKEN`,
+> `ZENDESK_WEBHOOK_SIGNING_SECRET` and `ZENDESK_AI_USER_ID` are all set in
+> `.env` — but the token obtained then has since **expired (HTTP 401)**,
+> with no refresh token stored, so it needs a fresh `authorization_code` +
+> PKCE consent (`uv run python scripts/zendesk_oauth.py`) before any live
+> call succeeds. The droplet is **no longer a blocker**: this project's
+> droplet is live at `161.35.2.250` (`docs/deploy.md`). The Langfuse trace
+> shot remains un-recordable for an independent reason: no Langfuse
+> instrumentation exists in the code at all (see "Shot 8" below). This
+> document is written so it is **immediately usable once those gaps
+> close** — it names exact UI actions and exact files to point at, not
+> placeholders to fill in later.
 
 Every scenario's *logic* is proven today by an equivalent test driving
 the real LangGraph graph against `EmailAdapter` (an in-memory fake, not
@@ -91,12 +96,13 @@ Non-live proof today:
 Note this scenario's real-model behavior is genuinely unverified in a
 different sense than the others: the test above drives it with a
 `FakeLLMClient` returning a canned low groundedness score, so it proves
-the *escalation path* works when the score is low, but not that a real
-`gpt-4o-mini` will actually score this particular question low. If the
+the *escalation path* works when the score is low, but not that the real
+`claude-opus-5` will actually score this particular question low. If the
 real model scores it higher than expected during the live recording, the
 KB answer might send instead of escalating — worth a dry run against the
-real API before committing this to the final recording, if
-`OPENAI_API_KEY` becomes available in time.
+real API before committing this to the final recording.
+`ANTHROPIC_API_KEY` is already configured here, so that dry run can happen
+at any time; it does not wait on the Zendesk re-auth.
 
 ### Shot 4 — off-topic / boundary
 
@@ -197,17 +203,20 @@ templated `compose` output — i.e., visually confirm the R9 story
 
 | Shot | Recordable today? | Blocker |
 |---|---|---|
-| 1–5 (five live scenarios) | No | No live Zendesk credentials; no droplet |
-| 6 (gate flip + edited-approve) | **Yes**, against the local stack | None — rehearse now |
-| 7 (metrics panel) | **Yes**, against the local stack | None — rehearse now |
+| 1–5 (five live scenarios) | No | Zendesk OAuth token expired (401) — needs re-auth. Droplet is no longer a blocker |
+| 6 (gate flip + edited-approve) | **Yes**, against the local stack or the droplet | None — rehearse now |
+| 7 (metrics panel) | **Yes**, against the local stack or the droplet | None — rehearse now |
 | 8 (Langfuse trace) | No | No Langfuse instrumentation exists in the code |
 
 Shots 6 and 7 are genuinely ready to record today and don't need to wait
-on anything. Shots 1–5 need a human to complete
-`docs/zendesk-runbook.md` (and, per `docs/deploy.md`, ideally a droplet
-rather than a laptop + `cloudflared` tunnel, for recording stability).
-Shot 8 needs actual engineering work — adding Langfuse instrumentation —
-before it exists to record at all.
+on anything — and they can now be recorded against the live droplet
+(`161.35.2.250`) rather than a laptop, which is better for recording
+stability. Shots 1–5 need a human to re-authorize the expired Zendesk
+OAuth token (`uv run python scripts/zendesk_oauth.py`, per
+`docs/zendesk-runbook.md`); the droplet that used to be the other half of
+this blocker now exists (`docs/deploy.md`). Shot 8 needs actual
+engineering work — adding Langfuse instrumentation — before it exists to
+record at all.
 
 See `docs/architecture.md` for the full pipeline these scenarios exercise,
 `docs/grounding.md` for the adversarial story Shot 5 is a live instance

@@ -136,20 +136,25 @@ class LLMClient(Protocol):
 
 Every model call in the graph — `classify`, `permission`'s policy match,
 the `kb` route's answer draft, the groundedness judge, and the escalation
-classifier — goes through this one Protocol. No node imports `openai`
-directly. `OpenAILLMClient` (the production implementation, using
-`chat.completions.parse` for strict structured outputs) constructs its
-underlying `openai.OpenAI` client lazily, on first use, so merely
-importing this module or instantiating the class never requires
-`OPENAI_API_KEY`.
+classifier — goes through this one Protocol. No node imports `anthropic`
+directly. `AnthropicLLMClient` (the production implementation, using
+`client.messages.parse(..., output_format=schema)` for strict structured
+outputs) constructs its underlying `anthropic.Anthropic` client lazily, on
+first use, so merely importing this module or instantiating the class
+never requires `ANTHROPIC_API_KEY`.
 
-**This environment has no `OPENAI_API_KEY`.** `OpenAILLMClient` is
-implemented but has never been exercised against the real OpenAI API.
-Every graph/grounding/escalation test in the 222-test suite runs against
-`FakeLLMClient` (`backend/tests/graph/fakes.py`), which returns canned
-structured outputs keyed by schema class. The model version is pinned in
-one place — `OPENAI_MODEL` in `backend/src/agent/config.py`
-(`gpt-4o-mini-2024-07-18`) — never scattered through the graph.
+**This environment has `ANTHROPIC_API_KEY` configured**, and the client
+path has been exercised against the real Anthropic API: a live
+`client.messages.parse()` call against `claude-opus-5` returned a
+validated structured result from inside the deployed container on the
+droplet (`docs/deploy.md`). That call proves credentials and the client
+path, and nothing more — **the graph's own nodes have still never run
+against a real model.** Every graph/grounding/escalation test in the suite
+runs against `FakeLLMClient` (`backend/tests/graph/fakes.py`), which
+returns canned structured outputs keyed by schema class. The model version
+is pinned in one place — `ANTHROPIC_MODEL` in
+`backend/src/agent/config.py` (`claude-opus-5`) — never scattered through
+the graph.
 
 ### Helpdesk adapters — `backend/src/helpdesk/`
 
@@ -169,9 +174,10 @@ implementations.
   `kb_chunks`, using a **deterministic, offline `HashingEmbedder`**
   (`sklearn.feature_extraction.text.HashingVectorizer`, 1024-dim,
   L2-normalized) — not a semantic embedding model. This is a real,
-  intentional choice (no `OPENAI_API_KEY` in this environment), not a
-  placeholder nobody noticed; see `docs/grounding.md` for what that means
-  for retrieval quality.
+  intentional choice (no embedding-model credential in this environment,
+  and the Anthropic API this project uses exposes no embeddings endpoint),
+  not a placeholder nobody noticed; see `docs/grounding.md` for what that
+  means for retrieval quality.
 - `seed.py` / `chunking.py` — loads `fixtures/cases.yaml` (~30 fictional
   cases) and `fixtures/kb/*.md` (15 fictional KB docs) into Postgres.
 - `models.py` — `Case`, `CaseNotFound`, `KBChunk`, `RetrievedChunk`.
@@ -206,9 +212,13 @@ every endpoint), `deps.py`. Frontend: `App.tsx` polls `/api/feed` and
 A human-run manual smoke tool that exercises every `HelpdeskPort`
 operation once against a real Zendesk ticket. It is not CI-invoked and
 not the same thing as T-10's live e2e scenario runner (which SPEC R8's
-p95-latency measurement depends on); as of this writing it prints "no
-Zendesk credentials" and exits 0 without making a network call, because
-`ZENDESK_SUBDOMAIN`/`ZENDESK_OAUTH_TOKEN` are empty in this environment.
+p95-latency measurement depends on). `ZENDESK_SUBDOMAIN`/
+`ZENDESK_OAUTH_TOKEN` are no longer empty in this environment — the
+runbook was followed and a token was obtained — but that token has since
+**expired (HTTP 401, no refresh token stored)**, so the tool now fails
+against the live API rather than exiting early on missing credentials.
+Re-authorizing needs a fresh `authorization_code` + PKCE consent
+(`uv run python scripts/zendesk_oauth.py`).
 **No live Zendesk run of any kind has happened; R8's p95 latency is
 unmeasured.** See `docs/demo-script.md` for what that blocks.
 
@@ -269,14 +279,19 @@ believes happened and what actually did.
 ## What is and isn't exercised
 
 The graph, escalation engine, grounding guard, portal API, and both
-`HelpdeskPort` adapters are covered by 222 passing Python tests plus 5
+`HelpdeskPort` adapters are covered by 702 passing Python tests plus 5
 portal component tests (`uv run pytest`, `cd portal && npx vitest run`),
 all green, with `ruff check .` and `mypy backend` clean. What is **not**
-exercised anywhere in this repo: a live OpenAI call, a live Zendesk call,
-or a real end-to-end run through a deployed droplet. Every test above
+exercised by that suite: a live model call, a live Zendesk call, or a real
+end-to-end ticket run through the deployed droplet. Every test above
 drives the real graph and real Postgres, but with `FakeLLMClient` standing
-in for OpenAI and (for most graph/grounding/escalation tests) `EmailAdapter`
-standing in for `HelpdeskPort`. See `docs/portability.md` for why that
+in for `AnthropicLLMClient` and (for most graph/grounding/escalation
+tests) `EmailAdapter` standing in for `HelpdeskPort`. Outside the suite,
+two things *have* been verified against the live droplet: the deploy
+assertions in `scripts/verify_deploy.sh` (4/4, REMOTE mode) and a single
+manual `client.messages.parse()` call against `claude-opus-5` from inside
+the running container. Neither drives a ticket through the graph, so the
+end-to-end claim above stands. See `docs/portability.md` for why that
 substitution is a meaningful proof rather than a shortcut, and
 `docs/demo-script.md` for exactly what live-Zendesk verification is still
 outstanding.

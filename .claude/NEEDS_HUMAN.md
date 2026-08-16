@@ -212,7 +212,22 @@
 >    pivot that is a real provenance gap — nothing in the stored artifact
 >    distinguishes a GPT-era run from a `claude-opus-5` one. One extra field in
 >    `evals/report.py` fixes it, but it only takes effect on a re-run.
-> 2. **Precision, recall and F1 are all exactly 1.000**, with no sentence saying
+> 2. **The threshold sweep is not recorded, so "recommends 0.00" cannot be
+>    checked.** `metrics.json` stores per-ticket booleans (`expected_escalate`,
+>    `predicted_escalate`) and no scores, and it does not store the sweep at all.
+>    That matters because `recommend_threshold` is
+>    `max(sweep, key=lambda r: (r["f1"], -r["threshold"]))` — F1 first, then the
+>    **smallest** threshold, deliberately ("prefer catching more
+>    classifier-judged cases when several thresholds tie on F1"). So `0.00` is
+>    either a genuine unique optimum, or merely the lowest member of a tie in
+>    which your current `0.50` performs identically — **and nothing in the
+>    stored artifact distinguishes those two.** They point opposite ways:
+>    the first says lower the threshold, the second says leave it alone.
+>    I am flagging the unfalsifiability, not claiming which one it is — I have
+>    no sweep data and would not re-run an approved report to get it.
+>    **Don't act on the 0.00 until the sweep is recorded.** Storing the sweep
+>    (or just the tied range) in `metrics.json` is the fix.
+> 3. **Precision, recall and F1 are all exactly 1.000**, with no sentence saying
 >    what that does and does not mean. On 45 tickets, with the labels and the
 >    engine authored in the same build, a clean sweep is better read as "the
 >    labeled set does not yet contain a case this engine gets wrong" than as a

@@ -1,21 +1,25 @@
 # Deploying to DigitalOcean (T-11)
 
-**Status as of this writing: no droplet exists for this project, and
-`DEPLOY_HOST` in `.env` is empty.** `doctl` is authenticated on this
-machine and there are two droplets on the account (`ubuntu-s-2vcpu-4gb-nyc1`,
-`trainerforge`) — both pre-existing, unrelated to this project, and never
-to be touched by anything in this repo. Creating a new droplet costs real
-money and is the human's decision to make, not something a build script
-does on its own. Everything below is the **procedure to follow when you're
-ready to create one** — not something that has already happened.
+**Status as of this writing: this project's droplet exists at
+`161.35.2.250`, and `DEPLOY_HOST` in `.env` is set to it.** The stack is
+live there and passes `scripts/verify_deploy.sh` in REMOTE mode, 4/4.
+`doctl` is authenticated on this machine, and there are two *other*
+droplets on the account (`ubuntu-s-2vcpu-4gb-nyc1`, `trainerforge`) — both
+pre-existing, unrelated to this project, and never to be touched by
+anything in this repo. Everything below is the **procedure that was
+followed** to create and verify this one; it is still the procedure to
+follow for a redeploy or a second droplet.
 
-What *has* been verified, on this machine, without any droplet: the whole
-production stack (`deploy/docker-compose.yml`) builds and runs, and
-`bash scripts/verify_deploy.sh --local` passes against it locally
-(`DEPLOY_HOST` empty + explicit `--local` opt-in → local path — the flag
-is required; a bare invocation with an empty `DEPLOY_HOST` now hard-fails
-by design, see §7). See that script and `deploy/docker-compose.yml`'s own
-header comments for exactly what "local" proves and what it doesn't.
+What has been verified: the production stack (`deploy/docker-compose.yml`)
+builds and runs both locally — `bash scripts/verify_deploy.sh --local`
+passes (`DEPLOY_HOST` empty + explicit `--local` opt-in → local path; the
+flag is required, and a bare invocation with an empty `DEPLOY_HOST` now
+hard-fails by design, see §7) — and on the droplet, where a bare
+`bash scripts/verify_deploy.sh` passes REMOTE mode. Separately, a live
+`client.messages.parse()` call against `claude-opus-5` has succeeded from
+inside the running backend container, confirming the model credential
+reaches the app. See that script and `deploy/docker-compose.yml`'s own
+header comments for exactly what each proves and what it doesn't.
 
 ---
 
@@ -124,12 +128,20 @@ Fill in on the droplet's copy (values you already have locally, per
   Zendesk-specific endpoints degrade (a 500 on the webhook until
   `ZENDESK_WEBHOOK_SIGNING_SECRET` is set; portal *approve* fails until
   the OAuth token is set) until the runbook is done.
-- `OPENAI_API_KEY`, `LANGFUSE_*` — same story: absent means those
-  integrations are simply unused, not a crash (see
-  `backend/src/agent/llm.py`'s lazy-client-construction docstring).
-- `DEPLOY_HOST` — set this once the droplet exists, to its public IP or
-  domain, so `scripts/verify_deploy.sh` (run from your local machine)
-  targets it instead of the local stack.
+- `ANTHROPIC_API_KEY` — the client is constructed lazily, so an empty
+  value still starts and serves `/health` (see
+  `backend/src/agent/llm.py`'s lazy-client-construction docstring). It is
+  **not optional for real work**: with it unset the first reply generation
+  fails, so a deploy meant to answer tickets must set it. This was
+  `OPENAI_API_KEY` before the provider pivot; the backend no longer reads
+  that name at all, and `deploy/docker-compose.yml` forwards the Anthropic
+  one instead.
+- `LANGFUSE_*` — same lazy story: absent means that integration is simply
+  unused, not a crash. Note that no Langfuse instrumentation is wired in
+  the code regardless (see `docs/demo-script.md`, Shot 8).
+- `DEPLOY_HOST` — already set, to this project's droplet
+  (`161.35.2.250`), so `scripts/verify_deploy.sh` (run from your local
+  machine) targets it instead of the local stack.
 
 ## 5. Running the stack
 
@@ -272,10 +284,22 @@ for droplet evidence — only a REMOTE-mode run, with `DEPLOY_HOST` set,
 satisfies T-11's droplet criterion, and only remote mode's `PASS` line
 says `(REMOTE: verified droplet at ...)`.
 
-**This has not been run against a real droplet in this environment** —
-there is no droplet to point it at yet (see the status note at the top of
-this document). Only the local path (`--local`, `DEPLOY_HOST` empty) has
-actually been executed and passed here.
+**This has been run against the real droplet at `161.35.2.250` and
+passed** — its `PASS` line reads `(REMOTE: verified droplet at
+161.35.2.250)`. Both paths have now actually been executed and passed
+here: the local one (`--local`, `DEPLOY_HOST` empty) and the remote one
+against the live droplet.
+
+One trap worth knowing before you redeploy: §5's
+`set -a; source .env; set +a` is **required**, not decorative. Compose
+resolves every `${VAR}` in `deploy/docker-compose.yml` from the shell
+environment, and its project directory is `deploy/`, which has no `.env`
+of its own. Skip the `source` and each variable silently falls back to its
+compose default — the stack comes back up healthy on the literal
+`dev-portal-token`, and `verify_deploy.sh` then fails assertion 4 with a
+401. `PORTAL_TOKEN` is also a **build arg** for the portal image
+(`VITE_PORTAL_TOKEN`), so changing it needs `--build`, not just a
+recreate.
 
 ## 8. Cost control
 

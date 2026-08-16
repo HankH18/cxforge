@@ -198,13 +198,15 @@ invariant (R9) this project is graded on getting right.
   the `grounding` marker — `live` is the only marker excluded).
 - Every grounding test drives the **real** LangGraph graph
   (`agent.graph.run_agent`) against **real Postgres** case/KB data, with
-  `FakeLLMClient` standing in for OpenAI and `EmailAdapter` standing in
+  `FakeLLMClient` standing in for `AnthropicLLMClient` and `EmailAdapter` standing in
   for `HelpdeskPort`. Nothing here is a unit test of the guard function in
   isolation only — the adversarial suite proves the guard actually blocks
   fabrication at the point where it would otherwise reach a customer.
 - The KB embedder is a deterministic, offline `HashingEmbedder`
   (`sklearn.feature_extraction.text.HashingVectorizer`) — lexical, not
-  semantic, because no `OPENAI_API_KEY` exists in this environment.
+  semantic, because no embedding-model credential exists in this
+  environment and the Anthropic API this project uses exposes no
+  embeddings endpoint.
   Retrieval quality was measured on a held-out set of 12 naturally
   phrased customer queries (`backend/tests/data/test_retrieval.py`),
   deliberately chosen so none echoes its expected doc's title vocabulary:
@@ -220,12 +222,15 @@ invariant (R9) this project is graded on getting right.
 
 ## What is not verified
 
-- No live OpenAI call has ever been made from this codebase — the real
-  groundedness judge and the real `kb`-route answer generator have never
-  run against an actual model, only against `FakeLLMClient`'s canned
-  responses. The guard's *logic* is proven; how a real model actually
-  behaves against these prompts, including whether a real model can find
-  an evasion the curated pattern lists above don't cover, is untested.
+- **The real groundedness judge and the real `kb`-route answer generator
+  have never run against an actual model** — only against
+  `FakeLLMClient`'s canned responses. One live Anthropic call
+  (`client.messages.parse()` against `claude-opus-5`) has been made from
+  this codebase, from inside the deployed container, but it exercised the
+  client path only; it did not drive either of these nodes. So the guard's
+  *logic* is proven, while how a real model actually behaves against these
+  prompts — including whether it can find an evasion the curated pattern
+  lists above don't cover — remains untested.
 - The residual paraphrase-evasion gap described above is real and open,
   not closed by anything in this codebase.
 
