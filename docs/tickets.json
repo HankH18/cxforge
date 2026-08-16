@@ -1,5 +1,6 @@
 {
   "project": "othram-support-agent",
+  "full_verify": "uv run pytest -m \"not live\" -q",
   "tickets": [
     {
       "id": "T-0",
