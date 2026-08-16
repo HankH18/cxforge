@@ -46,7 +46,7 @@
 > | **W7** fabricated citations | **closed** — verified true, corrected, no assertion touched |
 > | **W17** rename laundering | **closed** — landed fix is stricter than my staged patch (`-z` parsing) |
 > | **W12** receipts voided | **re-scoped** — real number is 24/30, and it is structural, not 2 incidents |
-> | **W15** verify is a write channel | **CLOSED** — owner applied the patch; `integrity()` now re-runs after the verify, before the commit (`ee5325c`) |
+> | **W15** verify is a write channel | **2 of 3 routes closed** (`ee5325c` + `dfb9c53`). I marked this CLOSED after the first commit and that was wrong — the peer review caught it. Route 1 remains open, below |
 > | **regression gate never ran** | **CLOSED** — owner added `full_verify` to `docs/tickets.json`; the gate is armed for every future close (`7c61391`) |
 > | **W23** receipts are gitignored | **CLOSED** — 30 receipts tracked and pushed; a fresh clone now reports 30 resolved / 2 queued (`db8f211`) |
 > | W8 no "verified unachievable" state | open — plan/design change, your call |
@@ -172,15 +172,44 @@
 > deletion past the gates. `apply_w17_rename_fix.py` is obsolete; ignore it.
 >
 > ### Open items I could not land myself (protected path)
-> 1. ~~**W15 — a ticket's verify command is an unaudited write channel.**~~
->    **CLOSED (`ee5325c`).** The watchdog's #1 structural finding, demonstrated
->    live by T-7: `cmd_close` ran `integrity()`, *then* the verify (arbitrary
->    shell), *then* `git add -A` and minted the receipt — so anything the verify
->    wrote was committed and attested having never been scope-checked. The owner
->    applied the patch; `integrity()` now re-runs against the same start commit
->    after both verifies and before the commit, and `IntegrityUnavailable`
->    refuses rather than reading as clean. Both calls are live (harness_lib.py
->    lines 366 and 394). 421 passed across hooks + plan.
+> 1. **W15 — a verify command as a write channel. 2 of 3 routes closed; one open.**
+>    **I called this CLOSED after `ee5325c` and that was wrong.** The peer review
+>    returned NEEDS_WORK on exactly that commit and was right: it closed the
+>    headline T-7 case and left three same-class routes. I have since verified
+>    each myself rather than taking them on trust.
+>    * ✅ **Headline case** (`ee5325c`) — `integrity()` re-runs against the same
+>      start commit after both verifies, `IntegrityUnavailable` refuses rather
+>      than reading as clean.
+>    * ✅ **Route 2, receipt forging** (`dfb9c53`) — the severe one.
+>      `.claude/evidence/**` was exempt via `HARNESS_STATE` *and* gitignored, so a
+>      receipt written by a verify appeared in **no diff either check takes**: one
+>      line in a verify made `status('T-VICTIM')` read `resolved`. Fixing W23
+>      (receipts tracked) is what made this closable; evidence is now out of
+>      `HARNESS_STATE`. Confirmed against the loaded module —
+>      `match_any('.claude/evidence/T-VICTIM.json', HARNESS_STATE)` is `False`,
+>      while `ABSOLUTE` is still `True`, so agents still cannot write receipts.
+>    * ✅ **Route 3, non-ASCII paths** (`dfb9c53`) — reproduced in a throwaway
+>      repo: `git diff --name-only` C-quotes them (`"src/caf\303\251.txt"`), which
+>      matches no scope glob, so an **in-scope** file was refused as out-of-scope,
+>      its output left staged (blocking every later claim), and `attempts` never
+>      incremented so the 2-strikes release never tripped. `changed_since()` now
+>      passes `-z`, as `working_tree_dirty()` has since W17.
+>    * 🔴 **Route 1, still open — a verify can rewrite the escalation channel.**
+>      `integrity()` allows `META_ALLOW` ∪ the rest of `HARNESS_STATE`, so a
+>      verify can still write `docs/TASKS.md`, **`.claude/NEEDS_HUMAN.md`**,
+>      `.claude/monitor/**`, and *another session's* `.claude/claims/*.json`, and
+>      close clean. Rule 7 makes NEEDS_HUMAN.md the only channel to you — so a
+>      verify that rewrites it can edit what you are told, including editing this
+>      very entry.
+>      **Why I did not just fix it:** the obvious patch (post-verify check allows
+>      scope only) is wrong. A ticket may legitimately have changed TASKS.md
+>      during its own work; that change appears in *both* diffs, so scope-only
+>      would refuse honest closes. Catching it properly means diffing what the
+>      verify **specifically** wrote — paths *and* content, before vs after —
+>      rather than re-filtering the whole ticket range by category. That is a real
+>      design change with its own failure modes and it wants its own pass. Note
+>      that path-set comparison alone is not enough: a verify rewriting a file
+>      that the ticket had *already* modified would not show up as a new path.
 > 2. **Recommended, but genuinely your call: move the approval gate out of
 >    reach.** `evals/labeled_set.yaml` is in neither `ABSOLUTE` nor `PROTECTED`,
 >    so any ticket scoped to `evals/**` can still rewrite the approved gate —
