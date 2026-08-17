@@ -711,11 +711,74 @@ token never acts as, so **both loop guards were down simultaneously** and only a
 action**, so nothing ever fired the webhook — trigger `54508374798747` now exists and was
 verified by read-back (`docs/STATE.md §6.16`, the Wave 4 prerequisite §10.5(g) identified).
 
-**(f) CI is green for the first time.** It had failed **30 of 30 runs** — every run ever —
-on a `backend/tests/hooks` test that faked "no interpreter" with `PATH=/bin`: true on macOS,
-false on Ubuntu where `/bin` is a usrmerge symlink. **The guard was correct; the test was wrong
-about Linux.** That suite is retired (ADR-019 amendment) and run **32003095488** shows
-`Lint ✓ Type-check ✓ Portal contract ✓ Test ✓` with **511 passed**.
+**(f) CI is green for the first time — run `32010188872`, on `33ab3d9`.** It had failed
+**30 of 30 runs** — every run ever — on a `backend/tests/hooks` test that faked "no
+interpreter" with `PATH=/bin`: true on macOS, false on Ubuntu where `/bin` is a usrmerge
+symlink. **The guard was correct; the test was wrong about Linux.** That suite is retired
+(ADR-019 amendment).
+
+Run **32003095488** was the near miss and is what this paragraph used to cite: it did show
+`Lint ✓ Type-check ✓ Portal contract ✓ Test ✓` with **511 passed**, and then **failed** at the
+next step, the DB-skip guard, which matched the progress line of the test module *named after*
+`SKIP_DB_TESTS`. Both broken gates were repaired in `ba45a48`. Run `32010188872` is the first
+run in this repo's history to reach the end: **all 15 steps green, 551 passed / 1 skipped**, and
+**five of those steps executed for the first time ever** — the collected-count floor, Set up
+Node, `npm ci`, the portal build (type-check + bundle), and the 36 Vitest tests.
+
+**(g) Real Zendesk webhook deliveries were failing ~5 in 7 with Cloudflare 502, and the root
+cause is edge routing to dead tunnel connections after connector churn.** Diagnosed
+2026-08-17. **Every 502 was returned by Cloudflare before the request reached the droplet at
+all** — nothing in this repo was involved, and no application code changed as a result.
+
+*Mechanism.* Each `cloudflared` start mints a **new connector ID**. Cloudflare's edge keeps
+routing some share of requests to a *prior* connector's connections, which are dead, and
+answers 502 without ever dialling the live connector. So the failure is created by connector
+churn — every `restart` and every `up -d` that recreates the container is a chance to enter
+this state.
+
+*Three independent proofs, all read back rather than inferred:*
+
+| Proof | What it showed |
+|---|---|
+| nginx access log on the droplet | Contains the **delivered** invocations at their exact timestamps and **none** of the 502'd ones — the failures never reached the origin |
+| `cloudflared_tunnel_request_errors` | Stayed at **1** throughout (an unrelated earlier error) — the connector recorded no failures because it was never asked |
+| `cloudflared_tunnel_total_requests` during reproduction | Stayed at **0** across ~46 requests that **all** 502'd — the connector saw zero of them |
+
+*The fix, and it is not subtle.* A clean `docker compose … up -d --force-recreate` recovers
+the tunnel in **~3 seconds**. After it: **90/90 signed POSTs through the identical public path
+succeeded**, against **0/46** while broken. Same URL, same signing secret, same origin.
+
+*The concurrency hypothesis was disproven*, and it is worth recording because it was the
+leading theory: 6 and then 10 simultaneous POSTs **all returned 202**, and every 502 came back
+in **131–271 ms** — far too fast to be any kind of timeout or queue exhaustion.
+
+*`/ready` is a false green, and this repo's own docs recommended it.* Through 7.5 continuous
+minutes in which every request 502'd, `GET http://cloudflared:2000/ready` reported
+**`readyConnections: 4`** — all four registered, config v3 loaded, every precheck PASS — and
+the Cloudflare dashboard showed the connector HEALTHY. `/ready` reports the connector's view
+of its own connections and cannot see requests that are never routed to it.
+`deploy/docker-compose.yml`, `deploy/cloudflared/README.md` and `docs/deploy.md` all told the
+operator to read `/ready` back as verification; all three were corrected 2026-08-17 to say
+that only `${PUBLIC_BASE_URL}/health` returning 200 from outside the droplet is evidence.
+
+*Not proven, stated as inference.* Requests entering via the **CMH** colo hit dead connections
+about **64%** of the time, while requests from a laptop (**DFW** colo) and from the droplet
+itself succeeded **100%**. The inference is that the stale routing entries are held per-colo,
+so one colo's table pointed at the dead connector while others had converged. Settling it
+needs Cloudflare's per-colo connection table, and there is **no Cloudflare API token** on any
+machine here (`CLOUDFLARE_TUNNEL_TOKEN` is not one), so it stays an inference.
+
+*No unit test can bind this*, and that is a real gap rather than an omission: it reproduces
+only against a live tunnel with a real connector history at Cloudflare's edge. Nothing that
+parses YAML or starts a container can produce the state. What **is** pinned mechanically is
+the honesty of the guidance — `backend/tests/deploy/test_compose_topology.py::test_the_tunnel_doc_records_the_live_verification_with_a_date`
+requires the README to keep stating the outside-the-droplet standard.
+
+*One droplet change was made, and it is not the fix.* `net.core.rmem_max` / `wmem_max` were
+raised **212992 → 7500000**, persisted in `/etc/sysctl.d/99-cloudflared-quic.conf`. That
+silenced a `cloudflared` UDP receive-buffer warning and nothing else: **502s continued after
+it**, and only the clean recreate stopped them. It removes a documented QUIC
+misconfiguration; it must not be read as the remedy.
 
 ### 10.7 Open questions from the live run — not decided, do not resolve in passing
 
@@ -727,18 +790,165 @@ container refreshes. In-process renewal is durable for a process's lifetime and 
 `docker compose restart`. Fixing it properly needs a store the containers share (the database).
 That is a **scope decision, not a bug fix**.
 
+> **Still open, and now with a built-but-dormant implementation behind it.** A file-based
+> store on a shared named volume exists (`ZENDESK_TOKEN_STORE`,
+> `backend/src/helpdesk/zendesk_credentials.py`, tests in
+> `backend/tests/contract/test_zendesk_credentials.py`) and is green. It was reported as
+> opt-in, and was not: both compose files defaulted the variable to
+> `/var/lib/cxforge/zendesk-tokens.json` with `:-`, so the store was **opt-out in every
+> container** regardless of `.env`. That default was **removed 2026-08-17** — the variable is
+> still forwarded (the app reads it, and `test_env_forwarding.py` requires the forwarding) but
+> now renders empty, so the store is dormant until the owner sets it and production behaviour
+> is unchanged. Three things the owner is deciding, not the implementation: it writes a **live
+> credential** to a volume; `backend` and `worker` can both refresh with **no locking**, so
+> last write wins and the loser has spent a token Zendesk already invalidated; and a file on a
+> volume is not the shared store this item describes (the database is). Turning it on is one
+> line in `.env`.
+>
+> *This is the same `:-`-default trap `backend/tests/deploy/test_env_forwarding.py` was built
+> for, inverted:* there a default hid a **missing** credential
+> (`docs/STATE.md §6.2`); here it silently **enabled a new behaviour**. The audit could not
+> catch it, and by design — it proves a variable is forwarded, never that its rendered value is
+> the one anyone intended.
+
 **(b) Every customer-visible reply is authored by "Hank Holcomb", admin.** Switching to the
 dedicated "Othram AI Agent" identity (`54404962250395`) is **demo optics, not correctness**, and
 needs an OAuth consent as that user — which is `role: agent` and may lose permissions the admin
 token has (group assignment, some search scopes). If it is done, do it via a `scripts/live_smoke.py`
 run, not as a discovery during filming.
 
-**(c) Two CI guards cannot do their job.** `ruff check .` in CI **silently skips 19 files** —
-`extend-exclude = ["portal", ...]` is gitignore-style, so `backend/src/portal` and
-`backend/tests/portal` have never been linted in CI. `.claude/rules/build-protocol.md` rule 2
-already requires the explicit invocation **locally**; CI does not do it. They are clean today, so
-adding it would pass — widening the CI gate is the owner's call. Separately, the **collected-count
-floor is 200 against 511 actual**, so it would not notice losing 60% of the suite.
+**(c) The collected-count floor is decorative.** It is **200 against 551 actual**, so it would
+not notice losing 60% of the suite. Raising it is the owner's call: a floor tight enough to catch
+a lost suite directory also goes red every time the suite legitimately shrinks.
+
+*The other half of this item is CLOSED, not open.* `ruff check .` in CI did silently skip 19
+files — `extend-exclude = ["portal", ...]` is gitignore-style, so `backend/src/portal` and
+`backend/tests/portal` had never been linted there. `ba45a48` added the explicit
+`uv run ruff check backend/src/portal backend/tests/portal` to CI's Lint step (both invocations
+report `All checks passed!` in run `32010188872`), and `backend/tests/test_ci_workflow.py` now
+drives `ruff --show-files` over the step's own targets and asserts every tracked Python file
+outside `.claude/` is covered — so the next excluded directory fails a test instead of going
+unlinted.
+
+**(d) `cloudflared` can silently stop serving on restart, and nothing detects it. This is the
+live threat to Wave 4.** The service has `restart: unless-stopped` and **no healthcheck** — a
+container-local probe is not expressible, because the image ships no shell and no wget/curl —
+and §10.6g establishes that a restart can leave the tunnel non-serving for minutes while
+`docker compose ps`, the logs, `/ready` **and** the Cloudflare dashboard all report healthy. A
+clean `up -d --force-recreate` recovers it in ~3 s.
+
+ADR-015's scenario runner seeds 20–30 tickets through the public URL, so a run that begins in
+this state fails wholesale with no instrument disagreeing. **The practical rule, and it needs
+no decision: do not restart `cloudflared` near a scenario run, and verify publicly
+(`${PUBLIC_BASE_URL}/health` → 200 from outside the droplet) after any deploy.**
+
+What *is* the owner's call is whether to do anything structural about it. A real healthcheck is
+not available in this image; the options are a sidecar container that probes the public URL, an
+external uptime monitor, or accepting the manual rule. Deliberately not chosen here.
+
+> **Partly answered 2026-08-17 by (e) below.** The third option — "an external uptime monitor" —
+> now exists in the one place it was most needed: the deploy gate. `verify_deploy.sh` samples the
+> public URL on every remote run, so the manual rule in the paragraph above is enforced by the
+> gate rather than by memory. The structural question (a sidecar or a continuous monitor, for the
+> window *between* verify runs) is still open and still the owner's.
+
+**(e) The deploy gate could not see the path Zendesk uses. Closed 2026-08-17 — recorded here
+because it is the seventh instance of one pattern.** `scripts/verify_deploy.sh` asserted only
+against `${DEPLOY_SCHEME}://${DEPLOY_HOST}:${DEPLOY_PORT}` — `http://161.35.2.250:8080`, the
+droplet's own port — and `--deep` POSTed its synthetic webhook at the same base. Zendesk reaches
+this app only through `PUBLIC_BASE_URL`, so through the §10.6g outage (**502 on ~64% of real
+deliveries**, requests never reaching the droplet) the gate would have reported **4/4** and
+`--deep` would have **passed**. `docs/OWNER-ACTIONS.md` recorded the bypass as reassurance — "it
+does not block `scripts/verify_deploy.sh`, which targets `http://161.35.2.250:8080` directly" —
+which was true and worthless; that sentence is now struck and corrected in place.
+
+What was added, and why each part (full rationale in the script's header and `docs/deploy.md §7`):
+
+- **A public-path stage that runs by DEFAULT in remote mode** whenever `PUBLIC_BASE_URL` is set.
+  Not behind an opt-in: `--deep` had already demonstrated what an opt-in check is worth — absent
+  by default. `--public` exists only to make the stage's *absence* fatal (an unset
+  `PUBLIC_BASE_URL` becomes a hard failure instead of a loud skip) and to force it in `--local`.
+- **Sampling, and a reported rate rather than a boolean.** 20 samples per probe, one `curl`
+  process each so no two share a TCP or Cloudflare edge connection. At the measured p=0.64 a
+  single request misses the outage 36% of the time; 20 miss it 1.3e-9 of the time.
+- **The Zendesk endpoint, not just `/health`.** An unsigned `POST /webhooks/zendesk` must answer
+  **401** — a pure read (ingress verifies the HMAC before it touches the body, the DB or the
+  queue) whose 401 is positive proof the request reached the *application*, where 502/530/000
+  proves it did not.
+- **A three-line `SCOPE:` block**, answering *what* ran and *which path* it ran over separately,
+  because "green core loop on the droplet port + 64%-broken public path" is a state this
+  deployment has actually been in.
+- **Two anti-neuter guards**, because a check that can be trivially defanged is not a check:
+  `CXFORGE_PUBLIC_SAMPLES` has an enforced floor of 4, and a loopback `PUBLIC_BASE_URL` is
+  labelled `SIMULATED` on the pass line and in `SCOPE:`.
+
+**Proven able to fail, in both directions, by execution.** Against a local server returning 502
+for 64% of requests, with the real droplet still answering 4/4:
+`GET /health 9/20 = 45.0% [502 x11, 200 x9]`, exit 1, no `PASS` printed. Against the real
+hostname: `20/20 = 100.0%` on both probes, `PASS`. Nine tests in
+`backend/tests/deploy/test_public_path_check.py` bind it, and each of eight separate sabotages
+of the stage was confirmed to turn them red — one of which (replacing the webhook probe with a
+second `/health` probe) passed every assertion until a request journal was added to the fake
+`curl`. **Still open for the owner:** whether this stage should also gate CI (it needs a live
+droplet, so it cannot run on a GitHub runner as written) and whether the `--deep` core-loop run
+should default to the public hostname rather than the droplet port.
+
+**(f) The worker healthcheck was green for up to an hour after a hang. One line changed;
+the residue is worth knowing.** arq's `health_check_interval` defaults to **3600s** and
+`Worker.record_health` writes the key with `psetex((interval + 1) * 1000)`, so a worker that hung
+*without exiting* kept a valid key for an hour — the probe could only catch a process that dies,
+which the container catches anyway (`arq` is its command). This was written down **only** in a
+YAML comment above the worker healthcheck, which said it was "flagged for the owner rather than
+taken here" — and it was in no ADR, not in this section, and not in `OWNER-ACTIONS.md`. That is
+the flag; this is it surfaced.
+
+**Taken, not deferred:** `WorkerSettings.health_check_interval = 30`
+(`HEALTH_CHECK_INTERVAL_SECONDS`, `backend/src/worker/main.py`). Chosen against the numbers:
+it equals the docker probe interval, so a stale key can never outlive one probe window (worst-case
+detection ~31s TTL + 3 x 30s retries ≈ **2 minutes**, against up to **3691s** before); it is far
+longer than a whole agent run (~11.5s measured) and far shorter than `job_timeout` (900s), so
+normal work never approaches the boundary; and it is deliberately not pushed lower, because arq
+refreshes the key exactly 1s before expiry at *any* interval, so shortening only multiplies the
+chance a momentarily busy loop misses a refresh while the probe's own 30s x 3 cadence continues to
+dominate detection latency.
+
+**Measured, not reasoned** — the real container command against real Redis (db 9, so no queued job
+could be picked up), reading `PTTL` back:
+`as committed: 30662 ms (~30.7s)` versus `control, arq's default restored: 3600818 ms (~3600.8s)`.
+Bound by `backend/tests/deploy/test_worker_health_interval.py`, which asserts through arq's own
+`get_kwargs` (a value inherited rather than in the class body is silently dropped by arq),
+asserts the key TTL cannot outlive one probe window, and asserts the whole three-file detection
+window (arq setting + probe interval + retries) stays under 180s. All three sabotages — deleting
+the line, restoring 3600, and setting 45 — were confirmed to turn it red.
+
+**What it does NOT fix, and this is the part to keep:** `record_health` runs on the event loop,
+and `run_ticket` hands `run_agent` to `asyncio.to_thread` — so the loop keeps ticking, and the
+key keeps refreshing, through a **hung Anthropic call**, which is the most likely hang in this
+system. The shorter interval promptly catches a blocked/dead event loop and a lost Redis link.
+A hung *run* is still visible only in the ERROR log and to `verify_deploy.sh --deep`. **Owner's
+call, not taken:** whether to bound the model call in `agent/llm.py` (the honest fix, which also
+lets `job_timeout` come down from 900s) or to add a real per-run health metric — noting that
+`run_ticket` swallows exceptions, so every arq-derived metric already reports success while every
+run fails.
+
+**(g) The env-forwarding count floor: tightened by addition, not by moving the number.** The floor
+in `backend/tests/deploy/test_env_forwarding.py::test_the_derivation_actually_found_something` is
+`assert len(app) >= 6` against **17** actual — it would not notice losing 11. Measured before
+deciding: it is *not* vacuous (a scan that matches no files at all returns exactly the 4
+`SDK_RESOLVED_VARIABLES` entries, so 6 catches the empty scan it was written for), and the two
+scan mechanisms are near-redundant — with either one disabled the set is still 17 — so no partial
+breakage of the *scanning* moves the count at all.
+
+**Decision: the floor stays at 6 and a new assertion covers what it cannot.** Raising it to ~14
+would have been a magic number that goes red on any legitimate shrinkage (dropping Langfuse alone
+removes 3) while still failing to say *what* went missing. Instead
+`test_every_env_reading_subpackage_still_contributes` asserts that each of the six subpackages of
+`backend/src` that read the environment still contributes at least one literal read — the real
+failure mode, since `helpdesk/` alone carries 7 of the 17 names, every Zendesk credential among
+them. Verified by execution: with `helpdesk/` hidden from the scan the old count floor **still
+passes**, and with the package moved the new test fails naming `backend/src/helpdesk/`. Same shape
+as (c), opposite resolution, and the reason for the difference is that this population is
+enumerable and the collected-test count is not.
 
 ---
 

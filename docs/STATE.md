@@ -198,6 +198,56 @@ proxy. Corrected history — including the prediction that got this wrong — is
 
 ---
 
+## 3.3 A separate 502 broke ~5 in 7 real webhook deliveries, and `/ready` reported healthy throughout — 2026-08-17
+
+Not the OA-3 502 above (that was the ingress rule's scheme). **Root cause: Cloudflare's edge
+routing to dead tunnel connections after connector churn.** Every `cloudflared` start mints a
+new connector ID, and the edge keeps routing a share of requests to a *prior* connector's dead
+connections, answering **502 before the request reaches the droplet at all**. No application
+code was involved and none changed.
+
+Proven three ways, all read back: the droplet's **nginx access log** holds the delivered
+invocations at their exact timestamps and **none** of the 502'd ones;
+`cloudflared_tunnel_request_errors` stayed at **1** (an unrelated earlier error); and during
+reproduction `cloudflared_tunnel_total_requests` stayed at **0** across ~46 requests that all
+502'd. A clean `up -d --force-recreate` recovered it in **~3 seconds**, after which **90/90**
+signed POSTs through the identical public path succeeded — against **0/46** while broken.
+
+**The concurrency hypothesis was disproven:** 6 and 10 simultaneous POSTs all returned 202, and
+every 502 came back in **131–271 ms**, far too fast for any timeout.
+
+> ### ⚠️ `GET http://cloudflared:2000/ready` is a false green, and this repo's own docs recommended it
+>
+> Through 7.5 continuous minutes in which **every** request 502'd, `/ready` reported
+> **`readyConnections: 4`** — four registered, config v3 loaded, every precheck PASS — and the
+> Cloudflare dashboard showed the connector HEALTHY. It reports the connector's view of its own
+> connections and cannot see requests never routed to it. `deploy/docker-compose.yml`,
+> `deploy/cloudflared/README.md` and `docs/deploy.md` all told the operator to read `/ready`
+> back as verification; all three were corrected 2026-08-17. **Only
+> `${PUBLIC_BASE_URL}/health` returning 200 from outside the droplet is evidence the tunnel is
+> serving.**
+>
+> **Live threat to Wave 4:** `cloudflared` has `restart: unless-stopped` and **no healthcheck**
+> (not expressible — the image ships no shell or curl), so a restart can leave the tunnel
+> non-serving for minutes with every instrument healthy. Rule: do not restart `cloudflared`
+> near an ADR-015 scenario run, and verify publicly after any deploy. A structural fix is an
+> owner decision — `docs/BUILD-PLAN.md §10.7d`.
+
+**Two things remain unproven.** (1) Requests entering via the **CMH** colo hit dead connections
+~**64%** of the time while requests from a laptop (**DFW**) and from the droplet itself
+succeeded **100%**; the per-colo explanation is stated as **inference**, because settling it
+needs Cloudflare's per-colo connection table and there is no Cloudflare API token on any
+machine here. (2) **No unit test can bind this** — it reproduces only against a live tunnel
+with a real connector history at the edge, so nothing that parses YAML or starts a container
+can produce the state.
+
+**One droplet change was made and it is NOT the fix.** `net.core.rmem_max` / `wmem_max` raised
+**212992 → 7500000**, persisted in `/etc/sysctl.d/99-cloudflared-quic.conf`. It silenced a
+`cloudflared` UDP receive-buffer warning and nothing more: **502s continued after it**, and only
+the clean recreate stopped them. Full record: `docs/BUILD-PLAN.md §10.6g`.
+
+---
+
 ## 4. Four defects not previously recorded anywhere
 
 ### 4.1 R8/R13 latency measures the wrong interval
@@ -483,13 +533,21 @@ turned **six pre-existing tests into real detectors** that fail against the old 
     2026-08-17.** Cause: a `backend/tests/hooks` test faked "no interpreter" with `PATH=/bin`,
     which is true on macOS and false on Ubuntu, where `/bin` is a usrmerge symlink into
     `/usr/bin`. **The guard was correct; the test was wrong about Linux.** That suite is
-    retired (`docs/DECISIONS.md` ADR-019 amendment) and run **32003095488** shows
-    `Lint ✓ Type-check ✓ Portal contract ✓ Test ✓` with **511 passed** — the first green suite
-    on Ubuntu in this repo's history. **Two CI guards still cannot do their job** (owner's call,
-    `docs/BUILD-PLAN.md §10.7c`): `ruff check .` in CI **silently skips 19 files** because
-    `extend-exclude` is gitignore-style, so `backend/src/portal` and `backend/tests/portal`
-    have never been linted in CI (they are clean today); and the **collected-count floor is 200
-    against 511 actual**, so it would not notice losing 60% of the suite.
+    retired (`docs/DECISIONS.md` ADR-019 amendment). Run **32003095488** got as far as
+    `Lint ✓ Type-check ✓ Portal contract ✓ Test ✓` with **511 passed** and then failed at the
+    DB-skip guard, which matched the progress line of the module *named after* `SKIP_DB_TESTS` —
+    so every step after it had also never executed. `ba45a48` fixed both gates, and run
+    **`32010188872`** (on `33ab3d9`) is the **first fully green run in this repo's history**:
+    all 15 steps, **551 passed / 1 skipped**, five steps executing for the first time ever
+    (collected-count floor, Set up Node, `npm ci`, portal build, 36 Vitest tests).
+    **The CI lint gap is closed:** the Lint step now also runs
+    `ruff check backend/src/portal backend/tests/portal` (the 19 files `extend-exclude`'s
+    gitignore-style `"portal"` had always swallowed), and
+    `backend/tests/test_ci_workflow.py::test_the_lint_step_checks_every_tracked_python_file`
+    drives `ruff --show-files` over the step's own command lines so a new excluded directory
+    fails a test instead of going unlinted. **Still open, owner's call**
+    (`docs/BUILD-PLAN.md §10.7c`): the **collected-count floor is 200 against 551 actual**, so
+    it would not notice losing 60% of the suite.
 
 ---
 
