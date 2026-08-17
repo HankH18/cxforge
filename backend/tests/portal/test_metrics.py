@@ -211,11 +211,96 @@ def test_escalations_by_reason_counts(client: TestClient) -> None:
 
 
 def test_metrics_with_no_runs_is_well_defined(client: TestClient) -> None:
+    """The endpoint is defined on an empty database — 200, exact body, no
+    500 and no NaN.
+
+    The two latency values in this body changed under W2-C3. They were
+    ``0.0``, asserted here since T-8 (commit 67776ba). ``0.0`` is not a
+    weaker version of the right answer, it is a different and false one: a
+    percentile over an empty sample does not exist, and reporting it as zero
+    seconds makes SPEC success criterion 6 ("p95 < 5 min") *vacuously true*
+    read off the panel — `docs/STATE.md §4.1` recorded exactly that, and
+    `docs/BUILD-PLAN.md §4 Track C` C3 decided the replacement: "return
+    ``null`` rather than ``0.0`` for percentiles over an empty sample", with
+    the acceptance "``/api/metrics`` on an empty database does **not**
+    report a passing p95". ``sample_count`` is the other half — a p95 is
+    only as meaningful as the number of runs behind it, and until now the
+    payload gave a reader no way to ask.
+
+    ``human_avoidance_rate`` deliberately stays ``0.0``: it is a ratio over
+    a denominator that is genuinely zero, not a percentile over an empty
+    sample, and ``sample_count`` reports the size of the *latency* sample.
+    """
     response = client.get("/api/metrics", headers=AUTH_HEADERS)
     assert response.status_code == 200
     assert response.json() == {
         "human_avoidance_rate": 0.0,
-        "latency_p50_s": 0.0,
-        "latency_p95_s": 0.0,
+        "latency_p50_s": None,
+        "latency_p95_s": None,
+        "sample_count": 0,
         "escalations_by_reason": {},
     }
+
+
+def test_an_empty_database_cannot_report_a_passing_p95(client: TestClient) -> None:
+    """W2-C3's acceptance, stated as the thing it forbids.
+
+    SPEC success criterion 6 is "p95 < 5 min". With no runs at all, the
+    endpoint used to report ``latency_p95_s = 0.0`` — which satisfies that
+    criterion, and satisfies it *best of all possible values*. A grader
+    reading the metrics panel on a freshly deployed stack would have seen
+    the strongest possible evidence for a claim that nothing had been
+    measured. This test is the assertion that a number nobody measured
+    cannot be read as a passing one.
+    """
+    payload = client.get("/api/metrics", headers=AUTH_HEADERS).json()
+
+    # The forbidden outcome first, stated as a property rather than as a
+    # value, so the failure message names the defect instead of a missing
+    # key: whatever the endpoint returns, it must not be a number that
+    # passes R8's threshold.
+    p95 = payload["latency_p95_s"]
+    assert not (isinstance(p95, int | float) and not isinstance(p95, bool) and p95 < 300), (
+        f"an empty run history reported latency_p95_s={p95!r}, which reads as "
+        f"a PASS against SPEC success criterion 6 (p95 < 5 min) while nothing "
+        f"has ever been measured"
+    )
+    assert p95 is None
+    assert payload["sample_count"] == 0
+
+
+def test_sample_count_is_the_number_of_runs_the_percentiles_rest_on(
+    client: TestClient,
+) -> None:
+    """A p95 over 5 points and a p95 over 500 are different claims, and the
+    payload said nothing that let a reader tell them apart.
+
+    The fixture has 5 ``auto_sent`` runs and 4 more runs with other outcomes
+    (one of which, ``gated_sent``, even has a latency). ``sample_count`` must
+    be 5 — the size of the sample the percentiles were actually computed
+    over — not 9 or 10. Asserting 5 against that fixture is what separates
+    "the latency sample" from "the runs table".
+    """
+    _build_hand_computed_fixture()
+
+    payload = client.get("/api/metrics", headers=AUTH_HEADERS).json()
+
+    assert payload["sample_count"] == 5
+    assert payload["latency_p50_s"] == 30.0
+    assert payload["latency_p95_s"] == 48.0
+
+
+def test_one_run_is_reported_as_one_run_and_not_as_a_percentile_estimate(
+    client: TestClient,
+) -> None:
+    """The interesting boundary is 1, not 0: a single run produces a real,
+    non-null p95 that happens to equal that one measurement. That is correct
+    and it is also the number most likely to be over-read, so the count has
+    to travel with it."""
+    _seed(ticket_id="metrics-single-1", outcome="auto_sent", latency_s=12.0, route="kb")
+
+    payload = client.get("/api/metrics", headers=AUTH_HEADERS).json()
+
+    assert payload["sample_count"] == 1
+    assert payload["latency_p50_s"] == 12.0
+    assert payload["latency_p95_s"] == 12.0

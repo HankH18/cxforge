@@ -20,11 +20,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
 from arq import func
-from arq.typing import WorkerSettingsBase
+from arq.typing import StartupShutdown, WorkerSettingsBase
 from dotenv import load_dotenv
 
 # backend/src/worker/main.py -> worker -> src -> backend -> repo root.
@@ -57,11 +58,52 @@ from agent.graph import run_agent  # noqa: E402
 from agent.llm import AnthropicLLMClient  # noqa: E402
 from data import get_connection  # noqa: E402
 from helpdesk.zendesk_adapter import ZendeskAdapter  # noqa: E402
+from logging_setup import configure_logging  # noqa: E402
 from worker.jobs import TicketJob  # noqa: E402
 from worker.settings import QUEUE_NAME, RUN_TICKET_TASK  # noqa: E402
 from worker.settings import redis_settings as _redis_settings  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+
+async def startup(ctx: dict[str, Any]) -> None:
+    """W2-C2: configure logging, and do it HERE rather than at import.
+
+    `arq/cli.py` imports the settings module first (line 40) and calls
+    ``logging.config.dictConfig(default_log_config(verbose))`` afterwards
+    (line 45). A `configure_logging()` at this module's import time is
+    therefore run *before* arq's own configuration and then partially undone
+    by it — ``dictConfig`` closes every existing handler on the way through.
+    `arq.worker.Worker.main` awaits ``on_startup`` after all of that, so this
+    is the first point in the process where the configuration sticks. This
+    is exactly the class of thing that looks configured and is not, so it is
+    pinned by a real ``arq`` run in `backend/tests/ingress/test_logging.py`
+    rather than by reading the ordering off the source once.
+
+    Clearing the ``arq`` logger's own handler is the second half: arq's
+    dictConfig gives that logger a plain-text StreamHandler and leaves
+    ``propagate`` true, so without this every arq line would appear twice —
+    once as prose, once as JSON. Dropping the handler lets it propagate to
+    the root handler alone, and arq's own startup/job lines join the same
+    structured stream.
+
+    **Known and measured limitation.** `arq.worker.Worker.main` logs two
+    banner lines ("Starting worker for N functions", "redis_version=…")
+    *before* it awaits this hook, so those two lines are plain text and
+    everything after them is JSON. Counted on a real ``arq … --burst`` run
+    on 2026-08-16: 5 structured lines, 2 unstructured, both of them the
+    banner. Configuring at import time instead would make those two JSON at
+    the cost of emitting every arq line twice (arq's own handler plus the
+    root handler, which its ``dictConfig`` closes but leaves attached), so
+    this is the better of two imperfect options, not a clean win. The clean
+    fix is arq's ``--custom-log-dict``, which means changing the container
+    command in both compose files — Track F's row of the ownership matrix.
+    """
+    configure_logging(service="worker")
+    arq_logger = logging.getLogger("arq")
+    for handler in arq_logger.handlers[:]:
+        arq_logger.removeHandler(handler)
+    logger.info("worker started", extra={"queue": QUEUE_NAME, "task": RUN_TICKET_TASK})
 
 
 def release_dedup_row(job: TicketJob) -> None:
@@ -109,6 +151,15 @@ async def run_ticket(ctx: dict[str, Any], payload: dict[str, Any]) -> None:
     real health metric.
     """
     job = TicketJob.model_validate(payload)
+    # W2-C2. The INFO pair below is the only place a *successful* run is
+    # visible at all: `act` writes to `runs`, but nothing said so out loud,
+    # and arq's own job accounting cannot be trusted here (a swallowed
+    # exception is booked as `success = True` — see the paragraph above).
+    # `job_context` is attached to every line so one ticket's whole life is
+    # one `jq 'select(.ticket_id == ...)'` away.
+    job_context = {"ticket_id": job.ticket_id, "comment_id": job.comment_id}
+    started = time.monotonic()
+    logger.info("agent run started", extra=job_context)
     try:
         await asyncio.to_thread(
             run_agent,
@@ -147,12 +198,14 @@ async def run_ticket(ctx: dict[str, Any], payload: dict[str, Any]) -> None:
                 "after cancellation",
                 job.ticket_id,
                 job.comment_id,
+                extra=job_context,
             )
         logger.error(
             "agent run cancelled for ticket %s (comment %s) — job_timeout or "
             "shutdown; the worker thread may still be running",
             job.ticket_id,
             job.comment_id,
+            extra={**job_context, "duration_s": round(time.monotonic() - started, 3)},
         )
         raise
     except Exception as exc:
@@ -163,6 +216,7 @@ async def run_ticket(ctx: dict[str, Any], payload: dict[str, Any]) -> None:
                 "could not release tickets_seen row for ticket %s comment %s",
                 job.ticket_id,
                 job.comment_id,
+                extra=job_context,
             )
         logger.error(
             "agent run failed for ticket %s (comment %s): %r",
@@ -170,6 +224,12 @@ async def run_ticket(ctx: dict[str, Any], payload: dict[str, Any]) -> None:
             job.comment_id,
             exc,
             exc_info=True,
+            extra={**job_context, "duration_s": round(time.monotonic() - started, 3)},
+        )
+    else:
+        logger.info(
+            "agent run completed",
+            extra={**job_context, "duration_s": round(time.monotonic() - started, 3)},
         )
 
 
@@ -180,6 +240,8 @@ async def run_ticket(ctx: dict[str, Any], payload: dict[str, Any]) -> None:
 # come down. Recorded rather than silently left at the default, because a
 # cancellation here is a released dedup row plus a thread still running.
 JOB_TIMEOUT_SECONDS = 900
+
+_ON_STARTUP: StartupShutdown = startup
 
 
 class WorkerSettings(WorkerSettingsBase):
@@ -199,6 +261,13 @@ class WorkerSettings(WorkerSettingsBase):
     functions = [func(run_ticket, name=RUN_TICKET_TASK, max_tries=1)]
     queue_name = QUEUE_NAME
     job_timeout = JOB_TIMEOUT_SECONDS
+    # W2-C2 — see `startup`'s docstring for why logging is configured from
+    # this hook and not at import time. Routed through a module-level name
+    # annotated as `arq`'s own `StartupShutdown` so it reads as a callable
+    # attribute rather than a method of this class: `arq.worker.get_kwargs`
+    # pulls it straight out of `__dict__` and calls it with the job context,
+    # never through this class, so binding must not happen at either end.
+    on_startup: StartupShutdown = _ON_STARTUP
 
     # Evaluated once, at import. This is the one place `REDIS_URL` is NOT read
     # at call time (`worker.settings.redis_url`'s contract), because arq

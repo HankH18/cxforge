@@ -136,9 +136,36 @@ Fill in on the droplet's copy (values you already have locally, per
   `OPENAI_API_KEY` before the provider pivot; the backend no longer reads
   that name at all, and `deploy/docker-compose.yml` forwards the Anthropic
   one instead.
+- `VOYAGE_API_KEY` — the embeddings key (ADR-008, `voyage-4-lite` @
+  `output_dimension=1024`). Read directly by
+  `backend/src/data/embeddings.py` through `httpx`, not the `voyageai`
+  SDK. **Only needed when `KB_EMBEDDER=voyage`** — and then it is hard
+  required: `VoyageEmbedder` refuses to build without it rather than
+  quietly degrading to the lexical embedder. With the default
+  `KB_EMBEDDER=hashing` an empty value changes nothing.
+- `KB_EMBEDDER` — **the one variable on this page you must not change on
+  its own.** It picks which embedder the KB is *seeded* with and which one
+  *queries* are embedded with, and those are the same setting by design
+  (`data.seed.seed_all` and `data.retrieval.search_kb` both resolve through
+  `default_embedder()`). Vectors already in `kb_chunks` came from the
+  previous embedder and are not in the same space as the new query
+  vectors, so **flipping this without reseeding does not error — it returns
+  confident, plausible, wrong passages.** Flip it and reseed the KB in the
+  same maintenance window, with no worker consuming jobs
+  (`docs/BUILD-PLAN.md §10.3`). Accepted values are `hashing` (the default,
+  deterministic and fully offline) and `voyage`; anything else raises
+  rather than falling back. It is deliberately *not* "use Voyage if
+  `VOYAGE_API_KEY` is set" — this repo's `.env` carries the key, and that
+  rule would put the offline test suite on the network.
 - `LANGFUSE_*` — same lazy story: absent means that integration is simply
-  unused, not a crash. Note that no Langfuse instrumentation is wired in
-  the code regardless (see `docs/demo-script.md`, Shot 8).
+  unused, not a crash. Since W2-C1 (ADR-006) the instrumentation is real —
+  `agent.llm.emit_trace` reports the `trace_id` that `agent.nodes.act`
+  mints, and the portal's trace link resolves (`307 → 200`) — so with keys
+  absent the code degrades to a no-op that never imports `langfuse`, and
+  the portal's trace links point at nothing. Set `LANGFUSE_HOST` too: its
+  default is the EU region while the `cxforge` project is on
+  `us.cloud.langfuse.com`, and an unset host builds a syntactically valid
+  link into the wrong region rather than failing.
 - `DEPLOY_HOST` — already set, to this project's droplet
   (`161.35.2.250`), so `scripts/verify_deploy.sh` (run from your local
   machine) targets it instead of the local stack.
@@ -162,12 +189,14 @@ docker compose -f deploy/docker-compose.yml up -d --build --wait
 **Do not run the second command without the first line.** `docker compose` reads `.env`
 from the directory holding the compose file — here `deploy/`, which has no `.env`.
 Measured 2026-08-16: plain `docker compose -f deploy/docker-compose.yml config` renders
-`ANTHROPIC_API_KEY`, all four `ZENDESK_*` and both `LANGFUSE_*` keys as the **empty
-string**, and `PORTAL_TOKEN` as the literal `dev-portal-token` — from a repo whose `.env`
-has every one of them populated. Nothing fails. It deploys a stack that cannot answer a
-ticket. (The *root* `docker-compose.yml` does pick `.env` up automatically, because its
-project directory is the repo root — so the trap applies to exactly the stack that matters
-and not to the one you test with.)
+`ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, all four `ZENDESK_*` and both `LANGFUSE_*` keys as
+the **empty string**, `PORTAL_TOKEN` as the literal `dev-portal-token`, and `KB_EMBEDDER`
+as the literal `hashing` — from a repo whose `.env` has every one of them populated.
+Nothing fails. It deploys a stack that cannot answer a ticket, and — because
+`KB_EMBEDDER`'s fallback is a *value*, not an empty string — one that silently retrieves
+lexically no matter what you set. (The *root* `docker-compose.yml` does pick `.env` up
+automatically, because its project directory is the repo root — so the trap applies to
+exactly the stack that matters and not to the one you test with.)
 
 This is exactly what `scripts/verify_deploy.sh` does in local mode, minus
 the teardown at the end — the whole point of a real deploy is to leave it

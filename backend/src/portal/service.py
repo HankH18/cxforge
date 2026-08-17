@@ -64,14 +64,28 @@ def write_gate(enabled: bool) -> None:
 
 
 def _trace_url(trace_id: str | None) -> str | None:
-    """Best-effort trace link (DESIGN's ``trace_url`` field). No Langfuse
-    instrumentation is actually wired anywhere in this repo yet —
-    ``agent.nodes.act`` mints ``trace_id`` as a bare ``uuid.uuid4().hex``
-    and never reports it to Langfuse (see that module) — so this constructs
-    a conventional-shape URL from ``LANGFUSE_HOST`` (``.env.example``) that
-    may not resolve to a real trace. DESIGN pins the field's presence, not
-    its exact format; flagged as a secondary, non-blocking gap in the T-8
-    completion report."""
+    """DESIGN's ``trace_url`` field — a link to this run's Langfuse trace.
+
+    The URL shape is unchanged from T-8 (BUILD-PLAN §1.6 freezes it), but
+    what it points at changed under W2-C1: ``agent.nodes.act`` now reports
+    the ``trace_id`` it mints to Langfuse (``agent.llm.emit_trace``), so
+    these links resolve instead of 404ing. Before W2-C1 the id was a bare
+    ``uuid.uuid4().hex`` that was never told to anyone.
+
+    ``{host}/trace/{id}`` is Langfuse's own project-agnostic redirect, which
+    is why this can build a working link without knowing the project id.
+    Measured 2026-08-16 against a trace this code emitted:
+    ``GET https://us.cloud.langfuse.com/trace/<id>`` → **307** to
+    ``/project/<project_id>/traces/<id>`` → **200**.
+
+    ``LANGFUSE_HOST`` is the variable the app reads — not
+    ``LANGFUSE_BASE_URL`` (`docs/DESIGN.md`) — and its default below is the
+    EU region while the ``cxforge`` project is on ``us.cloud.langfuse.com``,
+    so an unset ``LANGFUSE_HOST`` builds a syntactically fine link into the
+    wrong region rather than failing. That is a deployment concern, checked
+    by ``backend/tests/deploy/test_env_forwarding.py``, not something this
+    function can detect.
+    """
     if not trace_id:
         return None
     host = os.environ.get("LANGFUSE_HOST", _DEFAULT_LANGFUSE_HOST).rstrip("/")
@@ -263,14 +277,19 @@ def reject_draft(draft_id: int) -> DraftResponse:
 # -- metrics (R13) --------------------------------------------------------
 
 
-def _percentile(values: list[float], pct: float) -> float:
+def _percentile(values: list[float], pct: float) -> float | None:
     """Linear-interpolation percentile — the same method
     ``numpy.percentile``'s default ("linear") uses — over a sorted sample.
     DESIGN pins the p50/p95 metric names, not a specific percentile
     algorithm; this one is standard and easy to hand-verify, and is applied
-    identically to both p50 and p95 so the two stay comparable."""
+    identically to both p50 and p95 so the two stay comparable.
+
+    ``None`` over an empty sample, not ``0.0`` (W2-C3). ``numpy.percentile``
+    raises on an empty array; returning zero was this function's own
+    invention, and it is the one wrong answer with consequences — see
+    ``portal.schemas.MetricsResponse``."""
     if not values:
-        return 0.0
+        return None
     ordered = sorted(values)
     if len(ordered) == 1:
         return ordered[0]
@@ -309,6 +328,22 @@ def compute_metrics() -> MetricsResponse:
     -> public reply posted, autonomous mode only" — computed only over
     ``outcome = 'auto_sent'`` rows, in seconds, from ``received_at`` to
     ``replied_at``.
+
+    That quotation used to be **false about the code beneath it**
+    (`docs/STATE.md §4.1`): ``received_at`` was minted inside ``agent.nodes.
+    act``, the last node of the graph, so the interval excluded every model
+    call and measured only the HelpdeskPort calls. W1-A5 / ADR-004 fixed the
+    measurement rather than the sentence — receipt time is now stamped in
+    the ingress handler and carried on the job payload — so the definition
+    is left standing because it is now true. Checked clause by clause on
+    2026-08-16 against `agent.nodes.act` and the query below; nothing in
+    this paragraph is a claim about intent.
+
+    ``sample_count``, and ``None`` percentiles over an empty sample: W2-C3.
+    ``len(latencies)`` is the size of THIS sample — the ``auto_sent`` rows
+    with both timestamps — which is why it is taken from the list the
+    percentiles are computed from rather than counted separately. A
+    ``gated_sent`` run has a latency and is deliberately not in it.
 
     ``escalations_by_reason``: SPEC R13's "escalation counts by reason",
     grouped over ``runs.reasons`` (the array ``agent.store.record_run``
@@ -353,5 +388,6 @@ def compute_metrics() -> MetricsResponse:
         human_avoidance_rate=rate,
         latency_p50_s=_percentile(latencies, 0.5),
         latency_p95_s=_percentile(latencies, 0.95),
+        sample_count=len(latencies),
         escalations_by_reason=escalations_by_reason,
     )

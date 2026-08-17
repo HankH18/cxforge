@@ -34,19 +34,44 @@ core** (LangGraph graph), **helpdesk adapters** (port implementations),
 **eval tooling** (labeled set, promptfoo, route-accuracy harness, report generator),
 **scenario runner** (live e2e + latency measurement).
 
-> **Status, 2026-08-16 — the ingress→queue→worker hop is designed and frozen, not
-> built.** The webhook handler's last statement is
-> `return {"status": "accepted", "duplicate": not is_new}`
-> (`backend/src/ingress/__init__.py:89`) and nothing in `backend/src` calls
-> `run_agent`. **That was true when this was written and is no longer true of the working
-> tree** — Wave 1 Track A built the ingress→queue→worker hop, and `backend/src/ingress`
-> now enqueues a `TicketJob` that an arq worker consumes. It has not yet passed the full
-> gate or been committed, and nothing here has ever opened a **real** Redis connection.
-> Still genuinely target state: **the Voyage embedder edge** (the tree ships only
-> `HashingEmbedder`; gated on `docs/OWNER-ACTIONS.md` OA-1) and **the Langfuse edge**
-> (zero `import langfuse` repo-wide; Wave 2 Track C). See
-> `docs/STATE.md §1–2` for the evidence and `docs/BUILD-PLAN.md §3 Track A` for who
-> builds it. The contracts that hop must satisfy are frozen below.
+> **Status, 2026-08-16 — every edge in the diagram above is now built.** This blockquote
+> used to say the ingress→queue→worker hop was "designed and frozen, not built", because
+> the webhook handler's last statement was
+> `return {"status": "accepted", "duplicate": not is_new}` and nothing in `backend/src`
+> called `run_agent`. That is history:
+>
+> - **The hop is built and committed** — Wave 1 Track A. `backend/src/ingress` enqueues a
+>   `TicketJob` and a dedicated `arq` worker consumes it and calls `run_agent`
+>   (`b9babe7`..`972c13b`, seven commits).
+> - **The Voyage edge is built** — Wave 2 Track B. `VoyageEmbedder`
+>   (`backend/src/data/embeddings.py`, `voyage-4-lite` @ `output_dimension=1024`) is a
+>   real implementation of the `Embedder` protocol, selected by `KB_EMBEDDER=voyage`.
+> - **The Langfuse edge is built** — Wave 2 Track C. `agent.llm.emit_trace` is the one
+>   place `langfuse` is imported, and `agent.nodes.act` reports the `trace_id` it mints
+>   instead of dropping it on the floor.
+>
+> **What is still unproven, which is why this blockquote exists:**
+>
+> 1. **No code in this repo has ever opened a real Redis connection.** The queue hop is
+>    verified by unit tests and a stub `JobQueue`; `ArqJobQueue` has never met a live
+>    broker. Wave 3's deep deploy check (**G2**) is the first thing that will, and no unit
+>    test can close it — it needs `docker compose up`, a signed webhook, and a `runs` row
+>    read back.
+> 2. **Production still runs the lexical embedder.** `KB_EMBEDDER` defaults to `hashing`
+>    (`HashingEmbedder`, bag-of-words), so the `RUN -- Embedder → Voyage --> KB` edge is
+>    real code on a switch that is off. Turning it on takes the env change **and** a KB
+>    reseed in the same window (`docs/BUILD-PLAN.md §10.3`): the stored vectors and the
+>    query vectors would otherwise come from different spaces, which does not error — it
+>    returns confident, plausible, wrong passages.
+> 3. **Langfuse tracing, by contrast, is verified live.** Trace
+>    `422bccf6fc854007b2cefb47ff80ce56` in project `cxforge` carries 8 spans; the
+>    `case_status` tool result (`case_id: MFG-2025-0734`) was confirmed to feed the
+>    `compose` span whose draft quotes it, and `GET {LANGFUSE_HOST}/trace/<id>` resolves
+>    **307 → 200**. This edge is the one that was checked against the vendor, not against
+>    a fake.
+>
+> See `docs/STATE.md` for the verified account of state and `docs/BUILD-PLAN.md` for the
+> remaining work. The contracts below are frozen regardless.
 
 ## Interfaces (contracts between tickets)
 
@@ -153,7 +178,10 @@ and read-only to the portal API.
 port, records human-touched) · `POST /api/drafts/{id}/reject`.
 `GET|PUT /api/settings/gate` → `{enabled: bool}`.
 `GET /api/metrics` → `{human_avoidance_rate, latency_p50_s, latency_p95_s,
-escalations_by_reason}`. Auth: `X-Portal-Token` shared secret.
+sample_count, escalations_by_reason}`, where `latency_p50_s` and
+`latency_p95_s` are **nullable** (`float | None`) and `sample_count` is the
+number of runs those percentiles were computed over. Auth: `X-Portal-Token`
+shared secret.
 
 ### Metric definitions (pinned — do not renegotiate in tickets)
 `human_avoidance_rate` = tickets solved via auto-sent replies only ÷ all
@@ -173,6 +201,23 @@ public reply posted, autonomous mode only.
 > `runs.received_at` finally means what this section has always said it means. Do
 > not reword the definition to match the code; the code moves. See
 > `docs/STATE.md §4.1`.
+
+> **Amendment 2026-08-16 (W2-C3, authorised by `docs/BUILD-PLAN.md §4` Track C).**
+> The pinned `/api/metrics` shape gains `sample_count`, and the two latency
+> percentiles become nullable. **Why the nullability matters:** over an empty
+> sample the endpoint previously reported `latency_p95_s = 0.0`, and `0.0` reads
+> as a *pass* against SPEC success criterion 6 ("p95 < 5 min") — the most
+> favourable value the field can take, returned precisely when nothing has ever
+> been measured. A freshly deployed stack with zero runs therefore rendered as
+> the strongest possible evidence for a claim no run supported. `null` is the
+> honest answer and, unlike a number, cannot be misread as a passing one;
+> `sample_count` says how many runs any non-null percentile rests on.
+> `human_avoidance_rate` deliberately stays `0.0` — a ratio over a genuinely
+> zero denominator is not the same thing as a percentile over an empty sample.
+> Every key DESIGN already named keeps its name; only `latency_p50_s` /
+> `latency_p95_s` change *type*. Implemented in
+> `backend/src/portal/schemas.py` (`MetricsResponse`) and
+> `backend/src/portal/service.py` (`compute_metrics`).
 
 ## Data models
 

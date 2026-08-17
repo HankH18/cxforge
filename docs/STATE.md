@@ -14,21 +14,41 @@ finding they examined, and those corrections are folded in here.
 
 ## 1. The one-sentence version
 
-> ### ⚠️ SUPERSEDED IN THE WORKING TREE — 2026-08-16, Wave 1
+> ### ⚠️ SUPERSEDED — 2026-08-16, Waves 1 and 2
 >
-> **§1 and §2 below describe the state this audit found. Wave 1 Track A connected the
-> loop.** In the working tree today, the ingress handler enqueues a `TicketJob` and an arq
-> worker consumes it and calls `run_agent`. Verified independently: a signed webhook drives
-> the real FastAPI app and produces one enqueued job carrying a handler-stamped
-> `received_at`; the worker passes that stamp through to `runs.received_at`; and the old
-> defect was measured at **22µs** across a 300ms ingest delay, against **≥700ms** now.
+> **§1 and §2 below describe the state this audit found. They are no longer true of the
+> repo.** Wave 1 Track A connected the loop; Wave 2 built retrieval quality and
+> observability on top of it.
 >
-> **Precise about what is and is not proven:** this is verified by narrow suites
-> (`backend/tests/ingress` → 27 passed) and by a DB-free harness driving the real app and
-> the real graph. It has **not** yet passed the full gate, has **not** been committed, and
-> **no code in this repo has ever opened a real Redis connection** — `ArqJobQueue` has only
-> ever met a stub. The Redis hop is the largest remaining unknown and no unit test can close
-> it; it needs `docker compose up`, a signed webhook, and a `runs` row read back (Wave 3 G2).
+> **Wave 1 — committed**, seven commits, `b9babe7`..`972c13b`. The ingress handler enqueues
+> a `TicketJob` and an arq worker consumes it and calls `run_agent`. Verified
+> independently: a signed webhook drives the real FastAPI app and produces one enqueued job
+> carrying a handler-stamped `received_at`; the worker passes that stamp through to
+> `runs.received_at`; and the old latency defect was measured at **22µs** across a 300ms
+> ingest delay, against **≥700ms** now. Wave 1 also landed the promptfoo suite and the
+> first live route-accuracy measurement (Track E), the portal's stylesheet and outcome
+> rendering (Track D), and the redis/worker/cloudflared services with `.env` loading and an
+> env-forwarding audit test (Track F).
+>
+> **Wave 2 — landing with this commit.** Track B: `VoyageEmbedder`, a `KB_MIN_SCORE`
+> relevance floor, the ADR-011 permission rewording, and customer history through
+> `HelpdeskPort` (ADR-009). Track C: real Langfuse instrumentation, structured JSON
+> logging, and honest metrics. The full gate is green at **810 passed, 2 deselected**
+> (Wave 1 ended at 716).
+>
+> **Precise about what is and is not proven:**
+>
+> - **No code in this repo has ever opened a real Redis connection.** `ArqJobQueue` has
+>   only ever met a stub. The Redis hop is the largest remaining unknown and no unit test
+>   can close it; it needs `docker compose up`, a signed webhook, and a `runs` row read
+>   back (Wave 3 **G2**).
+> - **Production still retrieves lexically.** `KB_EMBEDDER` defaults to `hashing`, and
+>   switching to Voyage requires the env change **and** a KB reseed (§10.3 of
+>   `docs/BUILD-PLAN.md`) — flipping without reseeding returns plausible nonsense, not an
+>   error.
+> - **Langfuse is the one edge verified against the vendor**, not a fake: trace
+>   `422bccf6fc854007b2cefb47ff80ce56` in project `cxforge`, 8 spans, `/trace/<id>` → 307 →
+>   200.
 >
 > Everything downstream of the loop in §1 and §2 — `runs` empty, the feed reading
 > "No runs yet.", metrics at 0.0 — remains **true of the deployed droplet**, which still
@@ -228,31 +248,70 @@ These are load-bearing and should not be disturbed:
    `backend/tests/deploy/**`, or CI makes a model call, writes a row, or touches the
    agent path. That is precisely why the stack passed 4/4 for weeks with **no
    `ANTHROPIC_API_KEY` at all**, and passes 4/4 today with a dead core loop.
-3. **Langfuse is installed and imported nowhere.** Zero `import langfuse` repo-wide.
+3. ~~**Langfuse is installed and imported nowhere.**~~ **FIXED by W2-C1 (ADR-006),
+   2026-08-16.** *Original finding, preserved:* Zero `import langfuse` repo-wide.
    `nodes.py:592` mints `trace_id = uuid.uuid4().hex` and reports it to no one; the
    portal builds `{LANGFUSE_HOST}/trace/{that_uuid}`, which cannot resolve. *Currently
    unreachable* — the feed short-circuits to "No runs yet." with zero rows — so it is a
-   latent defect, not a live one.
-4. **Retrieval has no relevance floor.** `search_kb` applies no score cutoff, so it
+   latent defect, not a live one. **Now:** `agent.llm.emit_trace` is the single import
+   site and `agent.nodes.act` reports the id it mints, so the portal link resolves.
+   Verified against the vendor, not a fake: trace `422bccf6fc854007b2cefb47ff80ce56` in
+   project `cxforge`, 8 spans, the `case_status` tool result (`case_id: MFG-2025-0734`)
+   feeding the `compose` span whose draft quotes it, and `/trace/<id>` → **307 → 200**.
+   Absent keys degrade to a no-op that never imports the package.
+4. ~~**Retrieval has no relevance floor.**~~ **FIXED by W2-B2 (ADR-010), 2026-08-16.**
+   *Original finding, preserved:* `search_kb` applies no score cutoff, so it
    always returns chunks — which makes R6's "empty retrieval" hard trigger **literally
-   unreachable**. An escalation path the docs describe can never fire.
-5. **The "vector DB" is lexical.** `HashingEmbedder` is bag-of-words hashing. It works
-   for in-domain queries (0.27–0.42 similarity on correct hits) but SPEC's constraints
-   imply semantic embeddings.
-6. **The permission route lies mildly.** The reply says the request "has now been
-   processed for your case"; the codebase performs no such action anywhere.
-7. **Customer-history access** — the one PRD line item that is in neither the code nor
-   SPEC's non-goals. No `HelpdeskPort` method exists.
-8. **Portal ships zero CSS** — no `.css` file, no `className`, no `style` attribute, no
-   tailwind/postcss, no CSS asset in the built bundle.
-9. **Portal renders no `run.outcome`** — escalated and off_topic runs display as
+   unreachable**. An escalation path the docs describe can never fire. **Now:**
+   `KB_MIN_SCORE` is a per-embedder floor (Voyage `0.25`, hashing `0.09`) applied in
+   `data.retrieval.search_kb`, and
+   `backend/tests/grounding/test_empty_retrieval_escalation.py` demonstrates the trigger
+   firing for the first time.
+5. ~~**The "vector DB" is lexical.**~~ **PARTLY FIXED by W2-B1 (ADR-008), 2026-08-16 —
+   read the nuance.** *Original finding, preserved:* `HashingEmbedder` is bag-of-words
+   hashing. It works for in-domain queries (0.27–0.42 similarity on correct hits) but
+   SPEC's constraints imply semantic embeddings. **Now:** `VoyageEmbedder`
+   (`voyage-4-lite` @ `output_dimension=1024`) exists and is measurably better — rank-1
+   **12/12 vs 10/12** on customer wording and **11/12 vs 5/12** on the topic paraphrase
+   `kb_answer` actually searches with, and hashing's in-domain score band *overlaps* its
+   off-domain band while Voyage's are cleanly separated (`docs/BUILD-PLAN.md §10.3`).
+   **But production is still lexical:** `KB_EMBEDDER` defaults to `hashing`, and the
+   switch takes the env change **and** a KB reseed in the same window, or retrieval
+   returns plausible nonsense from mismatched vector spaces.
+6. ~~**The permission route lies mildly.**~~ **FIXED by W2-B3 (ADR-011), 2026-08-16.**
+   *Original finding, preserved:* The reply says the request "has now been
+   processed for your case"; the codebase performs no such action anywhere. **Now:**
+   `agent/templates.py` claims the **approval** — which is genuinely what the `permission`
+   node decides, grounded in the KB's always-grant list — and says plainly that applying
+   the change itself is someone else's step, so a customer whose request is never actioned
+   knows to chase it.
+7. ~~**Customer-history access**~~ **FIXED by W2-B4 (ADR-009), 2026-08-16.** *Original
+   finding, preserved:* the one PRD line item that is in neither the code nor
+   SPEC's non-goals. No `HelpdeskPort` method exists. **Now:** `fetch_requester_history`
+   is on the port and implemented by **both** adapters, the contract suite covers it
+   (R14 preserved), and the prior tickets reach the classifier's user message —
+   subjects, status, age and tags only, never prior bodies.
+8. ~~**Portal ships zero CSS**~~ **FIXED by W1-D, 2026-08-16, commit `e61fc78`.**
+   *Original finding, preserved:* no `.css` file, no `className`, no `style` attribute,
+   no tailwind/postcss, no CSS asset in the built bundle. **Now:** one stylesheet,
+   `portal/src/styles.css`, and the build emits a CSS asset
+   (`dist/assets/index-BuI7MQ4p.css`, 6.40 kB).
+9. ~~**Portal renders no `run.outcome`**~~ **FIXED by W1-D, 2026-08-16, commit `e61fc78`.**
+   *Original finding, preserved:* escalated and off_topic runs display as
    "auto-sent". `App.tsx` also matches `draft_id === null` when nothing is selected.
-10. **Logging is essentially absent** — two `logger.warning` calls in one module, no
+   **Now:** the feed renders the outcome it receives.
+10. ~~**Logging is essentially absent**~~ **FIXED by W2-C2, 2026-08-16.** *Original
+    finding, preserved:* two `logger.warning` calls in one module, no
     logging configuration anywhere, and zero mentions of logging in `docs/deploy.md` or
-    `README.md`.
-11. **`promptfoo` and `DeepEval` are named in SPEC and DESIGN and do nothing.**
-    `promptfooconfig.yaml` is still the T-1 scaffold with a placeholder prompt and
-    `tests: []`; promptfoo is not installed; DeepEval is a dependency with zero imports.
+    `README.md`. **Now:** `backend/src/logging_setup.py` configures JSON-lines logging
+    for both long-running processes (`backend/src/main.py`, `backend/src/worker/main.py`),
+    gated off inside pytest so it cannot fight `caplog`.
+11. ~~**`promptfoo` and `DeepEval` are named in SPEC and DESIGN and do nothing.**~~
+    **FIXED by W1-E (ADR-013), 2026-08-16, commit `abcfd57`.** *Original finding,
+    preserved:* `promptfooconfig.yaml` is still the T-1 scaffold with a placeholder
+    prompt and `tests: []`; promptfoo is not installed; DeepEval is a dependency with
+    zero imports. **Now:** `promptfooconfig.yaml` drives the shipped `agent.nodes.classify`
+    through `evals/promptfoo/provider.py`, and DeepEval is gone from `pyproject.toml`.
 12. **`README.md` is the worst-calibrated file in the repo** and the first thing a grader
     reads. It claims a quickstart "verified from a clean clone" containing a command that
     fails, says "No droplet exists" (it returns 200), says the Zendesk credentials are
@@ -265,11 +324,15 @@ These are load-bearing and should not be disturbed:
     Anthropic (`ANTHROPIC_MODEL = "claude-opus-5"`, `backend/src/agent/config.py:23`).
     **Still stale:** `docs/tickets.json` T-21 names `OPENAI_API_KEY`, and `.env` still
     carries an `OPENAI_API_KEY` entry — both historical, neither read by the app.
-14. **`.env` is loaded by nothing.** No `load_dotenv()` anywhere in the app or scripts,
+14. ~~**`.env` is loaded by nothing.**~~ **FIXED by W1-F4, 2026-08-16, commit `972c13b`.**
+    *Original finding, preserved:* No `load_dotenv()` anywhere in the app or scripts,
     so the documented run commands see zero Zendesk credentials even though `.env` is
     fully populated — `live_smoke.py` prints "credentials absent" and exits 0, and the
     webhook 500s. The deploy path works only because `docs/deploy.md:139` instructs
-    `set -a; source .env; set +a` first.
+    `set -a; source .env; set +a` first. **Now:** `backend/src/main.py` and
+    `backend/src/worker/main.py` both call `load_dotenv(..., override=False)` at startup.
+    `docs/deploy.md`'s `set -a; source .env; set +a` is still required for
+    `docker compose` itself, which resolves `${VAR}` before any Python runs.
 
 ---
 

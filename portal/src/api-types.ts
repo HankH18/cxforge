@@ -50,7 +50,8 @@ export interface GateSetting {
 
 export interface MetricsResponse {
   human_avoidance_rate: number
-  latency_p50_s: number
-  latency_p95_s: number
+  latency_p50_s: number | null
+  latency_p95_s: number | null
+  sample_count: number
   escalations_by_reason: Record<string, number>
 }

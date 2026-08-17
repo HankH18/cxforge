@@ -14,6 +14,9 @@ because `docs/deploy.md:151` tells the operator to type
 
 ("In the app or the scripts" is the precise claim, and it is STATE's. One
 caller did already exist — ``evals/report.py:411`` — outside both.)
+
+W2-C2 added the logging configuration next to it. `logging_setup` explains
+why it is JSON lines and why it reads no environment variable.
 """
 
 from __future__ import annotations
@@ -23,6 +26,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
+
+from logging_setup import configure_logging
 
 # backend/src/main.py -> backend/src -> backend -> repo root. Derived from
 # this file's own location rather than from the working directory, so
@@ -71,6 +76,12 @@ def _running_under_pytest() -> bool:
 
 if not _running_under_pytest():  # pragma: no cover - proven by subprocess test
     load_repo_dotenv()
+    # W2-C2. Gated for the same reason the load above is: `backend/tests/
+    # portal/**` imports this module to get `app`, and reconfiguring the
+    # root logger inside a pytest process would fight `caplog` and spray
+    # JSON through the suite's output. Proven to fire outside pytest by
+    # `backend/tests/ingress/test_logging.py`'s subprocess.
+    configure_logging(service="api")
 
 # Imported after the load so that any module resolving configuration at import
 # time sees a populated environment.

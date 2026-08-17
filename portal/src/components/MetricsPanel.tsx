@@ -33,6 +33,7 @@ export default function MetricsPanel({ metrics, error }: MetricsPanelProps) {
   }
 
   const reasonEntries = Object.entries(metrics.escalations_by_reason)
+  const runs = metrics.sample_count
 
   return (
     <section className="panel metrics" aria-label="Metrics">
@@ -53,7 +54,29 @@ export default function MetricsPanel({ metrics, error }: MetricsPanelProps) {
           <dt className="metrics__label">Latency p95</dt>
           <dd className="metrics__value">{formatSeconds(metrics.latency_p95_s)}</dd>
         </div>
+        <div className="metrics__stat">
+          <dt className="metrics__label">Runs measured</dt>
+          <dd className="metrics__value metrics__sample-count">{runs}</dd>
+        </div>
       </dl>
+
+      {/* W2-C3. The percentiles above are `null` until a run has actually
+          been measured, and `formatSeconds` renders that as an em dash. An
+          em dash on its own invites "the panel is broken"; this says which
+          it is. The endpoint used to send 0.0 here, which read as a PASS
+          against "p95 < 5 min" on a stack that had never run anything. */}
+      {runs === 0 ? (
+        <p className="metrics__empty placeholder">
+          No autonomous reply has been sent yet, so there is no latency to report. These read
+          as &ldquo;&mdash;&rdquo; rather than 0 seconds &mdash; an unmeasured p95 is not a fast
+          one.
+        </p>
+      ) : (
+        <p className="note">
+          p50 and p95 are computed over the {runs} autonomously sent {runs === 1 ? 'reply' : 'replies'},
+          from webhook receipt to public reply. Gated and escalated runs are excluded.
+        </p>
+      )}
 
       <h3 className="metrics__subtitle">Escalations by reason</h3>
       {reasonEntries.length === 0 ? (
