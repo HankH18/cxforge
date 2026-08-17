@@ -282,6 +282,53 @@ re-runnable without exhausting the trial, and rate limits must be respected.
 
 ---
 
+## ADR-022 — A tunnel token is a tunnel-wide credential, so the deploy wrapper asserts machine identity before starting a connector
+
+**Adopted by the build session 2026-08-17. NOT ratified by the owner** — stated plainly because
+every other entry in this file is an owner call and this one is not. The only owner instruction on
+the subject was *"Don't worry about CloudFlare. I already took care of that."*, which was about the
+tunnel's configuration, not about this guard. It is recorded here anyway because it changes how the
+deploy wrapper behaves for every future operator, and the one genuinely open sub-question is put in
+front of the owner at `docs/BUILD-PLAN.md §10.7(i)`. Ratify or reverse it there.
+
+**Decision.** `deploy/compose.sh` refuses to start `cloudflared` from a machine that does not hold
+the address this repo deploys to — whether the service is named outright or pulled in by an `up`
+with no service list, which starts everything in the file. "Holds the address" means `DEPLOY_HOST`,
+else the literal `161.35.2.250`, required to be a **non-private IPv4 configured on a local
+interface** (a marker file `/etc/cxforge-droplet` is accepted as a durable second way to say yes).
+The escape hatch is `CXFORGE_ALLOW_SECOND_CONNECTOR=i-know-this-hijacks-the-live-tunnel`, captured
+from the invoking shell **before** `.env` is sourced, so a committed `.env` line cannot silently
+disable the guard forever on one machine. Separately, `scripts/verify_deploy.sh` LOCAL mode now
+names `db redis backend worker portal` explicitly instead of a bare `up`, so the script whose only
+job is to *verify* a deploy can never start a second connector.
+
+**Why it needed a decision.** `CLOUDFLARE_TUNNEL_TOKEN` identifies the **tunnel, not the host**, so
+any machine holding it can register as a connector for the same tunnel and win a share of the
+edge's routing. On 2026-08-17 the intended-for-the-droplet command was typed on a Mac; the laptop's
+connector had no origin behind it and the public site went to **10/10 × 502**. Two properties make
+this worse than an ordinary mistake, and are why a written rule was judged insufficient: `docker
+stop` on the laptop did **not** restore service (the edge held the stale route — recovery was a
+force-recreate on the droplet), and `/ready` plus the Cloudflare dashboard stayed green throughout.
+Measured detail: `docs/STATE.md §3.4`.
+
+**What this commits us to.** A developer machine can no longer bring up the full stack *including*
+the tunnel without typing the override — that is the intended trade, and it is a real cost, not a
+free win: local work names its services or does without a connector. Machine identity is an
+**address**, so a droplet rebuilt behind a new IP starts refusing until `DEPLOY_HOST` or the marker
+file says otherwise; that is the correct direction to fail. And the guard is not a sandbox — a bare
+`docker compose -f deploy/docker-compose.yml up` bypasses the wrapper entirely, so the standing
+rules in `docs/OWNER-ACTIONS.md` remain what covers that path.
+
+**Rejected.** Per-connector tokens, one per host (the honest fix — Cloudflare mints them per
+connector — but it needs dashboard work, a second secret in `.env`, and it does not stop the
+mistake, since a laptop given its own token still registers on the same tunnel). No guard, relying
+on the standing rules (the rules already existed in `docs/OWNER-ACTIONS.md` when this happened; the
+outage is the evidence about what a written rule is worth at the point of use). A guard with no
+override at all (see §10.7(i) — deliberately left as the owner's question rather than settled
+here).
+
+---
+
 ## ADR-021 — `CLASSIFY_SYSTEM` gets one sentence about prior tickets, measured before and after
 
 **Decided 2026-08-16.** Owner call, and it needs to be read against **ADR-020 decision 3**,

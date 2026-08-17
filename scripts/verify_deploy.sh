@@ -88,13 +88,19 @@
 # a skip that still exits 0 would make this script lie about what it
 # verified.
 #
-# Local mode (DEPLOY_HOST empty): brings the deploy stack up on this
-# machine with its own docker-compose project (`othram-deploy`, pinned in
-# deploy/docker-compose.yml), asserts against it, then tears it down.
-# Never touches the dev stack's `othram-db` container/volume — see
+# Local mode (DEPLOY_HOST empty, --local passed): brings the deploy stack up
+# on this machine with its own docker-compose project (`othram-deploy`,
+# pinned in deploy/docker-compose.yml), asserts against it, then tears it
+# down. Never touches the dev stack's `othram-db` container/volume — see
 # deploy/docker-compose.yml's header comment for exactly how the two stay
 # isolated (separate project name, separate container names, separate
 # named volume, `db` has no published host port at all).
+#
+# It also never starts `cloudflared`. That is not a preference; see
+# LOCAL_SERVICES below for the measured reason, and note what it means for
+# the public path: a --local run cannot say anything about ${PUBLIC_BASE_URL},
+# and says so on its own PUBLIC PATH and SCOPE lines rather than leaving the
+# omission to be noticed.
 #
 # Remote mode (DEPLOY_HOST set): runs the identical HTTP assertions
 # against that host over the network. Does not build, start, or stop
@@ -125,6 +131,38 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$REPO_ROOT/deploy/docker-compose.yml"
 CLEANUP_DONE=0
+
+# The services LOCAL mode starts — every service in deploy/docker-compose.yml
+# EXCEPT `cloudflared`. The list is explicit, and a bare `up` (no service list)
+# is forbidden here, because compose starts every service in the file when no
+# service is named. That is how a script whose only job is to *verify* a deploy
+# could take the public site down (2026-08-17; deploy/compose.sh's TRAP 2,
+# deploy/cloudflared/README.md, docs/BUILD-PLAN.md §10.6g):
+#
+#   * CLOUDFLARE_TUNNEL_TOKEN identifies the TUNNEL, not the host. A
+#     cloudflared started here registers as a SECOND CONNECTOR for the live
+#     tunnel and Cloudflare's edge can route real public traffic to it — into
+#     this machine's throwaway stack, with this machine's throwaway database,
+#     for as long as the run lasts.
+#   * Worse at the end than at the start: a teardown that REMOVES that
+#     connector is what leaves the edge holding stale routes. On 2026-08-17
+#     removing a laptop connector put the public site at 10/10 502 —
+#     `docker stop` did NOT restore service, and recovery was a force-recreate
+#     ON THE DROPLET. (The trap below is now scoped to LOCAL_SERVICES, so it
+#     would not remove a cloudflared it did not start; that is a second line
+#     of defence, not the fix. The fix is not starting one.)
+#   * Neither cloudflared's /ready nor the Cloudflare dashboard shows any of
+#     this; both stayed green throughout.
+#
+# Nothing is lost by leaving it out: a tunnel connector cannot help verify a
+# stack on this machine, and the four assertions below run against
+# 127.0.0.1:$PORTAL_PORT, which does not go through Cloudflare at all.
+#
+# Deliberately a literal list rather than "all services minus cloudflared"
+# parsed at runtime: a reader has to be able to see that cloudflared is absent.
+# Drift is caught by backend/tests/deploy/test_local_mode_opt_in.py, which
+# compares this line against deploy/docker-compose.yml's own service list.
+LOCAL_SERVICES=(db redis backend worker portal)
 
 # --- CLI flags -----------------------------------------------------------
 # --local: the explicit opt-in required to run the LOCAL
@@ -467,19 +505,31 @@ run_public_check() {
   fi
 
   PUBLIC_SCOPE="CHECKED and FAILED — ${base} (${label}): ${summary}"
-  fail "the PUBLIC path is not serving reliably: ${summary}. That is the only route Zendesk has, and a partial rate is the measured signature of Cloudflare edge connections routed to a dead tunnel connector — docs/BUILD-PLAN.md §10.6g: 502 on ~64% of real deliveries while the droplet's own port answered every request. Recover with 'docker compose -f deploy/docker-compose.yml up -d --force-recreate cloudflared' ON THE DROPLET and re-run this stage; do NOT 'restart' cloudflared (§10.7d) and do not conclude anything from its /ready endpoint or the Cloudflare dashboard — both reported healthy throughout the outage."
+  fail "the PUBLIC path is not serving reliably: ${summary}. That is the only route Zendesk has, and a partial rate is the measured signature of Cloudflare edge connections routed to a dead tunnel connector — docs/BUILD-PLAN.md §10.6g: 502 on ~64% of real deliveries while the droplet's own port answered every request. Recover with 'deploy/compose.sh up -d --force-recreate cloudflared' ON THE DROPLET and re-run this stage — use the wrapper, not raw 'docker compose': it sources .env, without which CLOUDFLARE_TUNNEL_TOKEN interpolates to the empty string and the recreated connector cannot register at all, and it is the only form that carries the guard against doing this on a machine that is not the droplet; do NOT 'restart' cloudflared (§10.7d) and do not conclude anything from its /ready endpoint or the Cloudflare dashboard — both reported healthy throughout the outage."
 }
 
 # public_stage MODE  (MODE is "remote" or "local")
 public_stage() {
   local mode="$1"
 
+  # In LOCAL mode the public path is not merely unchecked by default — it is
+  # unreachable from what this run started. LOCAL mode deliberately brings up
+  # the application services WITHOUT cloudflared (see LOCAL_SERVICES), so
+  # there is no tunnel in this stack for that hostname to terminate at. Said
+  # on every LOCAL SCOPE: line, green or skipped, because the failure this
+  # whole block exists to prevent is a reader finishing a pass believing a
+  # path was exercised when it was not.
+  local tunnel_note=""
+  if [ "$mode" = "local" ]; then
+    tunnel_note=" NOTE: this LOCAL run started only ${LOCAL_SERVICES[*]} — it did NOT start cloudflared, so it neither exercised nor disturbed the tunnel that serves the public hostname."
+  fi
+
   if [ -z "$PUBLIC_BASE_URL" ]; then
     # --public already hard-failed above, so reaching here means the caller
     # did not require it. Skip — loudly, in the run output AND again on the
     # SCOPE: line, because the whole failure mode being fixed is a pass that
     # reads as more than it is.
-    PUBLIC_SCOPE="NOT CHECKED — PUBLIC_BASE_URL is empty, so nothing in this run touched the hostname Zendesk delivers to. The assertions above targeted ${ASSERTED_BASE:-the target above}, which bypasses Cloudflare and cannot fail when the public path is down. Set PUBLIC_BASE_URL in .env, or pass --public to make this a hard failure."
+    PUBLIC_SCOPE="NOT CHECKED — PUBLIC_BASE_URL is empty, so nothing in this run touched the hostname Zendesk delivers to. The assertions above targeted ${ASSERTED_BASE:-the target above}, which bypasses Cloudflare and cannot fail when the public path is down. Set PUBLIC_BASE_URL in .env, or pass --public to make this a hard failure.${tunnel_note}"
     echo "[verify_deploy] PUBLIC PATH: NOT CHECKED — PUBLIC_BASE_URL is empty."
     echo "[verify_deploy]   Zendesk reaches this app ONLY through that hostname. Everything above went"
     echo "[verify_deploy]   to ${ASSERTED_BASE:-the target above}, which bypasses Cloudflare entirely, so no"
@@ -490,12 +540,16 @@ public_stage() {
   fi
 
   if [ "$mode" = "local" ] && [ "$PUBLIC_REQUIRED_OPT_IN" -eq 0 ]; then
-    PUBLIC_SCOPE="NOT CHECKED — LOCAL mode. PUBLIC_BASE_URL ($PUBLIC_BASE_URL) fronts the DROPLET, not the stack on this machine, so checking it here would report on a deployment this run did not touch. Pass --public to check it anyway."
+    PUBLIC_SCOPE="NOT CHECKED — LOCAL mode. PUBLIC_BASE_URL ($PUBLIC_BASE_URL) fronts the DROPLET, not the stack on this machine, so checking it here would report on a deployment this run did not touch. Pass --public to check it anyway.${tunnel_note}"
     echo "[verify_deploy] PUBLIC PATH: NOT CHECKED — LOCAL mode; $PUBLIC_BASE_URL fronts the droplet, not this machine's stack. Pass --public to check it anyway."
+    echo "[verify_deploy]   This run did NOT start cloudflared (only ${LOCAL_SERVICES[*]}), so it holds no tunnel for that hostname — by design; see LOCAL_SERVICES in this script."
     return 0
   fi
 
   run_public_check
+  # Only reached when the stage passed: run_public_check `fail`s (exits) on a
+  # partial rate, so there is no path where this appends to a FAILED scope.
+  PUBLIC_SCOPE="${PUBLIC_SCOPE}${tunnel_note}"
 }
 
 # --- local mode ----------------------------------------------------------
@@ -514,19 +568,76 @@ verify_local() {
   # with "unbound variable" and skip `docker compose down` entirely,
   # leaving the stack running. Caught by actually running this script
   # rather than just reading it.
+  #
+  # THE TEARDOWN, AND WHY IT IS EXACTLY THIS SHAPE.
+  #
+  # It used to be `down -v --remove-orphans` with NO service list. Every part
+  # of that was a hazard on the one machine where compose project
+  # `othram-deploy` is PRODUCTION — the droplet — which this line reaches
+  # whenever `.env` leaves DEPLOY_HOST empty (the `.env.example` default) and
+  # somebody passes `--local`. That is not exotic: `--local` exists to be typed
+  # by a human poking at a box.
+  #
+  #   * `-v` is GONE. It removes named volumes, i.e. `othram-deploy-pgdata` —
+  #     the production Postgres, with `runs`, `drafts`, `tickets_seen`, the
+  #     seeded `cases` and the kb_chunks. Measured 2026-08-17 against a
+  #     throwaway compose project on this machine: `down -v <service>` DOES
+  #     scope volume removal to the named service's volumes (a two-service
+  #     project lost only the named one's volume). It does not help here, and
+  #     that is the whole point — `db` is in LOCAL_SERVICES and
+  #     `deploy_pgdata` is `db`'s volume, so a *correctly scoped* `-v` deletes
+  #     the production database just as thoroughly as a bare one. So `-v` is
+  #     dropped outright rather than scoped. A teardown that leaves volumes on
+  #     disk is a wart; one that deletes a production database is
+  #     unrecoverable, and no amount of scoping turns the second into the
+  #     first.
+  #   * `--remove-orphans` is GONE. It acts on the whole PROJECT rather than on
+  #     the services named: it removes every `othram-deploy` container whose
+  #     service is absent from THIS checkout's compose file. LOCAL mode starts
+  #     only services that are in this file, so it cannot create an orphan —
+  #     the flag could therefore only ever remove a container this run did not
+  #     create, which on a droplet whose checkout has drifted (a service
+  #     renamed, added, or removed since it was deployed) is a production
+  #     container.
+  #   * The service list is `${LOCAL_SERVICES[@]}` — the same array the `up`
+  #     below uses, so the two cannot drift, and the teardown can no more touch
+  #     `cloudflared` than the start can. Measured on the installed Compose
+  #     (v5.1.3, Docker 29.4.1): `docker compose down [OPTIONS] [SERVICES]`
+  #     accepts and VALIDATES a service list — a name that is not a service
+  #     exits 1 with `no such service: <name>` — so no `stop` + `rm` fallback
+  #     is needed here.
+  #
+  # What this deliberately leaves behind: the `othram-deploy` named volumes.
+  # The machine is still clean in the sense the trap exists for — no container
+  # from this run is left running and no host port is left bound — and the
+  # leftover disk is stated out loud below rather than left to be discovered.
+  #
+  # What this does NOT fix, recorded so it is not mistaken for fixed: a
+  # `--local` run ON THE DROPLET still stops production's containers, because
+  # `up`/`down` scoped to LOCAL_SERVICES still name the containers production
+  # is made of. That is an outage of seconds, ended by an `up` (BUILD-PLAN
+  # §10.7e), not data loss. Making `--local` refuse to run on the droplet at
+  # all needs the host-identity check that already exists in
+  # `deploy/compose.sh`, and a second copy of a 60-line guard is its own
+  # defect — see that file's `this_machine_is_the_droplet`.
   cleanup() {
     if [ "$CLEANUP_DONE" -eq 0 ]; then
       CLEANUP_DONE=1
-      echo "[verify_deploy] tearing down the local deploy stack (othram-deploy project) ..."
-      docker compose -f "$COMPOSE_FILE" down -v --remove-orphans >&2 || true
+      echo "[verify_deploy] tearing down the local deploy stack: ${LOCAL_SERVICES[*]} (othram-deploy project) ..."
+      docker compose -f "$COMPOSE_FILE" down "${LOCAL_SERVICES[@]}" >&2 || true
+      echo "[verify_deploy]   containers removed. The othram-deploy NAMED VOLUMES were deliberately kept: this teardown never passes -v, because on the droplet that project is production and othram-deploy-pgdata is its Postgres — losing it is unrecoverable, while leftover disk is not. If this machine is not the droplet and you want the space back, list them with 'docker volume ls | grep othram-deploy' and remove the ones you recognise by hand." >&2
     fi
   }
   trap cleanup EXIT
 
   echo "[verify_deploy] building and starting deploy/docker-compose.yml (project: othram-deploy) ..."
+  echo "[verify_deploy]   services: ${LOCAL_SERVICES[*]} — NOT cloudflared. The tunnel token names the"
+  echo "[verify_deploy]   TUNNEL, not the host, so starting it here would put a second connector on the"
+  echo "[verify_deploy]   LIVE tunnel, and removing that connector again leaves the edge holding stale"
+  echo "[verify_deploy]   routes (2026-08-17: 10/10 public 502, and 'docker stop' did not fix it)."
   BACKEND_PORT="$BACKEND_PORT" PORTAL_PORT="$PORTAL_PORT" \
-    docker compose -f "$COMPOSE_FILE" up -d --build --wait --wait-timeout 300 \
-    || fail "docker compose up --wait did not reach a healthy state within the timeout; see 'docker compose -f $COMPOSE_FILE logs' for details"
+    docker compose -f "$COMPOSE_FILE" up -d --build --wait --wait-timeout 300 "${LOCAL_SERVICES[@]}" \
+    || fail "docker compose up --wait ${LOCAL_SERVICES[*]} did not reach a healthy state within the timeout; see 'docker compose -f $COMPOSE_FILE logs' for details"
 
   echo "[verify_deploy] every service reports healthy."
 
@@ -535,6 +646,7 @@ verify_local() {
 
   echo "[verify_deploy] all assertions passed against the LOCAL stack."
   echo "[verify_deploy] NOTE: this verified the stack running on THIS machine, not a deployed droplet. DEPLOY_HOST is empty in .env — remote deployment has not been verified."
+  echo "[verify_deploy] NOTE: cloudflared was never started, so nothing here says anything about the public path — see the PUBLIC PATH and SCOPE lines."
 }
 
 # --- remote mode -----------------------------------------------------------

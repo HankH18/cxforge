@@ -248,6 +248,55 @@ the clean recreate stopped them. Full record: `docs/BUILD-PLAN.md §10.6g`.
 
 ---
 
+## 3.4 The public path went fully down and is back up — a stray second connector, 2026-08-17
+
+**Recorded from the session log of 2026-08-17**, which is the session that caused and fixed this.
+The numbers below were measured that night with `curl` from outside the droplet; this entry records
+them and does not re-measure them.
+
+**What happened.** `deploy/compose.sh up -d --force-recreate cloudflared` was intended for the
+droplet (`161.35.2.250`) and run on the owner's **Mac**. `CLOUDFLARE_TUNNEL_TOKEN` identifies the
+**tunnel, not the host**, so the laptop's `cloudflared` registered as a second connector for the
+live tunnel, the edge began load-balancing to it, and it had no origin behind it.
+
+| Step | Measured |
+|---|---|
+| public path, laptop connector registered | **10/10 × 502** |
+| `docker stop` on the laptop's `cloudflared` | **still down** — the edge held stale routes to the dead connector |
+| `up -d --force-recreate cloudflared` **on the droplet**, minting connector `206406c5…` | **15/15 × 200** |
+| later independent confirmation, same night | `/health` **25/25 × 200**; `/` **200** with the expected title; `/api/feed` **200** with a token and **401** without; unsigned `POST /webhooks/zendesk` → **401** |
+
+The 401s carry as much weight as the 200s: ingress verifies the HMAC before it touches the body, the
+DB or the queue, so a **401 is positive proof the request reached the application**, where
+502/530/000 prove it did not (`docs/BUILD-PLAN.md §10.7e`).
+
+**Recovery required the force-recreate, not the stop.** Removing the stray connector did not clear
+the edge's routes; only registering a *new* connector on the droplet did. That asymmetry is the
+operationally important half of this incident.
+
+**This is the second time the same false green fooled this project.** Throughout, the droplet was
+perfect on every cheap instrument — six healthy services, 200 on its own port `8080`, its connector
+reporting `readyConnections: 4` — which is exactly §3.3 again, and for exactly the reason §3.3
+gives: `/ready` counts a connector's own connections to the edge, not whether the edge routes to
+*you*. §3.3 was written the same day this happened, so being written down demonstrably was not
+enough; the guard below prints the mechanism at the point of use instead.
+
+**Gap — a Zendesk-*originated* trigger has not been re-measured since the recovery.** The last
+measurement taken from Zendesk's own side was **2/2 × 502**, and it was taken *before* the
+force-recreate; everything measured since has been `curl` against the edge, which is not the same
+path — so the trigger path is **not** known to be working and must not be described as such.
+
+**Guarded at the entry point; both changes were uncommitted in the working tree when this was
+written.** `deploy/compose.sh` refuses to start `cloudflared`, or a bare `up`, from a machine that
+does not hold the address this repo deploys to, and `scripts/verify_deploy.sh` LOCAL mode names
+`db redis backend worker portal` explicitly so a verification run can never start a connector.
+Rationale, alternatives and the trade: `docs/DECISIONS.md` **ADR-022** — adopted by the build
+session, **not yet ratified by the owner**. The one open question (whether the override should exist
+at all) is `docs/BUILD-PLAN.md` **§10.7(i)**; the connector-churn link back to the original ~64%
+outage is **§10.6g**.
+
+---
+
 ## 4. Four defects not previously recorded anywhere
 
 ### 4.1 R8/R13 latency measures the wrong interval

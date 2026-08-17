@@ -768,6 +768,26 @@ so one colo's table pointed at the dead connector while others had converged. Se
 needs Cloudflare's per-colo connection table, and there is **no Cloudflare API token** on any
 machine here (`CLOUDFLARE_TUNNEL_TOKEN` is not one), so it stays an inference.
 
+*A stray **second connector** is now a candidate explanation for the ~64%, and the mechanism
+above was reproduced deliberately-by-accident on 2026-08-17.* `deploy/compose.sh up -d
+--force-recreate cloudflared` was run on a **Mac** instead of on the droplet; because
+`CLOUDFLARE_TUNNEL_TOKEN` identifies the tunnel and not the host, the laptop registered as a
+second connector for the live tunnel, the edge routed to it, and — the laptop stack having no
+`portal` container to reach — the public site returned **10/10 × 502**. `docker stop` did not
+restore service (the edge held the stale route); `up -d --force-recreate cloudflared` **on the
+droplet** minted connector `206406c5-…` and returned **15/15 × 200**. Throughout, the droplet
+was perfect: six services healthy, 200 on its own port `8080`, `/ready` reporting
+`readyConnections: 4` on live connector `f6185467-…` — the same false green as above. A stray
+connector left running from an earlier local `up` would produce exactly the recorded shape,
+including the per-colo asymmetry (one colo's table pointing at a connector that cannot serve
+while others reach the droplet's), which makes it the **leading hypothesis** for the original
+~64%. It is **not proof**: nobody enumerated the tunnel's connectors while that outage was
+live, and there is still no Cloudflare API token with which to have done it — so this joins the
+inference above rather than replacing it. Guarded at the entry point since:
+`deploy/compose.sh` refuses to start `cloudflared` from a machine that does not hold the
+address this repo deploys to (`backend/tests/deploy/test_cloudflared_guard.py`,
+`deploy/cloudflared/README.md`, OA-3's standing rules).
+
 *No unit test can bind this*, and that is a real gap rather than an omission: it reproduces
 only against a live tunnel with a real connector history at Cloudflare's edge. Nothing that
 parses YAML or starts a container can produce the state. What **is** pinned mechanically is
@@ -972,6 +992,49 @@ actually be stopped, and it would also let `job_timeout` come down from 900s.
 **Owner's call, not taken here** — a timeout and a retry cap change runtime behaviour on every
 real call (a slow-but-succeeding run becomes a failed one), which is a decision, not a fix.
 `llm.py` is deliberately untouched.
+
+**(i) Should the `CXFORGE_ALLOW_SECOND_CONNECTOR` override exist at all?** `deploy/compose.sh` now
+refuses to start `cloudflared` from a machine that does not hold the address this repo deploys to
+(**ADR-022**, after the 2026-08-17 outage in `docs/STATE.md §3.4`), and the refusal can be overridden
+with `CXFORGE_ALLOW_SECOND_CONNECTOR=i-know-this-hijacks-the-live-tunnel` typed in the invoking
+shell. Against keeping it: the only thing the override does is take the live public site down —
+there is no legitimate local use for a second connector on this tunnel — so it is a footgun whose
+safety catch is long but whose barrel still points at production, and a long ceremony reads as
+permission once someone is already frustrated. For keeping it: a guard with no override is one a
+future operator patches out of the script under pressure, at 2am, and the patched version is
+permanent, unreviewed and silent, where the override is one-shot, prints the whole mechanism before
+proceeding, and leaves the guard intact for the next invocation. **Not decided.** The guard ships
+with the override as built; removing it is one deletion in `deploy/compose.sh` plus its tests.
+
+**(j) `scripts/verify_deploy.sh --local` still cannot tell whether it is running on the droplet, so
+it is outage-shaped there.** The `up` is now scoped to `db redis backend worker portal` and the
+teardown no longer passes `-v` or `--remove-orphans`, so **the data-loss path is closed**. What is
+not closed is host identity: on the droplet those same five containers **are** production, so
+`--local` replaces them with locally-built images and the teardown then removes them, leaving
+production down until somebody runs `up`. Seconds, not data — but an outage triggered by a command
+whose name says "local", and reachable whenever `.env` leaves `DEPLOY_HOST` empty (the
+`.env.example` default) and a human pokes at the box with `--local`.
+
+*Not a re-litigation of **(e)**.* (e) settled what the deploy gate can **see** — it now samples the
+public path Zendesk actually uses; (j) is about what the gate can **do** to the host it is run on,
+which no part of (e) addressed.
+
+The knowledge that would close it exists in exactly one place:
+`deploy/compose.sh:this_machine_is_the_droplet` (ADR-022). Three options, and the cost is real in
+each direction:
+
+- **Factor it into a sourced `deploy/lib/host_identity.sh`** so there is one implementation. The
+  cost is the test fixture: `backend/tests/deploy/conftest.py:fake_repo` copies **only**
+  `scripts/verify_deploy.sh` into a tmp directory and relies on the script deriving `REPO_ROOT` from
+  `${BASH_SOURCE[0]}`. A sourced library has to be copied too, which is a fixture change under every
+  test that runs the script — five of the package's twelve modules use `fake_repo`, and the package
+  collects ~157 tests (the sibling track's count; 106 test functions before parametrisation).
+- **Duplicate the ~60 lines into `verify_deploy.sh`.** No fixture change, and two copies of a
+  security-shaped check that can drift — the next correction lands in one of them.
+- **Accept the seconds-long outage** as the documented cost of running `--local` on the droplet,
+  and leave it stated in the script and here rather than enforced.
+
+**Not decided.**
 
 ---
 

@@ -163,15 +163,56 @@ tunnel was down.
 ## Bringing it up
 
 ```bash
-# On the droplet, from the repo root. The source step is not optional:
-# without it every ${VAR} in the compose file falls back to its default and
-# the stack deploys with no credentials and a `dev-portal-token`.
-set -a; source .env; set +a
-docker compose -f deploy/docker-compose.yml up -d --build --wait
-
-# or, equivalently and without the chance to forget the source step:
+# On the droplet, from the repo root. THE SUPPORTED PATH: the wrapper sources
+# .env for you and carries the guard described below.
 deploy/compose.sh up -d --build --wait
 ```
+
+The raw form starts the same containers but is **not equivalent** — it has **no guard**,
+and it is the form that gets copied onto a laptop, which is how the outage below happened.
+The source step is also not optional: without it every `${VAR}` in the compose file falls
+back to its default and the stack deploys with no credentials and a `dev-portal-token`.
+
+```bash
+set -a; source .env; set +a
+docker compose -f deploy/docker-compose.yml up -d --build --wait   # no guard
+```
+
+### On the droplet, and nowhere else — the guard (2026-08-17 outage)
+
+**The failure.** `CLOUDFLARE_TUNNEL_TOKEN` identifies the **tunnel, not the host**, so a
+`cloudflared` started anywhere with it registers as a **second connector** for this
+tunnel. On 2026-08-17 `deploy/compose.sh up -d --force-recreate cloudflared` was typed on
+a Mac instead of on the droplet: the edge routed to the new connector, the laptop stack had
+no `portal` container for it to reach (that invocation starts only cloudflared's
+`depends_on` set — `db`, `redis`, `backend`), and the public site went to **10/10 × 502**.
+`docker stop` on the laptop container did **not** restore service — the edge held the stale
+route. Recovery was `up -d --force-recreate cloudflared` **on the droplet**, which minted a
+fresh connector and returned **15/15 × 200**. Throughout, every cheap check on the droplet
+was green, `/ready` included. Same mechanism as §10.6g, this time caused deliberately by
+accident.
+
+**The guard.** `deploy/compose.sh` refuses to start `cloudflared` — named explicitly, or
+implied by an `up` with no service list — unless the machine holds the address this repo
+deploys to (`DEPLOY_HOST` from `.env`, or the droplet of record in `docs/deploy.md`), and
+prints the mechanism above when it refuses. It does not touch any other invocation:
+`deploy/compose.sh up -d --wait db redis backend worker portal` is unaffected, and so is
+the droplet's own `up -d --build --wait`. Bound by
+`backend/tests/deploy/test_cloudflared_guard.py`.
+
+**The override**, for the day someone legitimately wants a local tunnel. It must be typed
+in the invoking shell — a value in `.env` is ignored on purpose — and it still prints the
+warning:
+
+```bash
+CXFORGE_ALLOW_SECOND_CONNECTOR=i-know-this-hijacks-the-live-tunnel \
+  deploy/compose.sh up -d --force-recreate cloudflared
+```
+
+The guard is not a sandbox: a bare `docker compose -f deploy/docker-compose.yml up` and
+`scripts/verify_deploy.sh --local` (which brings the whole stack up, cloudflared included,
+when `DEPLOY_HOST` is empty) both go around it. The rule in `docs/OWNER-ACTIONS.md` OA-3 is
+what covers those.
 
 ## Reading the effect back — the only thing that counts as "it works"
 

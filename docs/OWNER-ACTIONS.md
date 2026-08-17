@@ -121,6 +121,46 @@ project **"jarvis"** under org **"hank-personal"**.
 >
 > A real Zendesk comment has since travelled this path end to end — `docs/STATE.md §1`.
 
+> ### ⚠️ Standing rules for operating this tunnel — added after a real 10-minute outage, 2026-08-17
+>
+> **1. Never run `deploy/compose.sh` with `cloudflared` from a laptop while the droplet is live.**
+> `CLOUDFLARE_TUNNEL_TOKEN` identifies the **tunnel, not the host**, so a `cloudflared` started
+> anywhere with it registers as a **second connector** for this tunnel and the edge will route real
+> traffic to it. On 2026-08-17 `deploy/compose.sh up -d --force-recreate cloudflared` was typed on
+> the Mac instead of on the droplet and the public site went to **10/10 × 502**: the laptop stack
+> had no `portal` container for the edge to reach, because that invocation starts only cloudflared's
+> `depends_on` set (`db`, `redis`, `backend`). The same applies to any `up` with **no service list**,
+> which starts every service including the tunnel.
+>
+> **2. Stopping the stray container does not fix it. Recovery is a force-recreate ON THE DROPLET.**
+> `docker stop` on the laptop's `cloudflared` left the site down — the edge held the stale route.
+> `deploy/compose.sh up -d --force-recreate cloudflared` **on the droplet** minted a new connector
+> and restored **15/15 × 200** immediately.
+>
+> **3. `/ready` is not evidence, and neither is the dashboard or the droplet's own port.** Through
+> that outage the droplet had six healthy services, answered 200 on port `8080`, and its connector
+> reported `readyConnections: 4`. The only evidence is a request from **outside**:
+> `curl -sS -o /dev/null -w '%{http_code}\n' "$PUBLIC_BASE_URL/health"`.
+>
+> **Guarded, not merely written down.** `deploy/compose.sh` now refuses to start `cloudflared` from
+> a machine that does not hold the address this repo deploys to, and prints the mechanism when it
+> refuses (`backend/tests/deploy/test_cloudflared_guard.py`). The deliberate override, which still
+> prints the warning and is ignored if it is set in `.env` rather than typed:
+> `CXFORGE_ALLOW_SECOND_CONNECTOR=i-know-this-hijacks-the-live-tunnel`.
+>
+> It is not a sandbox. A bare `docker compose -f deploy/docker-compose.yml up` bypasses the wrapper
+> entirely — rules 1–3 are what cover that. Use `deploy/compose.sh` instead; it is the only form
+> that carries the guard.
+>
+> **`scripts/verify_deploy.sh --local` no longer can.** It starts `db redis backend worker portal`
+> by name and never `cloudflared`, because a connector started anywhere with this token joins the
+> live tunnel (`docs/DECISIONS.md` ADR-022). Its teardown is scoped to those same five services and
+> passes no `-v`, so it cannot remove `othram-deploy-pgdata` either.
+>
+> **So a green `--local` is not evidence about the public path** — it holds no tunnel for
+> `cxforge.hankholcomb.com`, and says so on its own `SCOPE:` lines. Only a remote run checks that:
+> `scripts/verify_deploy.sh --deep --public`.
+
 > ### ⚠️ SUPERSEDED by the banner above (kept: it is the record of a correct diagnosis with the wrong fix)
 >
 > ### The tunnel is up. The ingress rule says `https://backend:8000` and the origin is plain HTTP.
@@ -547,6 +587,11 @@ echo "Public hostname: $(curl -s -o /dev/null -w '%{http_code}' --max-time 15 ht
 **If the Zendesk line prints 401, that is normal** — the access token lives 1800s. Run
 `uv run python scripts/zendesk_oauth.py --refresh`, re-source `.env` (both values rotate), and
 re-check. No browser needed unless the 30-day refresh token has lapsed (OA-4).
+
+**The `Public hostname` line is one sample, so a 200 there is not proof the public path is
+healthy.** The outage in `docs/STATE.md §3.3` 502'd ~5 in 7 real deliveries, which a single
+request survives nearly a third of the time. For a rate instead of a coin flip:
+`scripts/verify_deploy.sh --public`.
 
 > **Never use `${VAR:+SET}${VAR:-MISSING}`** for this. When `VAR` *is* set, `${VAR:-MISSING}`
 > expands to the **secret itself**, so the line prints `SET` followed by the full key. The

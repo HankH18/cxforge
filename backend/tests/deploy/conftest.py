@@ -192,6 +192,25 @@ set -euo pipefail
 exit 0
 """
 
+FAKE_DOCKER_JOURNAL = """#!/usr/bin/env bash
+# The no-op stub above, plus a record of WHAT was asked for: every
+# invocation appends its own argv, one line per call, to $DOCKER_JOURNAL.
+#
+# Why a journal and not the script's own output: verify_deploy.sh composes
+# its progress lines itself, so a `docker compose up` with the wrong (or no)
+# service list prints exactly the same thing as the right one. Asserting on
+# the argv is the only way to bind which services a run would really have
+# started — and starting `cloudflared` from a machine that is not the droplet
+# is the 2026-08-17 outage (deploy/compose.sh TRAP 2), so "it can never be in
+# that argv" is worth a test that cannot be fooled by a label.
+#
+# Starts nothing, ever: it writes a line and exits 0.
+set -euo pipefail
+: "${DOCKER_JOURNAL:?DOCKER_JOURNAL must be set by the test harness}"
+printf '%s\\n' "$*" >> "$DOCKER_JOURNAL"
+exit 0
+"""
+
 
 def _write_executable(path: Path, content: str) -> None:
     path.write_text(content)
@@ -238,6 +257,16 @@ def write_docker_canary(bin_dir: Path, sentinel: Path) -> None:
 
 def write_docker_noop(bin_dir: Path) -> None:
     _write_executable(bin_dir / "docker", FAKE_DOCKER_NOOP)
+
+
+def write_docker_journal(bin_dir: Path, journal: Path) -> None:
+    """Install the journaling no-op ``docker``. ``journal`` must also be
+    passed to the child as ``DOCKER_JOURNAL`` (via ``env_overrides``) — the
+    stub refuses to run without it, so a test that forgets fails loudly
+    instead of silently observing an empty journal."""
+    _write_executable(bin_dir / "docker", FAKE_DOCKER_JOURNAL)
+    if journal.exists():
+        journal.unlink()
 
 
 def run_verify_deploy(

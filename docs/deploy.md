@@ -226,12 +226,22 @@ deploy/compose.sh up -d --build --wait
 ```
 
 `deploy/compose.sh` is `docker compose -f deploy/docker-compose.yml` with the source step
-already built in. The long form still works and is exactly equivalent:
+already built in, and **it is the supported path.** The long form below still starts the
+same containers, but since 2026-08-17 it is **no longer equivalent** — it has no guard:
 
 ```bash
 set -a; source .env; set +a
 docker compose -f deploy/docker-compose.yml up -d --build --wait
 ```
+
+The wrapper refuses to start `cloudflared` — named, or implied by an `up` with no service
+list — from a machine that does not hold the address this repo deploys to. Raw
+`docker compose` does not, and this is precisely the form a human copies onto a laptop:
+`CLOUDFLARE_TUNNEL_TOKEN` names the **tunnel, not the host**, so a `cloudflared` started
+anywhere with it joins the live tunnel as a second connector. On 2026-08-17 that took the
+public site to 10/10 × 502 and `docker stop` did not restore it — recovery was a
+force-recreate on the droplet (`deploy/cloudflared/README.md`, BUILD-PLAN §10.6g/§10.7d).
+Use the wrapper.
 
 **Do not run the second command without the first line.** `docker compose` reads `.env`
 from the directory holding the compose file — here `deploy/`, which has no `.env`.
@@ -400,6 +410,17 @@ run the local-only check on purpose, pass `--local` explicitly:
 for droplet evidence — only a REMOTE-mode run, with `DEPLOY_HOST` set,
 satisfies T-11's droplet criterion, and only remote mode's `PASS` line
 says `(REMOTE: verified droplet at ...)`.
+
+**`--local` never starts `cloudflared`.** It brings up `db redis backend
+worker portal` by name, because a `docker compose up` with no service list
+starts *every* service in `deploy/docker-compose.yml` — and a `cloudflared`
+started off the droplet joins the **live** tunnel as a second connector,
+which is the 2026-08-17 outage (10/10 public 502; `docker stop` did not
+restore service). The tunnel cannot help verify a stack on this machine
+anyway: the assertions run against `127.0.0.1`, which does not go through
+Cloudflare. Consequently a `--local` run says nothing about the public path
+and states that on its own `PUBLIC PATH:` and `SCOPE:` lines. Bound by
+`backend/tests/deploy/test_local_mode_opt_in.py`.
 
 **This has been run against the real droplet at `161.35.2.250` and
 passed** — its `PASS` line reads `(REMOTE: verified droplet at
