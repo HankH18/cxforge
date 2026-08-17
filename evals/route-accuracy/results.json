@@ -1,0 +1,881 @@
+{
+  "cache_hit_count": 51,
+  "cache_path": "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/cxforge/evals/route-accuracy/cache.json",
+  "cost": {
+    "api_calls": 0,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "price_basis_usd_per_mtok": [
+      5.0,
+      25.0
+    ],
+    "usd": 0.0
+  },
+  "generated_at": "2026-08-17T01:12:00.125814+00:00",
+  "labeled_set": "evals/labeled_set.yaml",
+  "limit": null,
+  "live_call_count": 0,
+  "model": "claude-opus-5",
+  "results": [
+    {
+      "branch_route_ok": null,
+      "case_id": "MFG-2026-0158",
+      "confidence": 0.97,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "case_status",
+      "predicted_route": "case_status",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "cs-intake-01",
+      "topic": "Customer asks what stage their submitted case is currently in and how long that stage typically takes."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": "MFG-2025-0822",
+      "confidence": 0.98,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "case_status",
+      "predicted_route": "case_status",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "cs-extraction-01",
+      "topic": "Customer requests the current processing stage for their specific case MFG-2025-0822."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": "MFG-2025-0530",
+      "confidence": 0.97,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "case_status",
+      "predicted_route": "case_status",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "cs-sequencing-01",
+      "topic": "Customer is asking for the current processing stage of a specific case."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": "MFG-2025-0301",
+      "confidence": 0.78,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "case_status",
+      "predicted_route": "case_status",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "cs-genealogy-01",
+      "topic": "Customer asks what happens during the genealogy stage of their case and how much longer it will take"
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": "MFG-2025-0102",
+      "confidence": 0.97,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "case_status",
+      "predicted_route": "case_status",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "cs-complete-01",
+      "topic": "Customer asks whether case MFG-2025-0102 is complete and what status it currently shows."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": "MFG-2025-0734",
+      "confidence": 0.97,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "permission",
+      "predicted_route": "permission",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "perm-add-contact-01",
+      "topic": "Customer wants their spouse added as an authorized contact on their case so the spouse can call in for updates."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": "MFG-2025-0980",
+      "confidence": 0.97,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "permission",
+      "predicted_route": "permission",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "perm-add-contact-02",
+      "topic": "Customer wants a co-investigator added as an authorized contact on their case so that person can request status updates directly."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": "MFG-2025-0110",
+      "confidence": 0.9,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "permission",
+      "predicted_route": "permission",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "perm-resend-report-01",
+      "topic": "Customer requests that the previously delivered report for their case be resent to the email on file after losing the download link."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": "MFG-2025-0125",
+      "confidence": 0.96,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "permission",
+      "predicted_route": "permission",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "perm-extend-retention-01",
+      "topic": "Customer requests a six-month extension of the records-retention window for their case."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": "MFG-2025-0140",
+      "confidence": 0.96,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "permission",
+      "predicted_route": "permission",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "perm-extend-retention-02",
+      "topic": "Customer requests a 12-month extension of the records-retention window on their case."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.93,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "kb",
+      "predicted_route": "kb",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "kb-turnaround-01",
+      "topic": "Customer is asking for general typical durations of each stage from intake through final report."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.92,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "kb",
+      "predicted_route": "kb",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "kb-refund-eligibility-01",
+      "topic": "Customer asks whether the intake fee is refundable if they withdraw their case."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.92,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "kb",
+      "predicted_route": "kb",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "kb-billing-structure-01",
+      "topic": "Customer wants an explanation of the general billing structure and when charges occur at each stage."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.9,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "kb",
+      "predicted_route": "kb",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "kb-rush-eligibility-01",
+      "topic": "Asking whether a paid rush/expedite option exists for extraction or sequencing and what it entails."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.92,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "kb",
+      "predicted_route": "kb",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "kb-retention-period-01",
+      "topic": "Customer is asking about the lab's standard data and DNA profile retention period after report delivery."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.93,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "kb",
+      "predicted_route": "kb",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "kb-report-format-01",
+      "topic": "Customer asks what file format the final report is delivered in and whether a shorter summary version exists."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.92,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "kb",
+      "predicted_route": "kb",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "kb-genealogy-limits-01",
+      "topic": "Customer asks whether forensic genealogy research is guaranteed to produce a match or can return no results."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.78,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "kb",
+      "predicted_route": "kb",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "kb-reextraction-explain-01",
+      "topic": "Customer asks whether needing a second extraction attempt is normal and whether it indicates a problem with their sample."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.82,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "kb",
+      "predicted_route": "kb",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "kb-adversarial-invoice-mention-01",
+      "topic": "Customer asks whether the genealogy fee is billed as a separate later charge like the extraction fee."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.9,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "kb",
+      "predicted_route": "kb",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "kb-adversarial-human-mention-01",
+      "topic": "Customer asks whether human analysts review samples or if the process is fully automated."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.95,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "off_topic",
+      "predicted_route": "off_topic",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "off-weather-01",
+      "topic": "Customer is making small talk about the weather while waiting, with no support request."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.82,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "off_topic",
+      "predicted_route": "off_topic",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "off-unrelated-product-01",
+      "topic": "Customer asks whether the lab sells consumer at-home ancestry test kits as a gift."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.95,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "off_topic",
+      "predicted_route": "off_topic",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "off-greeting-01",
+      "topic": "Customer sent a casual greeting with no support request."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.9,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "off_topic",
+      "predicted_route": "off_topic",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "off-newsletter-01",
+      "topic": "Customer requests removal from the lab's marketing newsletter mailing list."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.96,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "off_topic",
+      "predicted_route": "off_topic",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "off-retail-unrelated-01",
+      "topic": "Customer asks whether the lab sells branded lab coats or merchandise to the public as a gift."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.72,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "billing"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "off_topic",
+      "required_branch_route": null,
+      "scored": false,
+      "ticket_id": "esc-billing-double-charge-01",
+      "topic": "Customer reports a duplicate charge for an extraction fee and wants a billing correction."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.72,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "billing"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "off_topic",
+      "required_branch_route": null,
+      "scored": false,
+      "ticket_id": "esc-billing-wrong-amount-01",
+      "topic": "Customer believes they were billed an incorrect extraction fee and wants the charge reviewed."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.72,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "billing"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "off_topic",
+      "required_branch_route": null,
+      "scored": false,
+      "ticket_id": "esc-billing-refund-demand-01",
+      "topic": "Customer is requesting a refund for a sequencing fee they believe was charged in error."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.75,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "human_request"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "off_topic",
+      "required_branch_route": null,
+      "scored": false,
+      "ticket_id": "esc-human_request-direct-01",
+      "topic": "Customer is requesting to speak with a human agent instead of the bot."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.62,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "human_request"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "off_topic",
+      "required_branch_route": null,
+      "scored": false,
+      "ticket_id": "esc-human_request-polite-01",
+      "topic": "Customer is requesting to be transferred to a human representative."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.62,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "human_request"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "off_topic",
+      "required_branch_route": null,
+      "scored": false,
+      "ticket_id": "esc-human_request-bot-callout-01",
+      "topic": "Customer is requesting to be transferred to a human agent rather than asking a case, permission, or policy question."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.72,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "billing",
+        "human_request"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "off_topic",
+      "required_branch_route": null,
+      "scored": false,
+      "ticket_id": "esc-combined-billing-human_request-01",
+      "topic": "Customer reports being double-charged and requests to speak with a human about a billing error."
+    },
+    {
+      "branch_route_ok": true,
+      "case_id": "MFG-2025-9999",
+      "confidence": 0.95,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "unknown_case"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "case_status",
+      "required_branch_route": "case_status",
+      "scored": false,
+      "ticket_id": "esc-unknown_case-nonexistent-id-01",
+      "topic": "Customer is asking whether their long-pending case has been worked on and wants an update on its progress."
+    },
+    {
+      "branch_route_ok": true,
+      "case_id": "MFG-2099-0001",
+      "confidence": 0.97,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "unknown_case"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "case_status",
+      "required_branch_route": "case_status",
+      "scored": false,
+      "ticket_id": "esc-unknown_case-nonexistent-id-02",
+      "topic": "Customer asking for a status update on case MFG-2099-0001."
+    },
+    {
+      "branch_route_ok": true,
+      "case_id": "MFG-2025-0734",
+      "confidence": 0.93,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "out_of_procedure"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "permission",
+      "required_branch_route": "permission",
+      "scored": false,
+      "ticket_id": "esc-out_of_procedure-change-requester-01",
+      "topic": "Customer wants the primary requester on their case transferred to their brother."
+    },
+    {
+      "branch_route_ok": true,
+      "case_id": null,
+      "confidence": 0.6,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "out_of_procedure"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "permission",
+      "required_branch_route": "permission",
+      "scored": false,
+      "ticket_id": "esc-out_of_procedure-early-deletion-01",
+      "topic": "Customer requests immediate deletion of all their genetic data and case file, i.e. purging retained records."
+    },
+    {
+      "branch_route_ok": true,
+      "case_id": null,
+      "confidence": 0.94,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "low_confidence"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "kb",
+      "required_branch_route": "kb",
+      "scored": false,
+      "ticket_id": "esc-low_confidence-empty_retrieval-accreditation-01",
+      "topic": "Customer asks whether Meridian holds ISO 17025 accreditation and what the international shipping and customs requirements are for skeletal remains."
+    },
+    {
+      "branch_route_ok": true,
+      "case_id": null,
+      "confidence": 0.94,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "low_confidence"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "kb",
+      "required_branch_route": "kb",
+      "scored": false,
+      "ticket_id": "esc-low_confidence-empty_retrieval-international-01",
+      "topic": "Customer asks whether the lab accepts samples from non-US law enforcement agencies and what import paperwork is required."
+    },
+    {
+      "branch_route_ok": false,
+      "case_id": null,
+      "confidence": 0.92,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "low_confidence"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "case_status",
+      "required_branch_route": "kb",
+      "scored": false,
+      "ticket_id": "esc-low_confidence-verifier_failure-exact-date-01",
+      "topic": "Customer wants an exact calendar date for when their results will be ready rather than an estimated turnaround."
+    },
+    {
+      "branch_route_ok": false,
+      "case_id": null,
+      "confidence": 0.92,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "low_confidence"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "case_status",
+      "required_branch_route": "kb",
+      "scored": false,
+      "ticket_id": "esc-low_confidence-verifier_failure-summed-timeline-01",
+      "topic": "Customer wants a total day count until all remaining stages (intake, extraction, sequencing, genealogy) are complete, i.e. an overall ETA for their case."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.42,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "low_confidence"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "case_status",
+      "required_branch_route": null,
+      "scored": false,
+      "ticket_id": "esc-low_confidence-abstention-garbled-01",
+      "topic": "Customer is frustrated and vaguely demanding a fix, seemingly unable to tell what's happening with their case(s)."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": "MFG-2025-0822",
+      "confidence": 0.72,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "frustration"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "case_status",
+      "required_branch_route": null,
+      "scored": false,
+      "ticket_id": "esc-frustration-repeated-emails-01",
+      "topic": "Customer is frustrated after four unanswered emails and is following up on the progress of their case MFG-2025-0822."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.62,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "frustration"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "case_status",
+      "required_branch_route": null,
+      "scored": false,
+      "ticket_id": "esc-frustration-furious-01",
+      "topic": "Customer is expressing frustration about a prolonged lack of updates, implicitly asking about their case's progress."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.25,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "frustration"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "kb",
+      "required_branch_route": null,
+      "scored": false,
+      "ticket_id": "esc-frustration-repeated-asks-01",
+      "topic": "Customer is frustrated after three attempts and repeated non-answers, but the underlying request is not stated in this message."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.82,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "case_status",
+      "predicted_route": "case_status",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "esc-frustration-borderline-mild-01",
+      "topic": "Customer is frustrated by the wait and is asking for a progress update on their case."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.72,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "case_status",
+      "predicted_route": "case_status",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "esc-frustration-borderline-impatient-01",
+      "topic": "Customer is expressing impatience about the wait for their results, implicitly asking about case progress or ETA."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.58,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "case_status",
+      "predicted_route": "case_status",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "esc-frustration-borderline-near-window-01",
+      "topic": "Customer venting mild frustration about not having heard back yet on their case, implying a wait on progress updates."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.62,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "complexity"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "kb",
+      "required_branch_route": null,
+      "scored": false,
+      "ticket_id": "esc-complexity-entangled-rush-two-cases-01",
+      "topic": "Customer asks whether rush service can be applied to two of their cases, how the rush surcharge differs between extraction and sequencing stages, and how rushing would affect genealogy start timing."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.68,
+      "correct": null,
+      "error": null,
+      "expected_reasons": [
+        "complexity"
+      ],
+      "expected_route": "escalate",
+      "predicted_route": "kb",
+      "required_branch_route": null,
+      "scored": false,
+      "ticket_id": "esc-complexity-entangled-failure-timeline-shipping-01",
+      "topic": "Customer asks about the fee policy if another re-extraction attempt fails, how that would affect the sequencing/genealogy timeline, and whether submitting a replacement sample from outside the US follows a different process."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": "MFG-2025-0865",
+      "confidence": 0.82,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "case_status",
+      "predicted_route": "case_status",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "esc-complexity-borderline-two-part-01",
+      "topic": "Customer asks what stage case MFG-2025-0865 is currently in and whether they can pay to expedite the next stage."
+    },
+    {
+      "branch_route_ok": null,
+      "case_id": null,
+      "confidence": 0.82,
+      "correct": true,
+      "error": null,
+      "expected_reasons": [],
+      "expected_route": "case_status",
+      "predicted_route": "case_status",
+      "required_branch_route": null,
+      "scored": true,
+      "ticket_id": "esc-complexity-borderline-stalled-01",
+      "topic": "Customer asks whether the apparent lack of movement on their case is normal and what its current progress is."
+    }
+  ],
+  "summary": {
+    "confusion_matrix": {
+      "case_status": {
+        "case_status": 10,
+        "error": 0,
+        "kb": 0,
+        "off_topic": 0,
+        "permission": 0
+      },
+      "kb": {
+        "case_status": 0,
+        "error": 0,
+        "kb": 10,
+        "off_topic": 0,
+        "permission": 0
+      },
+      "off_topic": {
+        "case_status": 0,
+        "error": 0,
+        "kb": 0,
+        "off_topic": 5,
+        "permission": 0
+      },
+      "permission": {
+        "case_status": 0,
+        "error": 0,
+        "kb": 0,
+        "off_topic": 0,
+        "permission": 5
+      }
+    },
+    "errors": [],
+    "escalate_diagnostics": {
+      "classify_route_distribution": {
+        "case_status": 7,
+        "kb": 5,
+        "off_topic": 7,
+        "permission": 2
+      },
+      "route_dependent_accuracy": 0.75,
+      "route_dependent_correct": 6,
+      "route_dependent_misses": [
+        {
+          "expected_reasons": [
+            "low_confidence"
+          ],
+          "id": "esc-low_confidence-verifier_failure-exact-date-01",
+          "predicted_route": "case_status",
+          "required_route": "kb"
+        },
+        {
+          "expected_reasons": [
+            "low_confidence"
+          ],
+          "id": "esc-low_confidence-verifier_failure-summed-timeline-01",
+          "predicted_route": "case_status",
+          "required_route": "kb"
+        }
+      ],
+      "route_dependent_total": 8,
+      "total": 21
+    },
+    "per_route": {
+      "case_status": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "predicted_as": 10,
+        "recall": 1.0,
+        "support": 10,
+        "true_positives": 10
+      },
+      "kb": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "predicted_as": 10,
+        "recall": 1.0,
+        "support": 10,
+        "true_positives": 10
+      },
+      "off_topic": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "predicted_as": 5,
+        "recall": 1.0,
+        "support": 5,
+        "true_positives": 5
+      },
+      "permission": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "predicted_as": 5,
+        "recall": 1.0,
+        "support": 5,
+        "true_positives": 5
+      }
+    },
+    "route_accuracy": 1.0,
+    "scored_correct": 30,
+    "scored_sample_size": 30
+  },
+  "tickets_considered": 51
+}

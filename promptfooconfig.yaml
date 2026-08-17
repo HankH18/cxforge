@@ -1,17 +1,97 @@
-# Promptfoo stub — the escalation eval is built in T-7 against
-# evals/labeled_set.yaml (human-approved labels). Run locally / pre-push only;
-# per SPEC constraints this never runs in GitHub Actions.
-description: Escalation classifier evaluation (T-7)
+# =============================================================================
+# cxforge — promptfoo suite over the SHIPPED agent prompts (W1-E1, ADR-013)
+#
+# Replaces the T-1 scaffold (placeholder prompt, `tests: []`) that
+# docs/STATE.md §6.11 recorded as doing nothing. This is the second, independent
+# evidence stream alongside evals/report.py: a different harness driving the
+# same shipped code.
+#
+# RUN IT
+#   set -a; source .env; set +a          # nothing in the app calls load_dotenv()
+#   npx promptfoo@0.122.0 eval           # ~19 live claude-opus-5 calls, ~$0.12
+#   npx promptfoo@0.122.0 view           # browse the results
+#
+# Per SPEC's constraints this is local / pre-push only and never runs in GitHub
+# Actions.
+#
+# WHAT MAKES IT MEAN ANYTHING
+# ---------------------------
+# The provider is not `anthropic:messages:...` with the prompt pasted into this
+# file. It is evals/promptfoo/provider.py, which calls agent.nodes.classify and
+# agent.nodes.compose directly — so the prompt under test is literally
+# backend/src/agent/prompts.py, and this suite goes red when that file is
+# degraded. A YAML-resident copy of the prompt would stay green forever, which
+# is worse than no eval at all because it looks like evidence.
+#
+# MEASURED BASELINE, 2026-08-16 — 23 of 25 pass.
+#
+# The two reds are `esc-low_confidence-verifier_failure-*`. Both are a real,
+# open finding, not flake and not a harness bug: the labeled set expects those
+# tickets to reach `verify` (so they need route `kb`), and the live model routes
+# them `case_status` with confidence 0.92 — "tell me the EXACT calendar date my
+# results will be ready" reads as a case-status question. In production with a
+# resolvable case that means a templated ETA reply instead of an escalation.
+# `uv run python -m evals.route_accuracy` reports the same two, independently.
+# Leaving them red is deliberate: they are the signal.
+#
+# SABOTAGE EVIDENCE, 2026-08-16 — this suite is bound to the shipped prompt
+# ------------------------------------------------------------------------
+# Sabotage A, `CLASSIFY_SYSTEM`: swap the `case_status` and `kb` route
+# definitions. classify half 18/20 pass -> 10/20. Every `case_status` case
+# flipped to `kb` and every `kb` case flipped to `case_status`; `permission` and
+# `off_topic` were untouched, exactly matching the edit.
+#
+# Sabotage B, `KB_ANSWER_SYSTEM`: replace "using ONLY the knowledge-base context
+# ... say plainly that you don't have enough information ... Never state any
+# fact about a specific case" with "draw on your general knowledge ... give the
+# customer the concrete details they ask for". grounding half 5/5 pass -> 2/5.
+# The model then affirmed the customer's false premise ("Yes -- genealogy is the
+# fourth of our five stages ... our genealogy team is using your case's
+# completed DNA profile"), invented an accreditation it had no context for
+# ("ISO/IEC 17025:2017 ... ILAC-MRA signatory"), and tripped the shipped
+# grounding guard on the previously clean positive control.
+#
+# Neither sabotage touched this file, evals/promptfoo/**, or any assertion.
+#
+# COST / SCOPE
+# ------------
+# One live call per test case. The classify cases are a canonical-scenario smoke
+# suite derived from the approved evals/labeled_set.yaml (see
+# evals/promptfoo/gen_tests.py), not a census — the census is
+# `uv run python -m evals.route_accuracy`, which sweeps all 51 tickets and emits
+# a per-route confusion matrix.
+# =============================================================================
+description: cxforge agent prompts — routing accuracy + adversarial R9 grounding
+
+env:
+  # promptfoo shells out to `python` for the custom provider, the Python
+  # assertion, and the test generator; the repo's deps live in the uv venv.
+  # NOTE: this setting alone is NOT sufficient — promptfoo resolves the `tests:`
+  # block before it applies this map, so the generator would still run under the
+  # machine's default interpreter (measured: conda python 3.9, which cannot even
+  # `from datetime import UTC`). evals/promptfoo/_bootstrap.py re-execs into
+  # .venv for that reason and makes a bare `npx promptfoo eval` work with no
+  # shell setup. This entry stays as belt-and-braces for the later phases.
+  PROMPTFOO_PYTHON: .venv/bin/python
 
 prompts:
-  - "Placeholder — T-7 supplies the escalation classifier prompt."
+  # The customer's message. The custom provider reads the full var set from
+  # promptfoo's context; this string is what shows up in the results table as
+  # the input, and is the fallback the provider uses if `message` is unset.
+  - "{{message}}"
 
 providers:
-  # Kept in step with backend/src/agent/config.py's ANTHROPIC_MODEL — the
-  # eval is worthless if it measures a different model than the one the
-  # agent actually runs. No `temperature` here on purpose: this model
-  # family rejects the sampling knobs with a 400, which is why
-  # backend/src/agent/llm.py drops them too.
-  - id: anthropic:messages:claude-opus-5
+  - id: file://evals/promptfoo/provider.py
+    label: shipped-agent-nodes
+    # Model comes from backend/src/agent/config.py:ANTHROPIC_MODEL — the single
+    # pinned constant the agent itself uses. An eval that measures a different
+    # model than the one that ships is worthless, so it is deliberately NOT
+    # restated here. Override for an experiment with CXFORGE_EVAL_MODEL.
 
-tests: []
+tests:
+  # Routing over the four canonical scenarios plus the route-dependent
+  # escalations, derived from the human-approved labeled set.
+  - file://evals/promptfoo/gen_tests.py:generate_classify_tests
+  # R9's adversarial grounding set, asserted with the shipped, LLM-free
+  # agent.grounding_guard.
+  - file://evals/promptfoo/tests_grounding.yaml
