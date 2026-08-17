@@ -14,16 +14,19 @@ dependencies, which is exactly what ``config["configurable"]`` is for.
 
 from __future__ import annotations
 
+import functools
+from collections.abc import Callable
 from datetime import datetime
-from typing import cast
+from typing import Any, cast
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from agent import nodes
 from agent.escalation_seam import EscalationDecider
 from agent.llm import LLMClient
-from agent.nodes import AgentDeps
+from agent.nodes import AgentDeps, NodeClock
 from agent.state import RunState
 from escalation.engine import EscalationEngine
 from helpdesk.port import HelpdeskPort
@@ -50,27 +53,72 @@ def _select_branch(state: RunState) -> str:
     return branch
 
 
+def _timed[NodeFn: Callable[..., dict[str, Any]]](name: str, node: NodeFn) -> NodeFn:
+    """Wrap a node so the run's ``NodeClock`` learns when it really ran.
+
+    Generic over the node's own callable type rather than a fixed
+    ``Callable[[RunState, RunnableConfig], ...]`` alias: LangGraph matches
+    ``add_node``'s overloads structurally, and a node passed in as a widened
+    ``Callable`` stops satisfying them (mypy resolves the graph's state
+    parameter to ``Never``). Handing back the same type it was given keeps
+    every ``add_node`` call below type-checking exactly as the bare node did.
+
+    This is the only place per-node wall time is measured, and it is
+    measured by *being* the call: the interval starts immediately before the
+    node body and is recorded in a ``finally``, so a timing exists because
+    the node executed and cannot be produced any other way. That is the
+    whole point — the Langfuse trace used to report 0–1ms per span for
+    multi-second runs because the span objects were built after the fact in
+    `act`, so their "duration" was the time it took to construct them
+    (`agent.nodes`' trace section, ADR-006).
+
+    ``finally`` rather than a plain sequence: a node that raises still
+    records the interval it burned, which is what a hung or failing run's
+    trace most needs to show. And with no clock in the config (a caller that
+    compiled the graph itself) this is a pass-through — the wrapper never
+    changes what a node returns or how it fails.
+    """
+
+    @functools.wraps(node)
+    def timed_node(state: RunState, config: RunnableConfig) -> dict[str, Any]:
+        clock = nodes.node_clock(config)
+        if clock is None:
+            return node(state, config)
+        clock.enter(name)
+        try:
+            return node(state, config)
+        finally:
+            clock.leave(name)
+
+    return cast(NodeFn, timed_node)
+
+
 def build_graph() -> CompiledStateGraph:
     """Compile the pinned pipeline once. Run-scoped collaborators (port,
-    llm, escalation_decider, ticket_id) are supplied per-invocation via
-    ``run_agent``'s ``config``, not baked in here — the compiled graph
-    itself has no state of its own."""
+    llm, escalation_decider, ticket_id, node_clock) are supplied
+    per-invocation via ``run_agent``'s ``config``, not baked in here — the
+    compiled graph itself has no state of its own, which is also why the
+    timing wrapper below holds no timings itself and only writes to the
+    clock the running invocation brought with it."""
     graph = StateGraph(RunState)
 
-    graph.add_node("ingest", nodes.ingest)
-    graph.add_node("classify", nodes.classify)
+    graph.add_node("ingest", _timed("ingest", nodes.ingest))
+    graph.add_node("classify", _timed("classify", nodes.classify))
     graph.add_node("route", nodes.route_dispatch)
-    graph.add_node("case_status", nodes.case_status)
-    graph.add_node("permission", nodes.permission)
-    graph.add_node("kb_answer", nodes.kb_answer)
-    graph.add_node("off_topic", nodes.off_topic)
-    graph.add_node("compose", nodes.compose)
-    graph.add_node("verify", nodes.verify)
-    graph.add_node("decide", nodes.decide)
-    graph.add_node("act", nodes.act)
+    graph.add_node("case_status", _timed("case_status", nodes.case_status))
+    graph.add_node("permission", _timed("permission", nodes.permission))
+    graph.add_node("kb_answer", _timed("kb_answer", nodes.kb_answer))
+    graph.add_node("off_topic", _timed("off_topic", nodes.off_topic))
+    graph.add_node("compose", _timed("compose", nodes.compose))
+    graph.add_node("verify", _timed("verify", nodes.verify))
+    graph.add_node("decide", _timed("decide", nodes.decide))
+    graph.add_node("act", _timed("act", nodes.act))
 
     graph.set_entry_point("ingest")
     graph.add_edge("ingest", "classify")
+    # `route` is deliberately untimed: it is a no-op dispatch node with no
+    # observation of its own in `nodes._TRACE_NODE_KINDS`, so a timing for it
+    # would have nowhere to go.
     graph.add_edge("classify", "route")
     graph.add_conditional_edges(
         "route",
@@ -117,7 +165,15 @@ def run_agent(
     ``None`` (the default) leaves ``act`` falling back to
     ``datetime.now(UTC)``. That fallback is load-bearing: every existing
     graph/grounding/escalation test calls ``run_agent`` without a clock and
-    must keep passing unchanged."""
+    must keep passing unchanged.
+
+    A fresh ``NodeClock`` is built here per invocation and injected the same
+    way, so the per-node wall times the Langfuse trace reports are measured
+    by the run that is happening rather than reconstructed afterwards (see
+    ``_timed`` and ``agent.nodes.NodeClock``). Per invocation and not per
+    compiled graph: a graph is compiled statelessly and could be reused, and
+    a clock shared between two runs would report one run's timings on the
+    other's trace."""
     deps = AgentDeps(
         port=port,
         llm=llm,
@@ -131,6 +187,7 @@ def run_agent(
                 "ticket_id": ticket_id,
                 "deps": deps,
                 "received_at": received_at,
+                "node_clock": NodeClock(),
             }
         },
     )

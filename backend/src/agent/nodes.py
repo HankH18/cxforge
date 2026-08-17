@@ -73,8 +73,67 @@ class AgentDeps:
         self.escalation_decider = escalation_decider
 
 
+class NodeClock:
+    """When each graph node really started and really finished.
+
+    One instance per run, built in ``agent.graph.run_agent`` and carried
+    through ``config["configurable"]["node_clock"]`` — the same route
+    ``deps`` and ``received_at`` already take, for the same reason: it is a
+    run-scoped dependency, not a grounding fact ``RunState`` should carry.
+    ``agent.graph``'s node wrapper stamps ``enter``/``leave`` around every
+    node call, so a timing exists *because the node ran*, and a node that
+    stops running stops having one. Nothing derives, estimates or
+    interpolates a duration.
+
+    Why this exists at all: the Langfuse trace is assembled post-hoc in
+    `act` (BUILD-PLAN §1.6 pins the id to the one `act` mints), so the span
+    objects are all created within a few milliseconds of each other at the
+    end of the run. Before this, that made every span report 0–1ms and the
+    whole trace 11ms for a 15-second run — the same defect ADR-004 fixed one
+    layer down when ``received_at`` was minted inside `act`, repeated in
+    Langfuse.
+
+    ``leave`` records the moment the node *returned*. `act` is therefore
+    always missing its own end here — it emits the trace from inside itself
+    — and `_run_trace_spans` closes that span on ``replied_at`` instead (the
+    measured instant the reply went out), never on a guess.
+
+    The graph is linear and runs in one thread per run, so plain dicts are
+    enough; a node that ran twice would keep its last interval.
+    """
+
+    def __init__(self) -> None:
+        self._started: dict[str, datetime] = {}
+        self._ended: dict[str, datetime] = {}
+
+    def enter(self, node: str) -> None:
+        self._started[node] = datetime.now(UTC)
+
+    def leave(self, node: str) -> None:
+        self._ended[node] = datetime.now(UTC)
+
+    def started_at(self, node: str) -> datetime | None:
+        return self._started.get(node)
+
+    def ended_at(self, node: str) -> datetime | None:
+        return self._ended.get(node)
+
+
 def _deps(config: RunnableConfig) -> AgentDeps:
     return config["configurable"]["deps"]
+
+
+def node_clock(config: RunnableConfig) -> NodeClock | None:
+    """The run's clock, or ``None`` for a caller that compiled the graph
+    itself instead of going through ``run_agent``. ``None`` costs the trace
+    its durations and says so (see ``_run_trace_spans``); it never costs the
+    run anything.
+
+    Public, unlike its ``_deps``/``_ticket_id`` neighbours, because
+    ``agent.graph``'s timing wrapper is its other caller."""
+    configurable = config.get("configurable") or {}
+    clock = configurable.get("node_clock")
+    return clock if isinstance(clock, NodeClock) else None
 
 
 def _ticket_id(config: RunnableConfig) -> str:
@@ -642,12 +701,23 @@ def _escalation_reasons(state: RunState) -> list[Reason]:
 # the score `verify` gave it. The trace is therefore reconstructed from
 # recorded facts, not narrated.
 #
-# The one thing this shape cannot honestly show is per-node wall time — the
-# spans are created after the fact, so every duration would be ~0. So it
-# claims none: no fake `start_time` is written anywhere, and the run's real
-# timing (`received_at` → `replied_at`, ADR-004's corrected interval) rides
-# on the trace's metadata instead, where it is a measurement rather than an
-# artifact of when the span object happened to be constructed.
+# Reconstructing the spans after the fact does mean their *times* cannot come
+# from when the span objects were built — and for a while they did, which is
+# how a genuine 15.0s run was published as an 11ms trace: `latency 0.011s`,
+# every span 0–1ms, all eight observations stamped inside the same 11ms
+# window while the run's own `replied_at` was 100ms earlier. Exactly the
+# defect ADR-004 fixed one layer down (`received_at` minted inside `act`, so
+# `replied_at - received_at` measured 22µs), repeated in Langfuse, and the
+# first one visible to an outside viewer — ADR-006 calls this trace "the
+# single best visual for the zero-hallucination story".
+#
+# So the times are measured where the work happens and carried here:
+# `NodeClock` stamps every node's real entry and exit (`agent.graph`'s
+# wrapper), and the whole-trace span is `received_at` → `replied_at` — the
+# same pair written to `runs` and reported by `/api/metrics`, so the panel
+# and the Gantt cannot disagree. Nothing is derived or estimated: a node
+# whose interval was not measured gets a span that says so
+# (`{"duration": "not measured"}`) rather than a plausible number.
 
 _TRACE_NODE_KINDS: dict[str, str] = {
     "ingest": "span",
@@ -770,6 +840,9 @@ def _trace_node_io(
     }
 
 
+_DURATION_NOT_MEASURED = {"duration": "not measured"}
+
+
 def _run_trace_spans(
     state: RunState,
     *,
@@ -777,14 +850,33 @@ def _run_trace_spans(
     actions: list[str],
     gate_enabled: bool,
     outcome: str | None,
+    clock: NodeClock | None,
+    act_ended_at: datetime,
 ) -> list[TraceSpan]:
-    """One span per node that actually ran, in the order it ran.
+    """One span per node that actually ran, in the order it ran, over the
+    interval it really ran for.
 
     Driven by ``actions`` — the run's own record of which nodes executed —
     so a run that escalated at `case_status` gets no `kb_answer` span, and a
     node that stops being called stops having a span. ``port:*`` and
     ``gate:*`` entries are effects `act` recorded, not nodes, and are
     reported on `act`'s own output instead.
+
+    Times come from ``clock`` (see ``NodeClock``) and from nowhere else. Two
+    cases deliberately do not get a duration invented for them:
+
+    * **`act`**, which is running right now — this call is inside it — so
+      the clock has its start but not its end. It is closed on
+      ``act_ended_at``: ``replied_at``, the measured instant the reply went
+      out, or for a gated run the measured instant the trace was emitted.
+      Either way a timestamp something actually took, so `act`'s span covers
+      the port calls and the ``runs``/``drafts`` writes.
+    * **A node with no recorded interval at all** — only reachable when the
+      caller compiled the graph itself rather than going through
+      ``run_agent``, so there is no clock. That span is emitted with no
+      times and ``{"duration": "not measured"}`` in its metadata. Langfuse
+      will show it as ~0ms because an observation always has bounds; the
+      metadata is there so nobody reads that 0 as a measurement.
     """
     io = _trace_node_io(state, ticket_id=ticket_id, gate_enabled=gate_enabled, outcome=outcome)
     spans: list[TraceSpan] = []
@@ -792,9 +884,20 @@ def _run_trace_spans(
         if node not in _TRACE_NODE_KINDS:
             continue
         span_input, span_output = io[node]
+        started_at = clock.started_at(node) if clock is not None else None
+        ended_at = clock.ended_at(node) if clock is not None else None
+        if node == "act" and started_at is not None and ended_at is None:
+            ended_at = act_ended_at
+        measured = started_at is not None and ended_at is not None
         spans.append(
             TraceSpan(
-                name=node, kind=_TRACE_NODE_KINDS[node], input=span_input, output=span_output
+                name=node,
+                kind=_TRACE_NODE_KINDS[node],
+                input=span_input,
+                output=span_output,
+                metadata=None if measured else dict(_DURATION_NOT_MEASURED),
+                start_time=started_at if measured else None,
+                end_time=ended_at if measured else None,
             )
         )
     return spans
@@ -810,15 +913,27 @@ def _emit_run_trace(
     outcome: str | None,
     received_at: datetime,
     replied_at: datetime | None,
+    clock: NodeClock | None,
 ) -> bool:
     """Report this run to Langfuse under the id `act` minted and persisted.
 
     ``received_at``/``replied_at`` are the same two values written to
     ``runs`` a few lines away, so the trace's ``latency_s`` and
-    ``/api/metrics`` can never disagree about what was measured.
+    ``/api/metrics`` can never disagree about what was measured — and since
+    they are also the whole-trace span's bounds, a grader comparing the
+    metrics panel's latency to the trace's own sees the same interval rather
+    than two contradictory numbers.
+
+    A gated run has no ``replied_at`` (nothing was sent), so there is no
+    receipt→reply interval to report and ``latency_s`` stays absent, exactly
+    as before. The trace still needs *some* end, and it gets ``emitted_at``
+    below — the measured instant this report was produced, which for a gated
+    run is the moment the run finished. That is a real timestamp; what it is
+    not is a reply latency, which is why it does not appear as one.
     """
     ticket = state.get("ticket")
     latency_s = (replied_at - received_at).total_seconds() if replied_at is not None else None
+    emitted_at = datetime.now(UTC)
     return emit_trace(
         trace_id=trace_id,
         name="agent_run",
@@ -852,7 +967,11 @@ def _emit_run_trace(
             actions=actions,
             gate_enabled=gate_enabled,
             outcome=outcome,
+            clock=clock,
+            act_ended_at=replied_at if replied_at is not None else emitted_at,
         ),
+        start_time=received_at,
+        end_time=replied_at if replied_at is not None else emitted_at,
     )
 
 
@@ -896,6 +1015,7 @@ def act(state: RunState, config: RunnableConfig) -> dict[str, Any]:
     injected_received_at = configurable.get("received_at")
     received_at = datetime.now(UTC) if injected_received_at is None else injected_received_at
     trace_id = uuid.uuid4().hex
+    clock = node_clock(config)
 
     if gate_enabled:
         run_id = store.record_run(
@@ -920,6 +1040,7 @@ def act(state: RunState, config: RunnableConfig) -> dict[str, Any]:
             outcome=None,
             received_at=received_at,
             replied_at=None,
+            clock=clock,
         )
         return {"actions": held_actions}
 
@@ -995,6 +1116,7 @@ def act(state: RunState, config: RunnableConfig) -> dict[str, Any]:
         outcome=outcome,
         received_at=received_at,
         replied_at=replied_at,
+        clock=clock,
     )
 
     return {"actions": actions}

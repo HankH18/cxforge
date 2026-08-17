@@ -5,7 +5,7 @@
 ``runs.trace_id``, and told nobody — so every trace link the portal built
 pointed at a trace that did not exist.
 
-Two properties carry this feature, and each is tested on its own here
+Three properties carry this feature, and each is tested on its own here
 because each has its own way of silently reverting:
 
 * **The trace is keyed on the id `act` already minted** (BUILD-PLAN §1.6).
@@ -23,6 +23,17 @@ because each has its own way of silently reverting:
   check, ``set -a; source .env; set +a; uv run pytest`` would ship every
   fixture run in this file to the real `cxforge` project.
 
+* **The times it reports are measured, not artefacts of when the span
+  objects were built.** The trace is assembled post-hoc in `act`, so this is
+  the one property the shape actively works against, and it failed silently
+  for exactly that reason: a real 6.5s run published as ``latency 0.002s``
+  with all eight observations inside a 2ms window. Structure alone cannot
+  catch that — every span was present, named and nested correctly — so the
+  assertions below are on *durations*: a deliberately slow node's span has
+  to be slow, its siblings have to not be, and the whole-trace span has to
+  match the ``replied_at - received_at`` interval in ``runs`` that
+  ``/api/metrics`` reports.
+
 The double below records what the SDK would have been asked to do. It is
 not a Langfuse stand-in and does not pretend to be one: whether Langfuse
 accepts these calls is proven by reading a real trace back from the API
@@ -34,15 +45,20 @@ every node that ran and none for a node that did not, and that the
 
 from __future__ import annotations
 
+import time
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
 from agent import llm as llm_module
-from agent.graph import run_agent
+from agent.graph import build_graph, run_agent
+from agent.nodes import AgentDeps
 from agent.schemas import Classification, GroundednessJudgment, KBAnswerDraft
 from data import Case, get_case, get_connection
 from data.seed import SeedResult
+from escalation.engine import EscalationEngine
 from helpdesk.email_adapter import EmailAdapter
 
 from .conftest import seed_conversation, set_gate
@@ -51,6 +67,29 @@ from .fakes import FakeLLMClient
 # --------------------------------------------------------------------------
 # The recording double
 # --------------------------------------------------------------------------
+
+
+class RecordingOtelSpan:
+    """Stands in for the OpenTelemetry span a Langfuse observation wraps,
+    with the one property this feature depends on: a settable
+    ``_start_time`` in nanoseconds, readable back through a read-only
+    ``start_time``. That is verbatim the shape of
+    ``opentelemetry.sdk.trace.Span``, and it is what
+    ``agent.llm._apply_real_start_time`` writes through, because Langfuse's
+    ``start_observation`` has no ``start_time`` parameter of its own.
+
+    Mirroring an SDK internal in a double is a real cost, and it is paid on
+    purpose: without it these tests could only assert that a span *exists*,
+    which is exactly the half of this defect that already looked fine. That
+    the real SDK still honours it is proven the only way it can be — by
+    reading a trace back from the Langfuse API (W2-C1's report)."""
+
+    def __init__(self) -> None:
+        self._start_time: int | None = None
+
+    @property
+    def start_time(self) -> int | None:
+        return self._start_time
 
 
 class RecordingSpan:
@@ -64,6 +103,8 @@ class RecordingSpan:
         self.metadata: Any = payload.get("metadata")
         self.children: list[RecordingSpan] = []
         self.ended = False
+        self.end_time_ns: int | None = None
+        self._otel_span = RecordingOtelSpan()
 
     def start_observation(
         self,
@@ -80,8 +121,26 @@ class RecordingSpan:
         self.children.append(child)
         return child
 
-    def end(self) -> None:
+    def end(self, *, end_time: int | None = None) -> None:
         self.ended = True
+        self.end_time_ns = end_time
+
+    # -- what the trace will actually show ---------------------------------
+
+    @property
+    def start_time_ns(self) -> int | None:
+        return self._otel_span.start_time
+
+    @property
+    def duration_s(self) -> float | None:
+        """The duration Langfuse will report, or ``None`` if this span was
+        given no real bounds at all. Deliberately computed from the two
+        values handed to the SDK rather than from anything the production
+        code calculated — a duration nobody sends cannot be asserted into
+        existence."""
+        if self.start_time_ns is None or self.end_time_ns is None:
+            return None
+        return (self.end_time_ns - self.start_time_ns) / 1_000_000_000
 
 
 class RecordingLangfuse:
@@ -154,6 +213,28 @@ def _persisted_trace_id(ticket_id: str) -> str:
         rows = cur.fetchall()
     assert len(rows) == 1, f"expected exactly one run for {ticket_id}, got {rows}"
     return str(rows[0][0])
+
+
+def _persisted_interval(ticket_id: str) -> tuple[datetime, datetime]:
+    """The run's own ``received_at``/``replied_at``, straight out of the row
+    `act` wrote — the same two columns ``/api/metrics`` computes its latency
+    and ``p95`` from."""
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT received_at, replied_at FROM runs WHERE ticket_id = %s", (ticket_id,)
+        )
+        rows = cur.fetchall()
+    assert len(rows) == 1, f"expected exactly one run for {ticket_id}, got {rows}"
+    received_at, replied_at = rows[0]
+    assert replied_at is not None
+    return received_at, replied_at
+
+
+def _epoch_ns(when: datetime) -> int:
+    """Nanoseconds since the epoch, computed here independently of
+    ``agent.llm``'s own conversion — a test that imported the production
+    helper would agree with it about a wrong unit."""
+    return int(when.timestamp() * 1_000_000_000)
 
 
 def _span_named(root: RecordingSpan, name: str) -> RecordingSpan:
@@ -471,6 +552,247 @@ def test_the_trace_metadata_carries_the_same_latency_the_run_recorded(
     recorded_latency = float(row[0])
 
     assert root.metadata["latency_s"] == pytest.approx(recorded_latency, abs=1e-6)
+
+
+# --------------------------------------------------------------------------
+# The times the trace reports
+# --------------------------------------------------------------------------
+
+SLOW_NODE_SECONDS = 0.6
+"""Long enough to be unmistakable next to the sub-millisecond nodes around
+it, short enough to cost the suite nothing. Every assertion below is stated
+relative to it, so the number itself is not load-bearing."""
+
+
+def _case_status_llm(case_id: str, *, classify_takes: float = 0.0) -> FakeLLMClient:
+    """A fake whose `classify` model call optionally takes real time.
+
+    The delay goes *inside the model call* — what `classify` genuinely spends
+    a run doing — rather than into a substituted node, so what gets measured
+    is a real node body executing real work and not a stub standing in for
+    one."""
+
+    def classification(messages: list[dict[str, Any]]) -> BaseModel:
+        time.sleep(classify_takes)
+        return Classification(
+            topic="case status inquiry", route="case_status", case_id=case_id, confidence=0.97
+        )
+
+    return FakeLLMClient(responses={Classification: classification})
+
+
+def _seed_case_status_ticket(port: EmailAdapter, case: Case) -> str:
+    return seed_conversation(
+        port,
+        requester_email=case.requester_email,
+        message=f"What is the status of case {case.case_id}?",
+    )
+
+
+def test_each_span_lasts_as_long_as_its_node_really_took(
+    seeded: SeedResult, port: EmailAdapter, tracer: RecordingLangfuse
+) -> None:
+    """The defect this binds: every observation was created post-hoc in
+    `act`, so a 6.5s run reported ``latency 0.002s`` with eight spans of
+    0–1ms. Nothing structural could see it — the spans, names, kinds and
+    nesting were all correct.
+
+    So one node is made deliberately, measurably slow and the assertion is
+    that ITS span is the slow one. Both halves matter: a fix that stamped the
+    whole run's duration onto every span would satisfy "classify is slow" and
+    still be a fabrication, which is what the sibling bound rules out."""
+    case = get_case("MFG-2025-0734")
+    assert isinstance(case, Case)
+    ticket_id = _seed_case_status_ticket(port, case)
+    llm = _case_status_llm(case.case_id, classify_takes=SLOW_NODE_SECONDS)
+
+    run_agent(ticket_id, port=port, llm=llm, received_at=datetime.now(UTC))
+    _, root = tracer.traces[0]
+
+    classify = _span_named(root, "classify")
+    assert classify.duration_s is not None
+    assert classify.duration_s >= SLOW_NODE_SECONDS, (
+        f"classify slept {SLOW_NODE_SECONDS}s inside its model call but its span "
+        f"reports {classify.duration_s}s"
+    )
+
+    siblings = {c.name: c.duration_s for c in root.children if c.name != "classify"}
+    assert all(d is not None for d in siblings.values()), siblings
+    assert all(d < SLOW_NODE_SECONDS / 2 for d in siblings.values() if d is not None), (
+        f"only classify was slow, but the other spans report {siblings} — a duration "
+        "stamped uniformly across spans is not a measurement"
+    )
+
+    # The spans are laid out in real time: the pipeline is sequential, so each
+    # node begins after the previous one returned.
+    for earlier, later in zip(root.children, root.children[1:], strict=False):
+        assert earlier.end_time_ns is not None
+        assert later.start_time_ns is not None
+        assert earlier.end_time_ns <= later.start_time_ns, (
+            f"{earlier.name} ends after {later.name} begins"
+        )
+
+
+def test_the_whole_trace_spans_the_same_interval_the_run_recorded(
+    seeded: SeedResult, port: EmailAdapter, tracer: RecordingLangfuse
+) -> None:
+    """ADR-006's trace is a demo artefact: a grader reads the latency on the
+    metrics panel and then opens the trace. Those two numbers come from
+    different systems and must be the same measurement, so the trace's own
+    bounds are the exact ``received_at``/``replied_at`` pair in ``runs`` —
+    read back out of Postgres here, not recomputed."""
+    case = get_case("MFG-2025-0734")
+    assert isinstance(case, Case)
+    ticket_id = _seed_case_status_ticket(port, case)
+    llm = _case_status_llm(case.case_id, classify_takes=SLOW_NODE_SECONDS)
+
+    run_agent(ticket_id, port=port, llm=llm, received_at=datetime.now(UTC))
+    _, root = tracer.traces[0]
+    db_received, db_replied = _persisted_interval(ticket_id)
+
+    assert root.start_time_ns == _epoch_ns(db_received)
+    assert root.end_time_ns == _epoch_ns(db_replied)
+    assert root.duration_s == pytest.approx((db_replied - db_received).total_seconds(), abs=1e-6)
+    # And the run really was slow, so this is not two zeroes agreeing.
+    assert root.duration_s is not None and root.duration_s >= SLOW_NODE_SECONDS
+
+    # Every node's span falls inside the trace's own window.
+    for child in root.children:
+        assert child.start_time_ns is not None and child.end_time_ns is not None
+        assert root.start_time_ns <= child.start_time_ns
+        assert child.end_time_ns <= root.end_time_ns
+
+
+def test_the_act_span_closes_on_the_measured_moment_the_reply_went_out(
+    seeded: SeedResult, port: EmailAdapter, tracer: RecordingLangfuse
+) -> None:
+    """`act` is the one node whose end the clock cannot record: it emits the
+    trace from inside itself, so it has not returned yet. Its span therefore
+    closes on ``replied_at`` — the timestamp `act` measured when the reply
+    went out and wrote to ``runs`` — and on nothing else. A ``now()`` taken
+    at emission time would look identical on a fast run and drift on a slow
+    one, so the assertion is equality with the persisted value."""
+    case = get_case("MFG-2025-0734")
+    assert isinstance(case, Case)
+    ticket_id = _seed_case_status_ticket(port, case)
+    llm = _case_status_llm(case.case_id)
+
+    run_agent(ticket_id, port=port, llm=llm, received_at=datetime.now(UTC))
+    _, root = tracer.traces[0]
+    _, db_replied = _persisted_interval(ticket_id)
+
+    act = _span_named(root, "act")
+    assert act.end_time_ns == _epoch_ns(db_replied)
+    decide = _span_named(root, "decide")
+    assert decide.end_time_ns is not None
+    assert act.start_time_ns is not None and act.start_time_ns >= decide.end_time_ns
+    assert act.metadata is None, "act's duration is measured; nothing to caveat"
+
+
+def test_a_node_nobody_timed_says_so_instead_of_reporting_zero(
+    seeded: SeedResult, port: EmailAdapter, tracer: RecordingLangfuse
+) -> None:
+    """The clock is injected by ``run_agent``; a caller that compiles the
+    graph itself brings none, and then no node's interval is known.
+
+    An observation always has bounds, so such a span cannot be published
+    "without a duration" — Langfuse will draw it as ~0ms. What it can do is
+    refuse to pass off that 0 as a measurement, which is what the metadata
+    marker is for. The whole-trace span still has real bounds here, because
+    those come from ``received_at``/``replied_at`` and not from the clock."""
+    case = get_case("MFG-2025-0734")
+    assert isinstance(case, Case)
+    ticket_id = _seed_case_status_ticket(port, case)
+    llm = _case_status_llm(case.case_id)
+
+    build_graph().invoke(
+        {},
+        config={
+            "configurable": {
+                "ticket_id": ticket_id,
+                "deps": AgentDeps(
+                    port=port, llm=llm, escalation_decider=EscalationEngine(llm=llm)
+                ),
+                "received_at": datetime.now(UTC),
+            }
+        },
+    )
+
+    _, root = tracer.traces[0]
+    assert [c.name for c in root.children] == [
+        "ingest",
+        "classify",
+        "case_status",
+        "compose",
+        "verify",
+        "decide",
+        "act",
+    ]
+    for child in root.children:
+        assert child.start_time_ns is None, f"{child.name} claims a start nobody measured"
+        assert child.end_time_ns is None, f"{child.name} claims an end nobody measured"
+        assert child.metadata == {"duration": "not measured"}
+
+    db_received, db_replied = _persisted_interval(ticket_id)
+    assert root.start_time_ns == _epoch_ns(db_received)
+    assert root.end_time_ns == _epoch_ns(db_replied)
+
+
+def test_a_span_that_will_not_take_its_measured_start_time_says_so_out_loud(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The measured start is written through an SDK internal, because
+    Langfuse's public ``start_observation`` has no ``start_time`` parameter
+    at all. If a future SDK keeps that timestamp somewhere else, the write
+    would land on nothing and every duration would quietly go back to being
+    an artefact of when the span was built — this project's signature failure
+    (an instrument that reverts to reporting something meaningless while
+    still reporting confidently).
+
+    So the write is read back, and a failure is logged. The double here is
+    deliberately one whose observations have no ``_otel_span`` at all, which
+    is exactly what that future SDK looks like from here."""
+
+    class ObservationWithNowhereToPutIt:
+        def __init__(self) -> None:
+            self.children: list[ObservationWithNowhereToPutIt] = []
+
+        def start_observation(self, **kwargs: Any) -> ObservationWithNowhereToPutIt:
+            child = ObservationWithNowhereToPutIt()
+            self.children.append(child)
+            return child
+
+        def end(self, *, end_time: int | None = None) -> None:
+            return None
+
+    class ClientWithNowhereToPutIt:
+        def start_observation(self, **kwargs: Any) -> ObservationWithNowhereToPutIt:
+            return ObservationWithNowhereToPutIt()
+
+        def flush(self) -> None:
+            return None
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-fake-for-tests")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-fake-for-tests")
+    monkeypatch.setattr(llm_module, "_running_under_pytest", lambda: False)
+    monkeypatch.setattr(llm_module, "_new_client", ClientWithNowhereToPutIt)
+    llm_module.reset_tracing()
+
+    now = datetime.now(UTC)
+    with caplog.at_level("WARNING"):
+        emitted = llm_module.emit_trace(
+            trace_id="deadbeef" * 4,
+            name="agent_run",
+            spans=[llm_module.TraceSpan(name="classify", start_time=now, end_time=now)],
+            start_time=now,
+            end_time=now,
+        )
+
+    # Still emitted — a tripwire, not a new failure mode.
+    assert emitted is True
+    warned = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("'classify'" in m and "not a measurement" in m for m in warned), warned
+    assert any("'agent_run'" in m for m in warned), warned
 
 
 def _exploding_import() -> Any:

@@ -198,6 +198,16 @@ class TraceSpan:
     ``kind`` is a Langfuse observation type (``span``, ``tool``,
     ``retriever``, ``evaluator``, ``generation``, ``chain``, ...). It only
     changes the icon and grouping in the UI, never the data.
+
+    ``start_time``/``end_time`` are the real, measured wall-clock bounds of
+    the work the span describes — see ``emit_trace``'s docstring for why
+    they must be passed in rather than taken here. Both default to ``None``,
+    which means "not measured": the observation is then created and ended at
+    whatever moment `emit_trace` happens to run, and the ~0 duration that
+    results is an artefact, not a measurement. A caller that cannot measure
+    a node must say so in ``metadata`` (``agent.nodes._run_trace_spans``
+    stamps ``{"duration": "not measured"}``) rather than leave a reader to
+    mistake the artefact for a number.
     """
 
     name: str
@@ -205,6 +215,8 @@ class TraceSpan:
     input: Any = None
     output: Any = None
     metadata: dict[str, Any] | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
 
 
 def _running_under_pytest() -> bool:
@@ -303,6 +315,58 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 
+def _epoch_ns(when: datetime) -> int:
+    """A datetime as OpenTelemetry's nanoseconds-since-the-epoch.
+
+    ``datetime.timestamp()`` is UTC-correct for aware datetimes (everything
+    in this project is ``datetime.now(UTC)`` or a ``timestamptz`` read back
+    out of Postgres) and interprets a naive one in local time, which is the
+    same thing the rest of the stack would do with it.
+    """
+    return int(when.timestamp() * 1_000_000_000)
+
+
+def _apply_real_start_time(observation: Any, start_time: datetime | None, *, label: str) -> None:
+    """Move an observation's start back to when its work really began.
+
+    This is the whole fix for the trace that reported an 11ms window for a
+    15s run. Langfuse's ``start_observation`` takes no ``start_time``: it
+    calls ``tracer.start_span(name=...)``, which stamps the current instant,
+    so a trace assembled after the run — which `agent.nodes` must do,
+    because the ``trace_id`` is only minted in `act` (BUILD-PLAN §1.6) —
+    reports every span as starting the moment it was *constructed*. The
+    matching ``end_time`` **is** on the public surface (``.end(end_time=
+    ns)``), so only the start needs correcting.
+
+    OpenTelemetry itself supports exactly this: ``Tracer.start_span`` takes
+    a ``start_time`` in nanoseconds and the SDK span keeps it in
+    ``_start_time``, exposed read-only as ``.start_time`` — which is what
+    Langfuse's exporter serialises. So the value is written there and then
+    **read back** to confirm it took. If a future SDK stores it elsewhere
+    this logs a warning naming the span instead of silently reverting to
+    fabricated ~0 durations: that silent reversion is the failure mode this
+    project keeps rediscovering, and a warning is the cheapest tripwire for
+    it. Verified against real Langfuse by reading the trace back through
+    ``GET /api/public/traces/{id}`` — no test can prove this offline.
+    """
+    if start_time is None:
+        return
+    wanted = _epoch_ns(start_time)
+    otel_span = getattr(observation, "_otel_span", None)
+    if otel_span is not None:
+        try:
+            otel_span._start_time = wanted
+        except Exception:  # pragma: no cover - only a __slots__/immutable span
+            pass
+    if getattr(otel_span, "start_time", None) != wanted:
+        logger.warning(
+            "langfuse observation %r would not accept its measured start time; "
+            "its duration in the trace is an artefact of when the span was built, "
+            "not a measurement",
+            label,
+        )
+
+
 def emit_trace(
     *,
     trace_id: str,
@@ -311,8 +375,18 @@ def emit_trace(
     output: Any = None,
     metadata: dict[str, Any] | None = None,
     spans: tuple[TraceSpan, ...] | list[TraceSpan] = (),
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
 ) -> bool:
     """Emit one finished trace under ``trace_id``. Returns whether it went.
+
+    ``start_time``/``end_time`` are the trace's own real bounds — for a run
+    that is ``received_at``/``replied_at``, the same pair written to
+    ``runs``, so the Gantt a grader opens and the ``p95`` on
+    ``/api/metrics`` measure the same interval. Each ``TraceSpan`` carries
+    its own measured pair. Nothing here invents one: a ``None`` start or end
+    leaves that observation at the SDK's default (now), which is honest
+    about being unmeasured rather than plausible.
 
     ``False`` means "tracing is off or failed", never an exception: a broken
     Langfuse must not cost a customer a reply. The flush is synchronous
@@ -340,6 +414,7 @@ def emit_trace(
             output=_jsonable(output),
             metadata=_jsonable(metadata),
         )
+        _apply_real_start_time(root, start_time, label=name)
         for span in spans:
             child = root.start_observation(
                 name=span.name,
@@ -348,8 +423,9 @@ def emit_trace(
                 output=_jsonable(span.output),
                 metadata=_jsonable(span.metadata),
             )
-            child.end()
-        root.end()
+            _apply_real_start_time(child, span.start_time, label=span.name)
+            child.end(end_time=_epoch_ns(span.end_time) if span.end_time is not None else None)
+        root.end(end_time=_epoch_ns(end_time) if end_time is not None else None)
         client.flush()
     except Exception:
         logger.warning(
