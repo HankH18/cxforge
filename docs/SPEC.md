@@ -2,6 +2,17 @@
 
 Gauntlet challenger project (PRD_02, Othram). Greenfield. Planning finalized 2026-08-13.
 
+**Amended in place 2026-08-16** — see `docs/DECISIONS.md` (ADR-001…016) for the decision
+record behind every amendment below; ADR-014 is the one that authorizes editing this file
+at all. Amendments are additive: **R1–R15 are never renumbered, reworded away, or
+deleted**, because graders and code reference them by number.
+
+Read this alongside the three current entry points: `docs/STATE.md` (what is verified true
+today, and what is not), `docs/BUILD-PLAN.md` (the remaining work, the waves, and the
+frozen contracts) and `docs/DECISIONS.md` (why each choice was made). Where this doc and
+those disagree about **status**, `docs/STATE.md` wins; this doc states intent, not
+progress.
+
 ## Problem & intent
 
 Build an autonomous AI support agent that handles inbound Zendesk tickets for a
@@ -43,8 +54,27 @@ Actors: **customer** (writes into Zendesk), **reviewer** (uses the portal),
 - **R7** WHEN a customer replies on an open ticket, THE SYSTEM SHALL rebuild
   conversation context from the full Zendesk comment thread (stateless — no
   server-side conversation memory).
+  - **R7.1** *(added 2026-08-16 — ADR-009.)* THE SYSTEM SHALL additionally fetch
+    the requester's recent prior tickets from the helpdesk and surface that
+    history to the classifier, so that a repeat complainer reads differently
+    from a first-time asker in the R6 escalation judgment. The port method is
+    `HelpdeskPort.fetch_requester_history(requester_email, *,
+    exclude_ticket_id, limit=5) -> list[TicketSummary]`, pinned in
+    `docs/DESIGN.md §Frozen interface contracts 1.5` and covered for **both**
+    adapters by R14's suite. Still stateless: history is read from the helpdesk
+    on every run and never persisted server-side. **Customer history is in
+    scope** — it was the one PRD line item that appeared in neither the code
+    nor the non-goals below, and that gap is what ADR-009 closes.
 - **R8** In autonomous mode, p95 latency webhook-receipt → public reply SHALL
   be under 5 minutes, measured by the scenario runner.
+  - *Definition note (2026-08-16 — ADR-004).* "Webhook receipt" means the
+    moment ingress accepts the event, and that definition does not change. What
+    changes is the code: today receipt time is minted inside the graph's
+    **last** node (`backend/src/agent/nodes.py:591`), so the interval actually
+    measured excludes every model call. No run has executed outside a test
+    process either, which would let a metrics panel reading p95 = 0.0 satisfy
+    success criterion 6 vacuously. See `docs/STATE.md §4.1` and
+    `docs/DESIGN.md §Metric definitions`.
 
 ### Grounding invariant
 - **R9** No factual claim about a case SHALL appear in any outbound reply
@@ -73,10 +103,47 @@ Actors: **customer** (writes into Zendesk), **reviewer** (uses the portal),
 
 ## Constraints
 
-- Stack (locked in planning): Python 3.12 + FastAPI; LangGraph orchestration;
-  OpenAI primary behind an `LLMClient` isolation layer (structured outputs,
-  pinned model version); single Postgres 16 + pgvector for case data and KB;
-  React + Vite + TypeScript portal; Promptfoo + DeepEval + Langfuse.
+- Stack (locked in planning; provider amended 2026-08-16 — ADR-014, ADR-008):
+  Python 3.12 + FastAPI; LangGraph orchestration; **Anthropic** primary behind
+  an `LLMClient` isolation layer (structured outputs, pinned model version);
+  single Postgres 16 + pgvector for case data and KB; React + Vite + TypeScript
+  portal; Promptfoo + Langfuse. (**DeepEval removed 2026-08-16 — ADR-013/ADR-018 pass;
+  see the note below.**)
+  - **The provider pivot is recorded, not erased (ADR-014).** Planning locked
+    OpenAI; the build ships Anthropic — `ANTHROPIC_MODEL = "claude-opus-5"`,
+    pinned in one constant at `backend/src/agent/config.py:23` and consumed by
+    `AnthropicLLMClient` in `backend/src/agent/llm.py`. The swap cost exactly
+    one module and changed no caller, because every model call goes through the
+    `LLMClient` seam. That is the isolation layer doing precisely the job it was
+    specified to do, which is why the history stays in the doc.
+  - **Embeddings are Voyage, not Anthropic (ADR-008).** Anthropic has no
+    embeddings API, so the provider story is *Anthropic for generation, Voyage
+    for embeddings* — `voyage-4-lite` with `output_dimension=1024`, which
+    matches the existing `EMBEDDING_DIM = 1024` and the `kb_chunks.embedding
+    vector(1024)` column, making it a reseed with no schema migration. Not built
+    yet (gated on the owner's Voyage key — `docs/OWNER-ACTIONS.md`); the lexical
+    `HashingEmbedder` in the tree today stays as the offline default so CI and
+    the non-live suite need no network and no key.
+  - **Promptfoo is now real; DeepEval is removed; Langfuse is still intent.**
+    Updated 2026-08-16 after W1-E. **Promptfoo ships** — `promptfooconfig.yaml`
+    drives the shipped `classify`/`compose` nodes through a custom provider, and
+    the suite is proven to bind by degrading the real prompts: swapping two route
+    definitions in `CLASSIFY_SYSTEM` takes classification from 18/20 to **10/20**,
+    and weakening `KB_ANSWER_SYSTEM` takes grounding from 5/5 to **2/5**.
+    **DeepEval is removed** from `pyproject.toml` and from the stack line above,
+    settling ADR-013's condition on four measured grounds: zero imports repo-wide;
+    it contradicts R9's design, which is enforced by a pure-Python,
+    judge-independent `grounding_guard` *specifically* so a model-judged score
+    cannot buy its way past it; `deepeval.metrics.utils.initialize_model` falls
+    through to `OpenAIModel` when no model is passed, which would quietly
+    reintroduce OpenAI to a codebase whose isolation story is the Anthropic pivot;
+    and its metrics make live judge calls, breaking the offline guarantee of the
+    gated suite. ADR-013's actual requirement — a second, independent evidence
+    stream alongside `evals/report.py` — is met by promptfoo instead.
+    `backend/tests/grounding/test_no_unused_eval_dependency.py` now enforces the
+    rule rather than the outcome: it goes green either by removal *or* by making a
+    declared eval dependency do real work. ADR-006 commits to real Langfuse
+    instrumentation. Until those land, treat this bullet as a target.
 - Zendesk: 14-day trial account, OAuth 2.0 only (API tokens are being
   deprecated — never use them), dedicated AI agent user for attribution,
   trigger→webhook ingress with a nullifying loop-guard tag.
@@ -99,6 +166,10 @@ Actors: **customer** (writes into Zendesk), **reviewer** (uses the portal),
 - No model fine-tuning. No voice/chat channels. No KB ingestion pipeline
   (KB is seeded fixture content).
 - Post-submission roadmap is out of this doc set entirely.
+
+**Customer history is deliberately absent from this list because it is IN scope**
+(R7.1, ADR-009). Its earlier absence from *both* the code and this list was the
+ambiguity ADR-009 resolves; it is not an omission and must not be read as one.
 
 ## Success criteria
 
