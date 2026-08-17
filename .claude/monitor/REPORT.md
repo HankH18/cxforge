@@ -515,7 +515,207 @@ working; but the headline should not have required a human to come falsify it.
 
 ---
 
+# RUN 2 — SESSION SUMMARY (20/20 cycles complete)
+
+## Verdict
+
+**The harness got materially stronger during this run, and the remaining gaps are
+now well-characterised rather than unknown.** Six findings were closed with real
+fixes; the build session found one I had missed (W22) and independently fixed
+three more. Final state: 30 receipts, no claim open, **702 passed / 0 failed**,
+ruff clean, mypy clean.
+
+The cross-ticket regression gate is **armed for the first time in this project's
+history** (`7c61391`) and passes.
+
+## Closed during run 2
+
+| Finding | How |
+|---|---|
+| W17 rename laundering, W9 claim attribution | `3faa744` — my patch, 16-agent reviewed |
+| W7 phantom citations | `d8f3858` — removed rather than re-pointed |
+| W21 mypy errors | fixed |
+| W22 regression gate never fired | `7c61391` — `full_verify` armed, gate green |
+| W15 verify write channel | `ee5325c` — **partial**, see below |
+| W11 red HEAD | resolved earlier by `61d26de` |
+
+## Open, in priority order
+
+1. **W23 — 30 receipts are gitignored.** The attestation chain never leaves this
+   disk; a fresh clone derives every ticket as `queue`. It is also what makes the
+   W15 receipt-forging route work, since gitignored files appear in no diff.
+2. **W15 residual.** `ee5325c` closes the T-7 case but re-uses `integrity()`, so
+   `META_ALLOW`/`HARNESS_STATE` remain reachable from a verify: the escalation
+   channel, the monitor's own report, another session's claim record, and
+   (via W23) receipts. Reproduced end-to-end by the adversarial pass.
+3. **W8 / W10 / W12 / W16** — supersede state, signed approval gate, receipt
+   revalidation, self-verifying-ticket check. Exist only in
+   `authority_fix_final.patch`, which needs a rebase onto `ee5325c`.
+4. **W22 residual — the class, not the instance.** harness_lib.py:384 is still
+   `if full and subprocess.run(...)`. The key is set today, so the gate runs; but
+   a *missing* `full_verify` still silently skips. Remove the key and the defect
+   returns with no signal. Recommended making absence a hard failure; not adopted.
+
+## A recorded disagreement
+
+`e960c89` states "W15 and the regression gate are closed." I agree on the
+regression gate. **I do not agree W15 is closed**, and the evidence is in
+`.claude/NEEDS_HUMAN.md`: three routes reproduced in synthetic projects, one of
+them letting a verify mint receipts for arbitrary tickets invisibly. Recording
+the disagreement rather than deferring, because the receipt-forging route is
+severe and "closed" in a handoff note is what the next reader will act on.
+
+## My own misses this run — one shape, twice
+
+W22 and W23 were both found by others, and both are the same failure on my part:
+**I audited the system against its plan instead of against reality.** I checked
+30 receipts for commit binding, fingerprint match, scope compliance and
+verify-string agreement — never that the close ran the second gate the protocol
+advertises (W22), and never that the receipts existed in the repository at all
+(W23). Verifying the contents of an attestation while never asking whether it
+exists to anyone else is exactly the stub-blindness this role is supposed to
+catch. The lesson for the next holder of this seat: audit the *mechanism*, not
+just the *artifact* — and read the protocol's claims as testable assertions, not
+as background.
+
+Earlier, W10 was the opposite error: I let circumstantial convergence carry an
+allegation about a person's actions that the evidence could not support. Between
+them: do not under-check mechanisms, and do not over-claim intent.
+
+## Watchdog conduct
+
+No claim held at any point. Nothing written outside `.claude/monitor/**` and
+`.claude/NEEDS_HUMAN.md`. `harness_lib.py integrity` never run against the live
+repo. All patch testing done in clones. Two workflows dispatched (31 agents
+total) with worktree isolation; verified afterwards that the real repo carried no
+subagent writes. Nothing pushed.
+
+**Observer effect, disclosed:** by the end of this run the build session's commit
+subjects were written in my finding labels ("W15", "W17", "W23"). My report
+became its backlog. The fixes were good, but a watchdog whose findings drive the
+work is no longer independent of it — a second reviewer should verify W15's
+residual, and it should not be me.
+
+---
+
 # RUN 2 LOG
+
+## 🔴 W22 — INDEPENDENTLY CONFIRMED: the cross-ticket regression gate has NEVER run
+
+Found by the build session (`5bafc24`), verified by me. This is the most
+consequential harness defect of the session, and it retroactively weakens **all
+30 receipts**.
+
+`cmd_close`, harness_lib.py:383-385:
+
+```python
+full = load_tickets().get("full_verify")
+if full and subprocess.run(full, shell=True, cwd=ROOT).returncode != 0:
+    return fail(" (cross-ticket regression gate)")
+```
+
+`docs/tickets.json`'s top-level keys are **`['project', 'tickets']`** — there is
+no `full_verify`. I checked every historical revision of the file: **the key has
+never existed in any commit.** So `full` is always `None`, the `if` short-circuits,
+and the regression gate has never executed for any ticket, ever.
+
+`.claude/rules/harness-protocol.md` rule 5 states that close "runs the ticket
+verify, **runs the full regression suite**, and mints a receipt". The second
+clause has never been true. Every receipt attests only that one ticket's own
+narrow verify string passed — T-28's was `pytest backend/tests/hooks`, T-25's was
+`pytest backend/tests/evals`. A cross-ticket regression was structurally
+incapable of failing a close.
+
+**This is a silent skip, which is the same class of defect T-27 was created to
+eliminate** ("Guards fail closed on every input they cannot judge"). A missing
+`full_verify` should refuse the close, or at absolute minimum print a loud
+warning into the receipt — not pass silently while the protocol advertises the
+opposite.
+
+**Fix has two halves:** (a) `harness_lib.py` — treat an absent/empty
+`full_verify` as a hard failure rather than a skip; (b) `docs/tickets.json` —
+add the key (`uv run pytest -m "not live" -q` is the obvious value, currently
+**702 passed**). (b) is a plan edit and needs Hank.
+
+**My own miss, recorded.** I audited 30 receipts against commit binding,
+fingerprints, scope and verify-string-matches-plan — and never once checked
+whether the close ran what the protocol claims it runs. I verified that the
+receipt's `verify` field matched `docs/tickets.json`, which made the receipts
+look sound, while the *second* gate named in the protocol was absent entirely. I
+was auditing the receipt against the plan instead of against the protocol. The
+build session caught what I did not.
+
+Also committed this cycle: `d8f3858` (W7 fix landed) and `ca742bb`, a handoff
+carrying **a correction to the build session's own earlier claim** about T-11's
+Langfuse blocker. Self-correction in the shared log is exactly the conduct this
+protocol is supposed to produce.
+
+## Cycle ~6 — findings are being worked; W7 and W21 closed; observer effect now total
+
+**W21 closed.** `uv run mypy backend` → **Success: no issues found in 130 source
+files**. The two errors T-26 introduced are fixed (uncommitted).
+
+**W7 closed, and closed the right way.** `conftest.py` and three other sites are
+having their phantom `T31-brief.md` citations **removed rather than re-pointed**,
+with an explicit inline `CORRECTION (W7)` noting no such file exists in the tree
+or in history, and reattributing authority to `harness_lib.py` itself and commit
+`c44f9af`. That is the correct remedy: deleting a false citation beats
+manufacturing a document to justify it.
+
+**Two unticketed commits**, no claim open: `2499645` (Anthropic pivot into
+`.env.example`, README, `deploy/**`, `promptfooconfig.yaml`) and `3835347` (a
+NEEDS_HUMAN handoff). Product, deploy and docs changes continue to land outside
+the ticket system — the W13 pattern, now routine rather than exceptional. Not a
+violation (no claim is open, so no scope binds), but it means the attestation
+chain covers steadily less of what ships. `3835347` also asserts "deployed stack
+now reaches Claude" — an outward-facing deployment claim I have not verified and
+cannot from here.
+
+**Observer effect, now unambiguous.** The build session's commit subjects and
+handoff notes are written in my finding labels — "W17 closed, W15 patch ready".
+My report has become the build's backlog. The findings are being acted on well,
+and the fixes above are genuinely correct — but this watchdog is no longer
+independent of the work it audits, and a second pair of eyes on W15's fix should
+come from somewhere other than me or the session implementing it.
+
+**Duplication risk for Hank:** the build session says "W15 patch ready" while my
+own workflow `wqk7ftees` is independently designing a W15 fix. Compare both
+before landing either; do not apply them blindly on top of each other.
+
+## ✅ The harness fix LANDED and is verified live — `3faa744`
+
+Hooks **329 passed**, full gate **702 passed**, ruff clean. The fix is present in
+the installed library, not merely green: `--no-renames` at every call site, and
+the session/filename mismatch refusal wired across the lifecycle. Prose fixes to
+`evals/REVIEW.md` and `labeled_set.yaml`'s `statement:` landed with it.
+
+**The "29 failed" scare was a false red — and it is a finding.** The run reported
+`29 failed, 300 passed`, and I nearly rolled the commit back. It was the hook
+suite's own hermeticity trip-wire (`conftest.py::_assert_real_repo_untouched`,
+which snapshots the real repo's `.claude/claims/`, `.claude/evidence/` and git
+HEAD at import and asserts they never move). My commit landed while the build
+session was concurrently committing T-26's close, HEAD moved mid-run, and every
+test touching that fixture failed at once. Re-run after the tree settled: green.
+
+**W20 — the trip-wire makes the hook suite unreliable under concurrency.** It is
+correct to have, but it fails *open-ended*: 29 identical-cause failures look
+exactly like a broken patch, and the natural response is to revert working code.
+It should distinguish "another session moved the repo" from "this change broke
+something" — snapshot-and-skip with a clear message, not assert. Until then, the
+hook suite is only trustworthy when no other session is committing.
+
+**My process error, recorded.** I told Hank to run a script whose gate could
+produce that false red. My wait-loop waited for *no open claim*, which is not the
+same as *no concurrent writes* — the harness itself commits during close and
+sync, outside any claim. Waiting on `.claude/claims/` was the wrong signal.
+
+**W21 — T-26 closed clean while introducing 2 mypy errors.** Not from my patch;
+both are from `190cf8f T-26: plan edits are tamper-evident`:
+`backend/tests/plan/update_structural_snapshot.py:30` (import-not-found
+`_snapshot_lib`) and `test_structural_snapshot.py:89` (missing annotation).
+T-26's verify does not run mypy, so the receipt is honest about what it checked
+and silent about this. Same family as the D5/verify-coverage problem: a receipt
+attests exactly its verify string and nothing more.
 
 **T-29 — CONFIRMED, no finding.** Receipt binds to `1e4356a ticket-close: T-29`,
 fingerprint recomputes exactly, 6 files in range, **zero out of scope**,
