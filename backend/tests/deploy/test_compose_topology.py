@@ -30,6 +30,7 @@ COMPOSE_IDS = [p.relative_to(REPO_ROOT).as_posix() for p in COMPOSE_FILES]
 
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
 CLOUDFLARED_DOC = REPO_ROOT / "deploy" / "cloudflared" / "README.md"
+PORTAL_NGINX_CONF = REPO_ROOT / "deploy" / "portal" / "nginx.conf"
 COMPOSE_WRAPPER = REPO_ROOT / "deploy" / "compose.sh"
 
 # Pinned by the owner 2026-08-16 and given verbatim to Track A, which owns
@@ -259,8 +260,8 @@ def test_exactly_one_process_owns_schema_and_seeding_in_the_production_stack() -
 
 
 # --------------------------------------------------------------------------
-# F2 — the cloudflared named tunnel (ADR-005). UNVERIFIED against a live
-# tunnel; these assertions are about wiring, not about reachability.
+# F2 — the cloudflared named tunnel (ADR-005). Verified live 2026-08-17, but
+# not by anything below: these assertions are about wiring, not reachability.
 # --------------------------------------------------------------------------
 
 
@@ -309,25 +310,85 @@ def test_the_tunnel_token_has_no_default_and_is_never_committed() -> None:
         )
 
 
-def test_the_tunnel_terminates_at_the_backend_service_not_a_droplet_port() -> None:
+def _documented_ingress_target() -> str:
+    """The `URL` cell of the ingress-rule table in `deploy/cloudflared/README.md`.
+
+    The routing lives in the Cloudflare dashboard, so that table IS the
+    committed record of it. Reading the cell rather than searching the whole
+    file is what makes the assertion below able to fail.
+    """
+    rows = [
+        [cell.strip().strip("*` ") for cell in line.strip().strip("|").split("|")]
+        for line in CLOUDFLARED_DOC.read_text().splitlines()
+        if line.strip().startswith("|")
+    ]
+    urls = [cells[1] for cells in rows if len(cells) == 2 and cells[0].upper() == "URL"]
+    assert len(urls) == 1, (
+        f"expected exactly one `URL` row in deploy/cloudflared/README.md's "
+        f"ingress table; found {urls}"
+    )
+    return urls[0]
+
+
+def test_the_tunnel_terminates_at_a_compose_service_not_a_droplet_port() -> None:
     """ADR-005's whole point: no inbound port is opened on the droplet.
 
     The ingress rule lives in the Cloudflare dashboard (token-managed tunnel),
-    so the committed record of it is `deploy/cloudflared/README.md`. This
-    binds that record to the compose file, so renaming the backend service or
-    changing its container port without updating the runbook fails here.
+    so the committed record of it is `deploy/cloudflared/README.md`. This binds
+    that record to the compose file, so renaming a service or changing a
+    container port without updating the runbook fails here.
+
+    The target is **`portal:80`**, not `backend:8000`. That is an owner decision
+    of 2026-08-17 (`docs/STATE.md`, `docs/BUILD-PLAN.md` §10.6) and it is
+    verified live: `GET https://cxforge.hankholcomb.com/` returns the portal SPA
+    index, which a uvicorn origin cannot serve. The earlier `backend:8000` was
+    never run; it is what produced a 502 for hours (the README's history
+    section). This test used to assert that wrong string, and passed, because
+    `backend:8000` still legitimately appears in the doc as nginx's upstream --
+    so it could no longer detect the drift it exists to detect.
     """
     doc = CLOUDFLARED_DOC.read_text()
     services = _services(DEPLOY_COMPOSE)
-    assert "backend" in services
-    assert "backend:8000" in doc, (
-        "deploy/cloudflared/README.md must record the exact ingress target "
-        "the owner has to configure (OA-3 step 3): backend:8000"
+
+    # Hop 1: the connector dials the portal container's nginx. Read the URL out
+    # of the ingress-rule TABLE, not with `in doc` — both service:port strings
+    # appear in the prose around it, which is how the old assertion managed to
+    # keep passing after the rule it describes had changed.
+    assert "portal" in services
+    assert _documented_ingress_target() == "portal:80", (
+        f"deploy/cloudflared/README.md's ingress table records "
+        f"{_documented_ingress_target()!r}; the owner configured portal:80 "
+        f"(OA-3 step 3)"
     )
+    portal_ports = [str(port) for port in services["portal"].get("ports", [])]
+    assert any(port.endswith(":80") for port in portal_ports), (
+        f"the portal container no longer listens on 80 ({portal_ports}); the "
+        f"tunnel's documented ingress target is now wrong"
+    )
+    assert "portal:8080" not in doc, (
+        "the documented target must be the CONTAINER port, not the published "
+        "${PORTAL_PORT} — naming the host port would undo ADR-005's guarantee "
+        "that no inbound droplet port is needed"
+    )
+
+    # Hop 2: that nginx is only a valid tunnel origin because it fronts the
+    # backend as well as the SPA — one hostname for UI, API and webhook.
+    nginx = PORTAL_NGINX_CONF.read_text()
+    assert "backend:8000" in nginx
+    assert "backend:8000" in doc, (
+        "the doc must still record nginx's upstream, or the second hop of the "
+        "public path is written down nowhere"
+    )
+    for location in ("/api/", "/webhooks/", "/health"):
+        assert f"location {location}" in nginx, (
+            f"{PORTAL_NGINX_CONF.name} no longer proxies {location}, so "
+            f"portal:80 is no longer a complete public origin"
+        )
+    assert "backend" in services
     healthcheck = str(services["backend"].get("healthcheck", {}))
     assert "8000" in healthcheck, (
-        "the backend no longer answers on 8000; the tunnel's documented "
-        "ingress target is now wrong"
+        "the backend no longer answers on 8000; nginx's documented upstream is "
+        "now wrong"
     )
 
 
@@ -341,19 +402,37 @@ def test_env_example_declares_the_tunnel_variables_empty() -> None:
         )
 
 
-def test_the_tunnel_doc_still_says_it_is_unverified() -> None:
+def test_the_tunnel_doc_records_the_live_verification_with_a_date() -> None:
     """`.claude/rules/build-protocol.md` rule 8, made mechanical.
 
-    Nothing about this tunnel has been run. When OA-3 lands and someone
-    actually brings it up and reads the effect back, deleting this caveat is
-    the deliberate act of recording that — not a tidy-up somebody does on the
-    way past.
+    This asserted `UNVERIFIED AGAINST A LIVE TUNNEL` was present, so that the
+    caveat could only go away as a deliberate act by someone holding evidence
+    rather than as a tidy-up on the way past. That has now happened: the tunnel
+    was brought up under W3-G3 and read back from outside the droplet
+    (`/` 200 serving the portal SPA, `/health` 200, `/api/*` 401,
+    `POST /webhooks/zendesk` 401 unsigned, all with `server: cloudflare`), and a
+    signed Zendesk webhook drove a complete agent run. Keeping the marker would
+    now be the false claim.
+
+    So the contract flips rather than disappearing: the doc must state the
+    verification **and date it**, and must not carry the stale caveat. If the
+    tunnel ever goes back to unverified, restoring the marker is again a
+    deliberate act — this test then goes red until someone makes it.
     """
     doc = CLOUDFLARED_DOC.read_text()
-    assert "UNVERIFIED AGAINST A LIVE TUNNEL" in doc, (
-        "deploy/cloudflared/README.md dropped its unverified marker. Delete it "
-        "only alongside evidence that the tunnel carries traffic — a request "
-        "from outside the droplet that reached the app."
+    assert "UNVERIFIED AGAINST A LIVE TUNNEL" not in doc, (
+        "deploy/cloudflared/README.md is back to claiming the tunnel is "
+        "unverified. If that is true again, say so here deliberately and update "
+        "this test; if it is not, the marker is a stale caveat."
+    )
+    assert re.search(r"\bVERIFIED AGAINST A LIVE TUNNEL,\s*20\d\d-\d\d-\d\d", doc), (
+        "deploy/cloudflared/README.md must state, with a date, that the tunnel "
+        "has been verified live — the claim rule 8 requires reading back."
+    )
+    assert "OUTSIDE the droplet" in doc, (
+        "the doc dropped the standard the verification has to meet: a request "
+        "from outside the droplet that reaches the app. Checks 1 and 2 were "
+        "both green while check 3 returned 502 for hours."
     )
 
 

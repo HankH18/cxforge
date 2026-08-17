@@ -1,71 +1,26 @@
 # Cloudflare named tunnel — the committed configuration
 
-**Status: UNVERIFIED AGAINST A LIVE TUNNEL.** Written 2026-08-16 for work
-package W1-F2 (ADR-005).
+**Status: VERIFIED AGAINST A LIVE TUNNEL, 2026-08-17.** Written 2026-08-16 for
+work package W1-F2 (ADR-005); brought up and read back under W3-G3. The tunnel
+carries real traffic, including a Zendesk webhook that drove a complete agent
+run.
 
-> ### W3-G3, 2026-08-17: the checks below HAVE now been run. Check 3 returns 502.
->
-> The marker above stays, because it means exactly what it says and is still
-> true: **no request from outside the droplet has reached the app.** What has
-> changed is that this is no longer untested — it is tested and failing, with
-> the cause identified, and the cause is not in this repo.
->
-> | Check | Result |
-> |---|---|
-> | 1. `cloudflared` connects | **Yes.** 4 QUIC connections registered (`ewr01/08/11/12`), all connectivity pre-checks PASS, `GET http://cloudflared:2000/ready` → `{"status":200,"readyConnections":4,...}` |
-> | 2. Connector registered with Cloudflare | **Yes** — implied by 4 registered connections and by Cloudflare pushing configuration down to it |
-> | 3. `curl $PUBLIC_BASE_URL/health` from outside | **502** |
->
-> **Why 3 fails.** The configuration Cloudflare delivers with the token names
-> the origin as **`https://backend:8000`**, from the connector's own log:
->
-> ```
-> INF Updated to new configuration config="{\"ingress\":[
->       {\"hostname\":\"cxforge.hankholcomb.com\",\"service\":\"https://backend:8000\"},
->       {\"service\":\"http_status:404\"}],\"warp-routing\":{\"enabled\":false}}" version=1
-> ```
->
-> The table further down this page — and OA-3 step 3, which the owner followed
-> — say Service type **`HTTP`**. `backend` is uvicorn with no TLS, so the
-> connector's handshake fails. Measured from inside the compose network:
->
-> ```
-> curl    http://backend:8000/health  ->  200
-> curl -k https://backend:8000/health ->  000   curl: (35) TLS connect error:
->                                                error:0A00010B:SSL routines::wrong version number
-> ```
->
-> **Fix: change the dashboard's Service type from `HTTPS` to `HTTP`** on the
-> `cxforge.hankholcomb.com` public hostname. No redeploy needed — the connector
-> reloads remote configuration in seconds. `docs/OWNER-ACTIONS.md` OA-3 carries it.
->
-> **Do not try to fix it from this directory.** Two attempts are recorded so
-> they are not repeated: there is no Cloudflare **API** token on the build
-> machine (only `CLOUDFLARE_TUNNEL_TOKEN`, which is not one), and a connector
-> started with `run --url http://backend:8000` logs its `--url` setting and then
-> immediately overrides it with the remote `https://backend:8000` — remote
-> configuration wins for a token-managed tunnel, exactly as the section below
-> says it does.
+The check that counts — a request from **outside** the droplet that reaches the
+app (last section, check 3). Every response below came back through the
+Cloudflare edge (`server: cloudflare`, `cf-ray` present):
 
-**OA-3 has since been completed by the owner**, so the earlier version of this
-paragraph ("no tunnel exists, the token is absent") is out of date. What is
-true as of 2026-08-16, measured rather than assumed:
-
-| Claim | Evidence |
+| Request | Result |
 |---|---|
-| The token exists | `.env` holds a 184-character `CLOUDFLARE_TUNNEL_TOKEN` |
-| The hostname exists | `PUBLIC_BASE_URL=https://cxforge.hankholcomb.com`; `dig @1.1.1.1 cxforge.hankholcomb.com` → Cloudflare anycast (`172.67.136.113`, `104.21.7.150`) |
-| The edge answers | `curl https://cxforge.hankholcomb.com/health` → **`HTTP/2 502`, `server: cloudflare`** |
-| The compose file parses | `docker compose -f deploy/docker-compose.yml config` → exit 0 |
+| `GET /` | **200**, `text/html` — the portal SPA index |
+| `GET /health` | **200** `{"status":"ok"}` — the backend, through nginx |
+| `GET /api/metrics` | **401** without a token |
+| `POST /webhooks/zendesk` unsigned | **401** `{"detail":"missing signature headers"}` |
 
-The 502 is the **correct and expected** answer right now: Cloudflare terminates
-TLS and then fails to reach an origin, because the `cloudflared` service below
-has never been started and the droplet has not been redeployed. It is evidence
-that DNS and the edge are wired; it is **not** evidence that this container
-works, that the tunnel connects, or that `backend:8000` is reachable.
-
-Nothing on this page has been run. The marker at the top stays until someone
-performs the check in the last section and reads a `200` back.
+The supporting facts, also measured rather than assumed: `.env` holds a
+184-character `CLOUDFLARE_TUNNEL_TOKEN`; `PUBLIC_BASE_URL=https://cxforge.hankholcomb.com`
+resolves to Cloudflare anycast; the connector registers 4 QUIC connections
+(`ewr01/08/11/12`) and `GET http://cloudflared:2000/ready` returns
+`{"status":200,"readyConnections":4,...}`.
 
 ---
 
@@ -89,23 +44,66 @@ plus a real `ingress:` block), that config belongs in this directory and the
 service's `command` changes to `tunnel --config /etc/cloudflared/config.yml
 run`. That would be a deliberate change to ADR-005, not a tidy-up.
 
-## The ingress rule the owner must set (OA-3 step 3)
+## The ingress rule (OA-3 step 3)
 
-Completed by the owner; recorded here because the routing lives in the
-Cloudflare dashboard, where this repo cannot assert on it.
+Set by the owner; recorded here because the routing lives in the Cloudflare
+dashboard, where this repo cannot assert on it.
 
 | Field | Value |
 |---|---|
 | Tunnel name | `cxforge` |
 | Public hostname | `cxforge.hankholcomb.com` |
 | Service type | `HTTP` |
-| **URL** | **`backend:8000`** |
+| **URL** | **`portal:80`** |
 
-`backend:8000` is the compose **service name and container port**, resolved by
-`cloudflared` on the `othram-deploy` network. It is not the droplet's
-published `${BACKEND_PORT}` and not an IP. That is the whole point of the
-tunnel: **no inbound port on the droplet is opened**, and the origin is only
-reachable from inside the compose network.
+`portal:80` is the compose **service name and container port**, resolved by
+`cloudflared` on the `othram-deploy` network. It is not the droplet's published
+`${PORTAL_PORT}` (8080) and not an IP. That is the whole point of the tunnel:
+**no inbound port on the droplet is opened**, and the origin is only reachable
+from inside the compose network.
+
+**Not `backend:8000`, which is what this file and OA-3 originally specified.**
+The `portal` container's nginx (`deploy/portal/nginx.conf`) serves the built SPA
+at `/` and proxies `/api/`, `/webhooks/` and `/health` to `backend:8000` on the
+same network. So `portal:80` gives **one hostname for everything** — UI, API and
+the Zendesk webhook — where `backend:8000` gives an origin that serves the API
+and cannot serve the UI at all. The only reason two hostnames were ever on the
+table is that this page said `backend:8000` before anyone had run it.
+
+Two things the change does **not** touch:
+
+- **The Zendesk webhook URL.** Still `${PUBLIC_BASE_URL}/webhooks/zendesk`.
+  Checked *before* the change was recommended, not after, because the HMAC
+  signature is computed over the **raw body** and a proxy that re-serialised it
+  would break every webhook silently: a payload signed with the server's own
+  `ingress.signature.compute_signature` returned **202 through nginx** and
+  **202 direct to the backend**.
+- **ADR-005's guarantee.** No droplet port is published to the internet either
+  way; only the container port the connector dials changes.
+
+### History: the 502, and why the fix was not `HTTP → backend:8000`
+
+For several hours the hostname returned **502**. Cloudflare was pushing down
+`service: https://backend:8000` — an `https://` origin at plain-HTTP uvicorn.
+From inside the compose network:
+
+```
+curl    http://backend:8000/health  ->  200
+curl -k https://backend:8000/health ->  000   curl: (35) TLS connect error:
+                                               error:0A00010B:SSL routines::wrong version number
+```
+
+The narrow repair was to flip the dashboard's Service **type** to `HTTP`; the
+owner repointed the **URL** to `portal:80` in the same edit, which fixes the
+scheme mismatch and collapses UI, API and webhook onto one hostname. Full record:
+`docs/OWNER-ACTIONS.md` OA-3 and `docs/BUILD-PLAN.md` §10.6.
+
+Recorded so it is not retried from this directory: there is no Cloudflare **API**
+token on the build machine (`CLOUDFLARE_TUNNEL_TOKEN` is not one), and a
+connector started with `run --url http://backend:8000` logs that `--url` and
+then immediately overrides it with the remote configuration — remote
+configuration wins for a token-managed tunnel, exactly as the section above says
+it does.
 
 ## The environment contract
 
@@ -150,7 +148,7 @@ deliberately, not a tidy-up.
 reads it. It is the single place the public origin is recorded, and the
 Zendesk webhook endpoint is `${PUBLIC_BASE_URL}/webhooks/zendesk`.
 
-## Bringing it up (W3-G3 — not done)
+## Bringing it up
 
 ```bash
 # On the droplet, from the repo root. The source step is not optional:
@@ -185,11 +183,10 @@ curl -sS -o /dev/null -w '%{http_code}\n' "$PUBLIC_BASE_URL/health"     # expect
 ```
 
 Check 3 passing means the hostname resolves, Cloudflare terminates TLS, the
-tunnel is connected, and `backend:8000` answered. Nothing less than that
-should be written down as "the tunnel is up".
+tunnel is connected, and `portal:80` answered. Nothing less than that should be
+written down as "the tunnel is up".
 
-**Run 2026-08-17 (W3-G3): checks 1 and 2 pass, check 3 returns 502** — see the
-banner at the top of this file for the connector log, the origin-scheme
-mismatch that causes it, and the one-field dashboard fix. The distinction this
-section draws is exactly the one that mattered: 1 and 2 were both green while
-the only check that counts was red.
+**Run 2026-08-17 (W3-G3): all three pass** — the responses are at the top of
+this file. The distinction this section draws is exactly the one that mattered:
+for several hours 1 and 2 were both green while the only check that counts
+returned 502, and only check 3 could tell the difference.
