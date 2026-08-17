@@ -12,11 +12,29 @@
 #   5. GET /api/metrics accepts a request with the correct X-Portal-Token
 #      as 200.
 #
+# READ THIS BEFORE TRUSTING A PASS FROM THE FIVE ASSERTIONS ABOVE.
+# Every one of them is a LIVENESS check. Not one makes a model call, writes
+# a row, or touches the agent path — which is exactly why this script
+# reported 4/4 for weeks against a stack with no ANTHROPIC_API_KEY at all,
+# and still reports 4/4 against a droplet whose webhook accepts events and
+# never starts a run (docs/STATE.md §6.2). A check that cannot fail when
+# the product is broken is worse than no check: it manufactures confidence.
+# The bare PASS line at the bottom of this script says so out loud, and
+# says it every time, rather than leaving the caller to remember it.
+#
+# --deep (W3-G2) is the check that CAN fail when the product is broken. It
+# POSTs a correctly HMAC-signed synthetic webhook at the real endpoint and
+# then waits for the effect — a NEW `runs` row, read back through the
+# deployed portal API — so it exercises ingress -> Redis -> the arq worker
+# -> run_agent for real. See scripts/verify_core_loop.py's module docstring
+# for what it asserts, how it rules out a stale row, and what it needs.
+#
 # Every assertion below either passes or the script exits non-zero with a
 # specific message — there is no "skip and continue" path. A precondition
-# that can't be satisfied (e.g. PORTAL_TOKEN unset) is a hard failure, not
-# a silently-skipped check, because a skip that still exits 0 would make
-# this script lie about what it verified.
+# that can't be satisfied (e.g. PORTAL_TOKEN unset, or --deep with no
+# signing secret) is a hard failure, not a silently-skipped check, because
+# a skip that still exits 0 would make this script lie about what it
+# verified.
 #
 # Local mode (DEPLOY_HOST empty): brings the deploy stack up on this
 # machine with its own docker-compose project (`othram-deploy`, pinned in
@@ -30,6 +48,18 @@
 # against that host over the network. Does not build, start, or stop
 # anything — a remote deploy is assumed to already be running (see
 # docs/deploy.md for how to put one there).
+#
+# Usage:
+#   bash scripts/verify_deploy.sh                 # REMOTE (DEPLOY_HOST), liveness only
+#   bash scripts/verify_deploy.sh --local         # LOCAL docker-compose stack
+#   CXFORGE_VERIFY_TICKET_ID=<id> \
+#     bash scripts/verify_deploy.sh --deep        # liveness + the core loop
+#
+# --deep is NOT read-only: it POSTs a real webhook, which makes the
+# deployment run a real agent turn (model tokens spent, a real reply
+# posted on that ticket) and write rows. It removes its own rows when
+# CXFORGE_VERIFY_DB_URL points at the deployment's database, and says
+# loudly that it could not when that is absent.
 
 set -euo pipefail
 
@@ -38,14 +68,29 @@ COMPOSE_FILE="$REPO_ROOT/deploy/docker-compose.yml"
 CLEANUP_DONE=0
 
 # --- CLI flags -----------------------------------------------------------
-# Only one right now: --local, the explicit opt-in required to run the
-# LOCAL (docker-compose-on-this-machine) verification path. See the
-# entrypoint at the bottom of this file for why this can't default on.
+# --local: the explicit opt-in required to run the LOCAL
+#   (docker-compose-on-this-machine) verification path. See the entrypoint
+#   at the bottom of this file for why this can't default on.
+# --deep:  the explicit opt-in required to run the core-loop check (W3-G2).
+#   Opt-in rather than default for two reasons, in order of weight.
+#   (1) It is not free or side-effect-free: it drives a real agent run, so
+#   it spends real model tokens and posts a real reply on the helpdesk
+#   ticket it is pointed at. (2) It needs preconditions the four liveness
+#   assertions do not — a signing secret and a real, fetchable ticket id —
+#   and turning it on by default would mean either a hard failure for
+#   every existing caller, or a silent skip. Both are worse than a flag.
+#   What is NOT acceptable, and is why the PASS lines below were changed
+#   in the same commit: letting a run WITHOUT this flag read as though the
+#   core loop had been verified.
 LOCAL_MODE_OPT_IN=0
+DEEP_OPT_IN=0
 for arg in "$@"; do
   case "$arg" in
     --local)
       LOCAL_MODE_OPT_IN=1
+      ;;
+    --deep)
+      DEEP_OPT_IN=1
       ;;
     *)
       echo "[verify_deploy] unrecognized argument: $arg" >&2
@@ -106,6 +151,23 @@ if [ -z "$PORTAL_TOKEN" ]; then
   fail "PORTAL_TOKEN is empty. Set it in .env (repo root) before running this script — the auth assertions below cannot run without it, and a skipped assertion is not a pass."
 fi
 
+# --- deep-check preconditions ------------------------------------------
+# Checked HERE, before a single request goes out, and as hard failures.
+# The alternative — discovering halfway through that the deep check cannot
+# run and continuing anyway — is the "skip that still exits 0" this
+# script's header refuses to have.
+DEEP_CHECK_SCRIPT="$REPO_ROOT/scripts/verify_core_loop.py"
+if [ "$DEEP_OPT_IN" -eq 1 ]; then
+  if [ -z "${ZENDESK_WEBHOOK_SIGNING_SECRET:-}" ]; then
+    fail "--deep needs ZENDESK_WEBHOOK_SIGNING_SECRET to sign the synthetic webhook with, and it is empty. It must be the SAME secret the deployment under test was started with, or the endpoint answers 401. Set it in .env (repo root). Refusing to skip the check and exit 0."
+  fi
+  if [ -z "${CXFORGE_VERIFY_TICKET_ID:-}" ]; then
+    fail "--deep needs CXFORGE_VERIFY_TICKET_ID: the id of a disposable helpdesk ticket the DEPLOYED agent can really fetch. A made-up id cannot work — agent.nodes.ingest's first statement is port.fetch_ticket(), so a 404 there fails the run before any 'runs' row is written, and this check would then fail identically whether or not the core loop is connected. See scripts/verify_core_loop.py's module docstring."
+  fi
+  [ -f "$DEEP_CHECK_SCRIPT" ] || fail "--deep was passed but $DEEP_CHECK_SCRIPT does not exist."
+  command -v uv >/dev/null 2>&1 || fail "--deep needs 'uv' on PATH to run $DEEP_CHECK_SCRIPT."
+fi
+
 # --- HTTP assertion helpers -------------------------------------------
 
 # assert_status METHOD URL EXPECTED_STATUS [EXTRA_CURL_ARGS...]
@@ -147,6 +209,30 @@ run_assertions() {
 
   echo "[verify_deploy] 4/4: GET /api/metrics with X-Portal-Token -> 200"
   assert_status GET "$base/api/metrics" 200 -H "X-Portal-Token: $PORTAL_TOKEN"
+
+  if [ "$DEEP_OPT_IN" -eq 1 ]; then
+    run_deep_check "$base"
+  else
+    echo "[verify_deploy] deep core-loop check: NOT RUN (--deep not passed). The four assertions above are liveness only — they pass against a deployment that answers HTTP and never runs an agent."
+  fi
+}
+
+# --- deep core-loop check (W3-G2) --------------------------------------
+#
+# Delegated to Python rather than written in bash, for one reason that
+# matters: it signs the request by importing ingress.signature — the SAME
+# module the server verifies with. An openssl one-liner here would be a
+# private second copy of the HMAC recipe, and the two would be free to
+# drift; the check would then be testing its own copy, not the server's.
+# (ingress/signature.py's own docstring records what that class of drift
+# already cost once: a base64-decoded key that failed every real request
+# with 401 while the unit tests, which minted their own base64-valid
+# secret, stayed green.)
+run_deep_check() {
+  local base="$1"
+  echo "[verify_deploy] DEEP: POST a signed synthetic webhook and wait for a NEW runs row."
+  ( cd "$REPO_ROOT" && uv run python "$DEEP_CHECK_SCRIPT" --base-url "$base" ) \
+    || fail "the deep core-loop check did not pass against $base (its own output above says why). The four liveness assertions passing while this fails is the documented signature of a severed core loop — docs/STATE.md §6.2."
 }
 
 # --- local mode ----------------------------------------------------------
@@ -205,12 +291,29 @@ verify_remote() {
 # with no --local flag must be a hard failure, not a silent fall-through
 # to LOCAL that still prints PASS.
 
+
+# Every PASS below is followed by a line saying what it does NOT cover.
+# That is not decoration. `docs/STATE.md §6.2` records that this script's
+# unqualified PASS is what carried the claim "the deploy works" for weeks
+# across a stack with a dead core loop — so the scope of a pass now travels
+# with the pass itself, on the next line, and cannot be left behind when
+# somebody quotes the green.
+scope_note() {
+  if [ "$DEEP_OPT_IN" -eq 1 ]; then
+    echo "[verify_deploy] SCOPE: liveness (4/4) AND the deep core-loop check — a signed webhook produced a new runs row on this deployment."
+  else
+    echo "[verify_deploy] SCOPE: liveness only. The core loop (signed webhook -> Redis -> arq worker -> run_agent -> a runs row) was NOT exercised. Re-run with --deep to check it; until then this pass says the deployment answers HTTP, not that it works."
+  fi
+}
+
 if [ -n "$DEPLOY_HOST" ]; then
   verify_remote
   echo "[verify_deploy] PASS (REMOTE: verified droplet at $DEPLOY_HOST)"
+  scope_note
 elif [ "$LOCAL_MODE_OPT_IN" -eq 1 ]; then
   verify_local
   echo "[verify_deploy] LOCAL-MODE PASS — this verified the stack on THIS machine only, NOT a droplet. It does not satisfy T-11's droplet criterion."
+  scope_note
 else
   fail "DEPLOY_HOST is empty and --local was not passed. This script verifies a REMOTE droplet by default (T-11's droplet criterion can only be met by a remote-mode run). Pass --local only if you intentionally want to check the LOCAL docker-compose stack on this machine — that is NOT droplet evidence."
 fi

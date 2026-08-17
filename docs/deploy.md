@@ -341,6 +341,90 @@ passed** — its `PASS` line reads `(REMOTE: verified droplet at
 here: the local one (`--local`, `DEPLOY_HOST` empty) and the remote one
 against the live droplet.
 
+### `--deep`: the only assertion that can fail when the product is broken
+
+Read this before quoting a `PASS` from the four assertions above. **Every
+one of them is a liveness check.** Not one makes a model call, writes a
+row, or touches the agent path — which is why this script reported 4/4 for
+weeks against a stack with no `ANTHROPIC_API_KEY` at all, and why it still
+reports 4/4 against the droplet today, whose webhook accepts events and
+never starts a run (`docs/STATE.md §6.2`). A pass without `--deep` now
+prints a `SCOPE:` line saying exactly that, on the line after the `PASS`,
+so the scope travels with the claim.
+
+`--deep` (W3-G2) POSTs a correctly HMAC-signed synthetic webhook at the
+real endpoint and then waits for the **effect**: a NEW `runs` row, read
+back through the deployed portal API. It exercises ingress → Redis → the
+arq worker → `run_agent` for real, so it is the first check in this
+project that fails when the core loop is severed.
+
+```bash
+CXFORGE_VERIFY_TICKET_ID=<disposable-ticket-id> \
+CXFORGE_VERIFY_DB_URL=postgresql://…            # optional; see below \
+  bash scripts/verify_deploy.sh --deep
+```
+
+- **`CXFORGE_VERIFY_TICKET_ID` is required and cannot be invented.**
+  `agent.nodes.ingest`'s first statement is `port.fetch_ticket()`, so a
+  made-up id 404s and the run dies before any `runs` row exists — the
+  check would then fail identically whether or not the core loop is
+  connected, which is the exact ambiguity it exists to remove. Point it at
+  a **disposable** ticket the deployed agent can really fetch, and expect
+  the agent to post a real public reply on it. Per-invocation uniqueness
+  comes from a fresh `comment_id` plus a baseline snapshot of existing run
+  ids, not from this value, so the same ticket is meant to be reused.
+- **`--deep` is not read-only.** It spends model tokens and writes rows.
+- **`CXFORGE_VERIFY_DB_URL` is optional and is never defaulted from
+  `DATABASE_URL`.** It names the database of the *deployment under test*,
+  and is used only to delete the rows the check itself created and to
+  print the raw `runs` row it asserted on. In REMOTE mode `DATABASE_URL`
+  names your own dev Postgres on `localhost`, so a fallback would aim the
+  cleanup `DELETE`s at a completely different database. The droplet
+  publishes no host port for Postgres, so leave it empty there: the check
+  then prints the exact SQL and says out loud that it left its rows
+  behind.
+- **Missing preconditions are hard failures**, checked before the first
+  request goes out. A skipped check that still exits 0 would be the same
+  lie the four liveness assertions told for weeks.
+
+Measured 2026-08-17: against the droplet, assertions 1–4 pass and `--deep`
+**fails** — "no new runs row … after 240.9s" — because `161.35.2.250` still
+runs the pre-Wave-1 image. That is the check working, not the check being
+broken. W3-G3 is the redeploy that should turn it green.
+
+**Re-measured 2026-08-17 after W3-G3's redeploy. It did not turn green, and the
+reason is worth reading before you assume the deploy is broken.** Assertions
+1–4 still pass; `--deep` still fails with "no new runs row for ticket 3 after
+241.5s". But the droplet now runs the Wave-2 image and the loop is genuinely
+connected: the signed webhook returned `202 {"duplicate":false}`, the arq worker
+dequeued the job in **0.11 s**, and `run_agent` reached `nodes.ingest` — whose
+`fetch_ticket` got **401 `invalid_token`** from Zendesk, at which point ADR-003
+released the dedup row and the run ended with no `runs` row. The
+`ZENDESK_OAUTH_TOKEN` is a JWT that **expires about 25 minutes after issue**; it
+answered 200 twenty-five minutes earlier and expired 2m23s before the worker
+used it. So `--deep`'s failure message names the right symptom and the wrong
+cause here — check the worker's ERROR log, which is unambiguous, and see
+`docs/BUILD-PLAN.md §10.5` and `docs/OWNER-ACTIONS.md` OA-4.
+
+Two consequences for anyone running `--deep` against the droplet:
+
+- **Re-authorize immediately before the run, not before the build.** `--deep`
+  polls for up to 240s; a token issued 20 minutes earlier will expire mid-check.
+- **`CXFORGE_VERIFY_DB_URL` can be satisfied** even though the droplet publishes
+  no host port for Postgres, by tunnelling to the `db` container over SSH:
+  ```bash
+  ssh -f -N -L 15432:"$(ssh root@161.35.2.250 \
+      'docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}" othram-deploy-db')":5432 \
+    root@161.35.2.250
+  CXFORGE_VERIFY_TICKET_ID=<disposable-ticket-id> \
+  CXFORGE_VERIFY_DB_URL=postgresql://othram:othram@127.0.0.1:15432/othram \
+    bash scripts/verify_deploy.sh --deep
+  ```
+  Port 15432, not 5432, so it can never be confused with the dev Postgres that
+  `DATABASE_URL` names. Verified 2026-08-17: the tunnelled connection reported
+  `inet_server_addr = 172.18.0.2` and 44 `kb_chunks`, i.e. the droplet's
+  database and not the developer's. Close it afterwards.
+
 One trap worth knowing before you redeploy: §5's
 `set -a; source .env; set +a` is **required**, not decorative. Compose
 resolves every `${VAR}` in `deploy/docker-compose.yml` from the shell
