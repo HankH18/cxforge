@@ -7,7 +7,10 @@ hard gate on the next:
    anything else touches it. Missing/invalid signature -> 401, and neither
    the body nor the database is touched.
 2. Parse + validate the pinned payload (`ingress.models`). A malformed body
-   -> 400, never a 500.
+   -> 400, never a 500, and never silently: the rejection is logged at ERROR
+   because a 4xx'd delivery is a customer event Zendesk will not retry. An
+   **empty** `ticket_id` or `comment_id` counts as malformed — see
+   `ingress.models`' docstring for the live failure that made that a rule.
 3. Self-event drop: if `comment_author_id` matches `ZENDESK_AI_USER_ID`,
    accept-and-noop without writing to `tickets_seen`. This is loop-guard
    line two; line one is the Zendesk trigger's `tags not include
@@ -17,7 +20,8 @@ hard gate on the next:
    keyed on `(ticket_id, comment_id)`, checked via `cur.rowcount`. The
    uniqueness is enforced by the table's primary key, so two concurrent
    requests for the same event can never both "win" — there is no
-   read-then-write race window.
+   read-then-write race window. A delivery that loses is logged at WARNING:
+   discarding a duplicate is correct, doing it invisibly is not.
 5. Dispatch: enqueue a `worker.jobs.TicketJob` onto Redis (`cxforge:jobs`,
    arq task `run_ticket`) — but only when step 4 actually inserted a row,
    so a duplicate delivery enqueues nothing. The job carries `received_at`,
@@ -134,6 +138,24 @@ async def receive_zendesk_webhook(
     try:
         payload = ZendeskWebhookPayload.model_validate_json(raw_body)
     except ValidationError as exc:
+        # A rejected delivery is a customer event that will never run, and
+        # Zendesk does not retry a 4xx — so this path must not be silent. It
+        # was, until 2026-08-17: the only trace of a malformed delivery was a
+        # 400 body Zendesk showed in its own admin UI and nobody read.
+        #
+        # ERROR, not WARNING: ADR-003 makes the ERROR stream the signal that
+        # an event was lost, and this loses one. Signature verification runs
+        # BEFORE this point, so only genuinely-Zendesk-signed requests can
+        # reach here — an internet scanner cannot flood this logger.
+        #
+        # `include_input=False` keeps the raw body out of the log line: for a
+        # "not JSON at all" body the input is the whole request payload, which
+        # carries the customer's email and comment text.
+        reasons = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc']) or '<body>'}: {error['msg']}"
+            for error in exc.errors(include_url=False, include_input=False)
+        )
+        logger.error("rejected a malformed webhook delivery with 400: %s", reasons)
         # str(exc), not exc.errors(): a "the body isn't JSON at all" error
         # embeds the raw input (here, bytes) in its error dict, which isn't
         # JSON-serializable and would turn this 400 into a 500.
@@ -150,6 +172,27 @@ async def receive_zendesk_webhook(
             (payload.ticket_id, payload.comment_id),
         )
         is_new = cur.rowcount == 1
+
+    if not is_new:
+        # Discarding a delivery is a normal, correct thing to do — Zendesk
+        # retries, and the same event can legitimately arrive twice. It is not
+        # a normal thing to do SILENTLY. Until 2026-08-17 this branch produced
+        # no log line at all, which is how a broken comment-id placeholder
+        # turned every customer follow-up into a `202 {"duplicate": true}` that
+        # left no trace anywhere: the run that never happened looked exactly
+        # like a run that was correctly skipped.
+        #
+        # WARNING, not ERROR: ADR-003 makes the ERROR stream load-bearing as
+        # "a run failed", and a genuine retry is not a failure. But it is now
+        # visible, and it names the exact key that was collapsed onto — so a
+        # burst of these sharing one comment_id (especially an empty one)
+        # identifies the trigger misconfiguration on sight.
+        logger.warning(
+            "discarding webhook delivery for ticket %s (comment %s) as a duplicate "
+            "of an event already in tickets_seen; no run will be dispatched",
+            payload.ticket_id,
+            payload.comment_id,
+        )
 
     if is_new:
         # AFTER the insert and ONLY when it inserted (DESIGN §1.1). Ordered

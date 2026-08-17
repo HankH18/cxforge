@@ -110,8 +110,46 @@ authenticates as an OAuth 2.0 app instead.
    ```
 
    Authorization codes are single-use and short-lived, so exchange
-   immediately. The resulting token does not expire on its own (Zendesk
-   OAuth tokens are long-lived until revoked), so this is once per trial.
+   immediately.
+
+   > **CORRECTION (2026-08-17).** An earlier revision of this step said "the
+   > resulting token does not expire on its own (Zendesk OAuth tokens are
+   > long-lived until revoked), so this is once per trial." **That is false**,
+   > and believing it caused the same dead credential to be misdiagnosed as
+   > "someone forgot to re-authorize" three separate times.
+   >
+   > The access token is a JWT (`typ: at+jwt`, `alg: EdDSA`) whose payload
+   > carries exactly one claim, `exp`, **1800 seconds** after issue. Measured
+   > from `GET /api/v2/oauth/tokens/current.json` on the live account:
+   > `created_at 06:35:52` / `expires_at 07:05:52`. This is Zendesk's
+   > documented 30-minute default for OAuth clients created after
+   > 2026-04-30, and `expires_in` is **not** a lever — minting with 86400,
+   > 172800 and 604800 all produced a 1800-second token.
+   >
+   > So this is **not** once per trial. What makes it workable is the
+   > **refresh token**, which Zendesk returns alongside every access token
+   > (30-day life, and with plain `scope="read write"` — no `offline_access`
+   > scope is involved). `scripts/zendesk_oauth.py` now saves it as
+   > `ZENDESK_OAUTH_REFRESH_TOKEN`; the previous revision parsed only
+   > `access_token` out of the response and dropped it, which is the whole
+   > reason the credential looked un-renewable.
+
+   Once the refresh token is in `.env`, renew with **no browser**:
+
+   ```bash
+   uv run python scripts/zendesk_oauth.py --refresh
+   ```
+
+   Two things to know about it. Zendesk **rotates** the refresh token on every
+   use, so the old value dies the moment it is spent — always let the script
+   write both values back rather than copying one by hand. And a container
+   that refreshes in-process cannot write to `.env`, so after a `docker
+   compose restart` the environment's copy may already be spent; see the
+   WARNING in `backend/src/helpdesk/zendesk_credentials.py`.
+
+   Long-running processes do not need this command at all —
+   `ZendeskCredentials` refreshes on its own when the access token is stale or
+   a call 401s, and raises loudly (never silently) when it cannot.
 
    **Reading the errors**: `invalid_client` means the client id or secret
    is wrong. `invalid_grant` means the credentials were *accepted* and the
@@ -130,16 +168,43 @@ webhook events (Step 7's loop guard, layer two).
 3. Complete/skip the invite flow (the account doesn't need to ever log in
    interactively — it's used only via the API, as the identity behind
    `ZendeskAdapter`'s writes).
-4. Find its numeric user id (needed for `ZENDESK_AI_USER_ID`) with the
-   OAuth token from Step 2:
+4. Find the numeric user id for `ZENDESK_AI_USER_ID` — and read this carefully,
+   because the obvious answer is the wrong one.
+
+   > **CORRECTION (2026-08-17).** This step used to say: look up the team
+   > member you just created, by email, with
+   > `users/search.json?query=email:...`, and use that id. **That is wrong**,
+   > and it put a live loop guard out of action. `ZENDESK_AI_USER_ID` is not
+   > "the id of the AI's user account" — it is **the id the OAuth token
+   > actually acts as**, because ingress compares it against the
+   > `comment_author_id` on incoming webhooks, and Zendesk attributes a comment
+   > to whoever authorized the token, not to whoever you intended.
+   >
+   > On this account those were two different people: the variable named
+   > "Othram AI Agent" (`54404962250395`) while the token had been authorized
+   > by the owner's admin user (`54402664002843`), so the AI's own reply was
+   > authored by `54402664002843` and the self-event guard was comparing
+   > against an id that appears in no event this system can ever receive. Two
+   > green suites and a fully working end-to-end run showed nothing.
+
+   So ask the token who it is, rather than asking Zendesk about a user:
 
    ```bash
    curl -s -H "Authorization: Bearer <ZENDESK_OAUTH_TOKEN>" \
-     "https://<subdomain>.zendesk.com/api/v2/users/search.json?query=email:ai-agent+othram@<your domain>" \
-     | python3 -c "import sys,json; print(json.load(sys.stdin)['users'][0]['id'])"
+     "https://<subdomain>.zendesk.com/api/v2/users/me.json" \
+     | python3 -c "import sys,json; u=json.load(sys.stdin)['user']; print(u['id'], u['name'], u['role'])"
    ```
 
-   That printed number is `ZENDESK_AI_USER_ID`.
+   That printed id is `ZENDESK_AI_USER_ID`. If the name it prints is a human
+   rather than the AI agent user, that is a real finding and not a formality:
+   every customer-visible reply will be attributed to that human. Fixing the
+   attribution means completing Step 2's browser consent **while signed in as
+   the AI agent user**, and then re-running the command above — the id must
+   always be whatever the token reports, never what you wish it were.
+
+   You do not have to take this on trust. `ZendeskAdapter.verify_ai_user_id()`
+   makes the same call and raises if the configured value disagrees; it runs as
+   the first check in `scripts/live_smoke.py`.
 
 ## Step 4 — Fill in `.env`
 
@@ -257,7 +322,7 @@ This is the piece that actually fires the webhook, and the loop-guard's
    ```json
    {
      "ticket_id": "{{ticket.id}}",
-     "comment_id": "{{ticket.latest_comment_id}}",
+     "comment_id": "{{ticket.latest_comment.id}}",
      "requester_email": "{{ticket.requester.email}}",
      "subject": "{{ticket.title}}",
      "latest_comment_text": "{{ticket.latest_comment}}",
@@ -271,12 +336,25 @@ This is the piece that actually fires the webhook, and the loop-guard's
 
    | JSON key               | Zendesk placeholder            | Pydantic field (models.py) |
    |-------------------------|--------------------------------|------------------------------|
-   | `ticket_id`             | `{{ticket.id}}`                 | `ticket_id: str` |
-   | `comment_id`             | `{{ticket.latest_comment_id}}`  | `comment_id: str` |
+   | `ticket_id`             | `{{ticket.id}}`                 | `ticket_id: str` (non-empty) |
+   | `comment_id`             | `{{ticket.latest_comment.id}}`  | `comment_id: str` (non-empty) |
    | `requester_email`       | `{{ticket.requester.email}}`    | `requester_email: str` |
    | `subject`                | `{{ticket.title}}`              | `subject: str` |
    | `latest_comment_text`   | `{{ticket.latest_comment}}`     | `latest_comment_text: str` |
    | `comment_author_id`     | `{{current_user.id}}`           | `comment_author_id: str \| None` |
+
+   Note the **dot** in `{{ticket.latest_comment.id}}`. `latest_comment` is an
+   object with an `id`; `{{ticket.latest_comment_id}}` — with an underscore —
+   is **not a placeholder Zendesk has**, and Zendesk renders an unknown
+   placeholder as the empty string rather than failing. See the measurement
+   under the table.
+
+   Pairing `comment_id` with `{{ticket.latest_comment.id}}` is also the only
+   self-consistent choice, because `latest_comment_text` is
+   `{{ticket.latest_comment}}`: the id and the text then always describe the
+   *same* comment. `{{ticket.latest_public_comment.id}}` also resolves (see
+   below) but would let the two disagree whenever the newest comment is a
+   private note.
 
    `comment_author_id` is **not** one of DESIGN's pinned five fields — it's
    the one addition T-4 needed to implement self-event drop (DESIGN pins
@@ -290,15 +368,62 @@ This is the piece that actually fires the webhook, and the loop-guard's
    required to stay in lockstep, or self-event drop silently stops
    working.
 
-   Before saving, use the trigger editor's placeholder preview against a
-   real or sample ticket to confirm `{{ticket.latest_comment_id}}` resolves
-   to a non-empty numeric id in your account. (Zendesk placeholders are
-   stable but occasionally vary by plan/version; if that specific token
-   isn't offered by your instance's placeholder picker, use the field
-   search in the JSON body editor to find whatever your account calls "ID
-   of the latest comment" and substitute it — then update this table and
-   nothing else, since the pydantic side only cares about the JSON key
-   name, not which placeholder fills it.)
+   > **CORRECTION (2026-08-17), measured on the live account.** This step used
+   > to specify `comment_id: "{{ticket.latest_comment_id}}"` and merely *advise*
+   > confirming it resolves. It does not resolve. **It renders as the empty
+   > string**, and because ingress keys idempotency on
+   > `(ticket_id, comment_id)`, every comment on ticket N collapsed onto the
+   > single key `(N, "")`: the first comment was processed, and **every customer
+   > follow-up after it was discarded as a duplicate** — `202
+   > {"duplicate": true}`, no run, and (at the time) not one log line saying a
+   > real message had been thrown away.
+   >
+   > The values below are verbatim from this account, read out of Zendesk's own
+   > delivery record (`GET /api/v2/webhooks/{id}/invocations/{id}/attempts`,
+   > which returns the **rendered request payload**, not just a status code).
+   > Trigger context, one firing per row, against ticket 3:
+   >
+   > | Placeholder | Rendered as |
+   > |---|---|
+   > | `{{ticket.latest_comment.id}}`        | `54509304133531` — the posted comment's real id |
+   > | `{{ticket.latest_public_comment.id}}` | `54509304133531` — same id |
+   > | `{{ticket.latest_comment_id}}`        | `` (empty string) |
+   > | `{{ticket.updated_at_with_timestamp}}`| `2026-08-17T07:34:48Z` (second resolution) |
+   > | `{{ticket.updated_at}}`               | `August 17, 2026` (**day** resolution — useless as a key) |
+   > | `{{ticket.latest_comment.created_at}}`| `August 17, 2026` (day resolution) |
+   > | `{{ticket.comment.id}}` · `{{ticket.audit.id}}` · `{{ticket.audit_id}}` | `` (empty string) |
+   >
+   > Before/after, from two real trigger firings: `"comment_id": ""` (invocation
+   > `01M07AA00MZJ23QBBR5MKZWDEM`, 07:34:48Z) became
+   > `"comment_id": "54509363035291"` (invocation `01M07AMDNSHP8D7584XEZDTQMP`)
+   > and `"comment_id": "54509451282203"` (invocation
+   > `01M07B1QPS4J2TQJSDNPP6ZR65`) — two different comments on the same ticket,
+   > each answered `{"status":"accepted","duplicate":false}`, each dispatching
+   > its own run.
+   >
+   > **How to check this yourself, rather than trusting the picker.** The
+   > trigger editor's preview is not the authority — do one of these:
+   >
+   > - Create a throwaway macro whose comment body is a probe like
+   >   `A[{{ticket.latest_comment.id}}] B[{{ticket.latest_comment_id}}]`, then
+   >   render it without posting anything:
+   >   `GET /api/v2/tickets/<id>/macros/<macro id>/apply.json` returns
+   >   `result.ticket.comment.body` with every placeholder substituted. Delete
+   >   the macro afterwards. This is the cheap screen — no webhook, no run.
+   > - Or fire the trigger for real and read
+   >   `GET /api/v2/webhooks/<webhook id>/invocations` then
+   >   `…/invocations/<invocation id>/attempts`, which shows the exact rendered
+   >   body Zendesk sent and the exact response it got back.
+   >
+   > If you substitute a different placeholder, update **this table and the one
+   > above** and nothing else — the pydantic side only cares about the JSON key
+   > name, not which placeholder fills it. What it *does* now care about is that
+   > the value is non-empty: `ZendeskWebhookPayload` rejects a blank
+   > `ticket_id` or `comment_id` with a **400** naming this step, rather than
+   > accepting an id that identifies nothing and silently poisoning the dedup
+   > key. So a placeholder that does not resolve now fails loudly on the first
+   > delivery instead of degrading into "the customer gets one answer and then
+   > silence".
 
 6. Save the trigger.
 
@@ -323,12 +448,33 @@ This is the piece that actually fires the webhook, and the loop-guard's
    You should see one row for the ticket you just created.
 4. Reply again on the same ticket as the customer (a new comment, same
    ticket) — a **second, distinct** row should appear (same `ticket_id`,
-   different `comment_id`).
+   different `comment_id`). **Do not skip this step.** It is the one that
+   catches a broken comment-id placeholder (Step 7), and it is the step that
+   was skipped: a single-comment smoke test passes perfectly against a
+   trigger whose `comment_id` is always the empty string.
 5. In Admin Center, open the webhook (Step 6) → **Recent deliveries** (or
    equivalent monitoring tab) to see Zendesk's own record of the request
    and response Zendesk received from your endpoint — this is the
    authoritative source if step 2's log line didn't appear (e.g. tunnel
    dropped) and shows the exact HTTP status your endpoint returned.
+
+   The API is better than the UI here, because it hands you the **rendered
+   request body** — which is the only way to see what a placeholder actually
+   became:
+
+   ```bash
+   set -a; source .env; set +a
+   WEBHOOK_ID=<the webhook's id, e.g. 01KZZFR8MFA0GNPKCP0F5WJWEM>
+   curl -s -H "Authorization: Bearer $ZENDESK_OAUTH_TOKEN" \
+     "https://$ZENDESK_SUBDOMAIN.zendesk.com/api/v2/webhooks/$WEBHOOK_ID/invocations"
+   # then, for one invocation id from that list:
+   curl -s -H "Authorization: Bearer $ZENDESK_OAUTH_TOKEN" \
+     "https://$ZENDESK_SUBDOMAIN.zendesk.com/api/v2/webhooks/$WEBHOOK_ID/invocations/<invocation id>/attempts"
+   ```
+
+   `attempts[].request.payload` is the exact JSON Zendesk sent, placeholders
+   resolved; `attempts[].response.payload` is the exact body your endpoint
+   returned. Both survive a dropped tunnel, so this works retrospectively.
 
 ### What success vs. rejection actually look like
 
@@ -378,9 +524,25 @@ content-type: application/json
 {"detail":"missing signature headers"}
 ```
 
+**A blank `comment_id` (or `ticket_id`) — `400`, and the body tells you
+which placeholder to fix:**
+
+```
+HTTP/1.1 400 Bad Request
+content-type: application/json
+
+{"detail":"1 validation error for ZendeskWebhookPayload\ncomment_id\n  Value error, comment_id is empty, so this event cannot be deduplicated. … use {{ticket.latest_comment.id}}, NOT {{ticket.latest_comment_id}} (which renders as the empty string). See docs/zendesk-runbook.md step 7. …"}
+```
+
+This is the tripwire for a Step 7 misconfiguration, and it is deliberately
+a rejection rather than a best-effort accept — see
+`backend/src/ingress/models.py`'s docstring for the tradeoff.
+
 A malformed body (missing a required field, or not JSON at all) returns
 `400`, never `500` — see `backend/tests/ingress/test_webhook.py` for the
-exact cases this is tested against.
+exact cases this is tested against. Every `400`, and every delivery
+discarded as a duplicate, now leaves a log line (ERROR and WARNING
+respectively): a delivery that produces no run is never silent.
 
 ### If it doesn't work
 
@@ -394,6 +556,15 @@ exact cases this is tested against.
   signed**: re-copy `ZENDESK_WEBHOOK_SIGNING_SECRET` from the webhook's
   detail page — it's shown once per "reveal" click and is easy to
   truncate/mistype when copying by hand.
+- **The first comment on a ticket gets answered and every follow-up is
+  ignored**: this is the Step 7 comment-id placeholder. Read the delivered
+  body from `…/invocations/<id>/attempts` (above) and look at `comment_id`.
+  If it is `""`, the placeholder is wrong; if two different comments show the
+  *same* non-empty id, it is pointing at something that isn't per-comment
+  (e.g. a date). Ingress now answers such a delivery with a `400` naming this
+  step, and logs a WARNING for every delivery it discards as a duplicate —
+  `grep` the app log for `discarding webhook delivery` to see follow-ups
+  being thrown away.
 - **Trigger never fires**: check **Business rules → Triggers →
   (your trigger) → ... → View trigger revision history / Usage** or just
   re-open the ticket and confirm its tags — if a prior test run left

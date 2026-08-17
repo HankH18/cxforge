@@ -16,6 +16,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 
 import pytest
@@ -23,7 +24,12 @@ from fastapi.testclient import TestClient
 
 from data import get_connection
 
-from .conftest import TEST_AI_USER_ID, TEST_SIGNING_SECRET, unique_ticket_id
+from .conftest import (
+    TEST_AI_USER_ID,
+    TEST_SIGNING_SECRET,
+    RecordingJobQueue,
+    unique_ticket_id,
+)
 
 pytestmark = pytest.mark.skipif(
     os.getenv("SKIP_DB_TESTS") == "1",
@@ -253,3 +259,171 @@ def test_non_json_body_is_4xx_not_500(client: TestClient) -> None:
     response = client.post(URL, content=body, headers=_headers(body))
 
     assert 400 <= response.status_code < 500
+
+
+# -- the comment-id placeholder defect (2026-08-17) -----------------------
+#
+# Measured live, from Zendesk's own `/api/v2/webhooks/{id}/invocations`
+# record of what it actually sent to this endpoint. The trigger's original
+# `{{ticket.latest_comment_id}}` placeholder does not exist in this account
+# and renders as the empty string, so every delivery arrived with
+# `"comment_id": ""`. Two verbatim examples, invocations
+# 01M079ZXEVECSTHCAP7EAP0SVA (07:29:19Z) and 01M07AA00MZJ23QBBR5MKZWDEM
+# (07:34:48Z), both for ticket 3:
+#
+#     "comment_id": ""
+#
+# and after the trigger was changed to `{{ticket.latest_comment.id}}`,
+# invocations 01M07AMDNSHP8D7584XEZDTQMP and 01M07B1QPS4J2TQJSDNPP6ZR65 —
+# two different customer comments on the SAME ticket 3:
+#
+#     "comment_id": "54509363035291"
+#     "comment_id": "54509451282203"
+#
+# The ticket_id below is namespaced by the `ticket_id` fixture instead of
+# the literal "3" so the suite stays re-runnable and cleans up after
+# itself; the comment ids are the real ones.
+
+REAL_COMMENT_ID_A = "54509363035291"
+REAL_COMMENT_ID_B = "54509451282203"
+
+
+def test_empty_comment_id_is_rejected_rather_than_becoming_a_dedup_key(
+    client: TestClient, ticket_id: str, job_queue: RecordingJobQueue
+) -> None:
+    """The defect itself. `comment_id: ""` used to validate, so every comment
+    on a ticket collapsed onto the key `(N, "")`: the first was processed and
+    every follow-up was silently discarded as a duplicate.
+
+    An id that identifies nothing must not become half of the idempotency
+    key. Rejecting is the loud answer — it lands in Zendesk's webhook
+    activity log and in ingress's ERROR stream — where accepting degrades
+    into "the customer gets one answer and then silence".
+    """
+    body = _payload_bytes(ticket_id=ticket_id, comment_id="")
+
+    response = client.post(URL, content=body, headers=_headers(body))
+
+    assert response.status_code == 400
+    # The 400 must say what to go and fix, not just "invalid".
+    assert "{{ticket.latest_comment.id}}" in response.text
+    assert "zendesk-runbook.md" in response.text
+    # Nothing was written, so nothing is poisoned for the next delivery.
+    assert _seen_count(ticket_id, "") == 0
+    assert job_queue.enqueued == []
+
+
+def test_whitespace_only_comment_id_is_rejected_too(
+    client: TestClient, ticket_id: str
+) -> None:
+    """A placeholder that renders as a space is exactly as useless as one
+    that renders as nothing, and would otherwise sail past a `!= ""` check."""
+    body = _payload_bytes(ticket_id=ticket_id, comment_id="   ")
+
+    response = client.post(URL, content=body, headers=_headers(body))
+
+    assert response.status_code == 400
+    assert _seen_count(ticket_id, "   ") == 0
+
+
+def test_empty_ticket_id_is_rejected(client: TestClient) -> None:
+    """The other half of the primary key, for the same reason."""
+    body = _payload_bytes(ticket_id="", comment_id="c-1")
+
+    response = client.post(URL, content=body, headers=_headers(body))
+
+    assert response.status_code == 400
+    assert "{{ticket.id}}" in response.text
+
+
+def test_two_real_zendesk_deliveries_on_one_ticket_both_dispatch(
+    client: TestClient, ticket_id: str, job_queue: RecordingJobQueue
+) -> None:
+    """The behaviour the empty placeholder broke, replayed with the comment
+    ids Zendesk really delivered once the placeholder was fixed.
+
+    Under `{{ticket.latest_comment_id}}` both of these bodies carried
+    `comment_id: ""`, so the second answered `duplicate: true` and enqueued
+    nothing — the customer's follow-up was thrown away.
+    """
+    first_body = _payload_bytes(
+        ticket_id=ticket_id,
+        comment_id=REAL_COMMENT_ID_A,
+        latest_comment_text="could you tell me what stage case MFG-2025-0301 is at?",
+    )
+    second_body = _payload_bytes(
+        ticket_id=ticket_id,
+        comment_id=REAL_COMMENT_ID_B,
+        latest_comment_text="follow-up on the same ticket — is the DNA profile available?",
+    )
+
+    first = client.post(URL, content=first_body, headers=_headers(first_body))
+    second = client.post(URL, content=second_body, headers=_headers(second_body))
+
+    assert (first.status_code, second.status_code) == (202, 202)
+    assert first.json()["duplicate"] is False
+    assert second.json()["duplicate"] is False
+
+    # Two distinct dedup keys, and two dispatched runs — not one of each.
+    assert _seen_count(ticket_id, REAL_COMMENT_ID_A) == 1
+    assert _seen_count(ticket_id, REAL_COMMENT_ID_B) == 1
+    dispatched = [(job.ticket_id, job.comment_id) for job in job_queue.enqueued]
+    assert dispatched == [
+        (ticket_id, REAL_COMMENT_ID_A),
+        (ticket_id, REAL_COMMENT_ID_B),
+    ]
+
+
+def test_a_discarded_duplicate_delivery_is_not_silent(
+    client: TestClient, ticket_id: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Discarding a duplicate is correct; doing it invisibly is what let the
+    defect hide. A dropped delivery must leave a log line naming the key it
+    collapsed onto."""
+    body = _payload_bytes(ticket_id=ticket_id, comment_id="c-dup")
+    client.post(URL, content=body, headers=_headers(body))
+
+    with caplog.at_level(logging.WARNING, logger="ingress"):
+        second = client.post(URL, content=body, headers=_headers(body))
+
+    assert second.json()["duplicate"] is True
+    discards = [
+        record
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "duplicate" in record.getMessage()
+    ]
+    assert len(discards) == 1
+    message = discards[0].getMessage()
+    assert ticket_id in message
+    assert "c-dup" in message
+
+
+def test_a_rejected_delivery_is_not_silent(
+    client: TestClient, ticket_id: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A 4xx'd delivery is a customer event Zendesk will never retry, so it
+    belongs in the ERROR stream rather than only in Zendesk's admin UI."""
+    body = _payload_bytes(ticket_id=ticket_id, comment_id="")
+
+    with caplog.at_level(logging.ERROR, logger="ingress"):
+        client.post(URL, content=body, headers=_headers(body))
+
+    errors = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert "comment_id" in errors[0].getMessage()
+
+
+def test_rejection_log_does_not_leak_the_request_body(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Control on the log line above: the raw body carries the requester's
+    email and comment text, and a pydantic error dict embeds its input by
+    default. The log line must not."""
+    body = b"this is not json at all"
+
+    with caplog.at_level(logging.ERROR, logger="ingress"):
+        response = client.post(URL, content=body, headers=_headers(body))
+
+    assert 400 <= response.status_code < 500
+    logged = " ".join(record.getMessage() for record in caplog.records)
+    assert "this is not json at all" not in logged
