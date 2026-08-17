@@ -2,7 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import App from './App'
-// The one stylesheet entry (STYLE_GUIDE.md §6); it @imports tokens.css.
+// The one stylesheet entry (docs/STYLE_GUIDE.md §6); it @imports tokens.css.
 // Imported here rather than from a component so Vite emits it as a single
 // linked CSS asset in the built bundle and the component tests stay pure
 // markup.

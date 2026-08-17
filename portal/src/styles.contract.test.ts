@@ -13,7 +13,7 @@
 // members below are read from the generated api-types, so a new outcome or draft status
 // arriving from the backend fails here until someone styles it.
 //
-// Updated for the STYLE_GUIDE.md design system, which replaced `badge--outcome-*` /
+// Updated for the docs/STYLE_GUIDE.md design system, which replaced `badge--outcome-*` /
 // `badge--draft-*` / `badge--gate-*` with one flat `pill--{slug}` family plus
 // `gate-flag--{state}`. Two things changed beyond the names, both making this stricter:
 //
@@ -83,7 +83,7 @@ const RUN_OUTCOMES: RunOutcome[] = ['auto_sent', 'gated_sent', 'rejected', 'esca
 const DRAFT_STATUSES: DraftStatus[] = ['pending', 'approved', 'rejected', 'auto_sent']
 const GATE_STATES = ['on', 'off', 'unknown']
 
-// STYLE_GUIDE.md §4: which status token family each pill slug must paint itself from.
+// docs/STYLE_GUIDE.md §4: which status token family each pill slug must paint itself from.
 // `gated_sent` (a human released it) shares --status-sent-* with `approved`; `auto_sent`
 // (nobody read it) is --status-auto-*. Those being different families is the whole point.
 const PILL_TOKEN_FAMILY: Readonly<Record<string, string>> = {

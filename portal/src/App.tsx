@@ -112,7 +112,7 @@ export default function App() {
     loadMetrics()
   }
 
-  // Shell per STYLE_GUIDE.md §5/§6: a 56px sticky app bar (the <h1> is the
+  // Shell per docs/STYLE_GUIDE.md §5/§6: a 56px sticky app bar (the <h1> is the
   // brand mark, the gate rides on the right), then a two-column grid whose
   // right column is the draft drawer. Every string, role and aria-label is
   // exactly what it was — the wrappers and classNames are the whole change.

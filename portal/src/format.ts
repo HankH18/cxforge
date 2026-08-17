@@ -42,7 +42,7 @@ export function outcomeSlug(outcome: RunOutcome | null | undefined): string {
 }
 
 // One lookup object, keyed on `draft_status` itself — never derived from the
-// display label and never from `outcome` (STYLE_GUIDE.md §4). The label and
+// display label and never from `outcome` (docs/STYLE_GUIDE.md §4). The label and
 // the class have to be able to drift apart without either following the
 // other: the shipped defect this guards was a class built out of a label.
 const DRAFT_PILL_SLUGS: Readonly<Record<DraftStatus, string>> = {

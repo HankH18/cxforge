@@ -1,7 +1,7 @@
-/* Design tokens — STYLE_GUIDE.md §2, reproduced verbatim.
+/* Design tokens — docs/STYLE_GUIDE.md §2, reproduced verbatim.
  *
  * This is the ONLY file in portal/ allowed to declare a raw color value
- * (STYLE_GUIDE.md §7). Everything in app.css references these through
+ * (docs/STYLE_GUIDE.md §7). Everything in app.css references these through
  * var(--…), which is what makes the dark block below a complete re-theme
  * rather than a second stylesheet.
  *
@@ -93,7 +93,7 @@
   --status-rejected-ink:  oklch(0.86 0.08 25);
   --status-rejected-soft: oklch(0.30 0.06 25);
 
-  /* The ONE deviation from STYLE_GUIDE.md §2's verbatim token set, and the reason
+  /* The ONE deviation from docs/STYLE_GUIDE.md §2's verbatim token set, and the reason
      is §7 of the same document. §2's dark block remaps every status family except
      `none` — so in dark mode the "no draft" and "off-topic" pills kept their LIGHT
      background (a near-white oklch(0.955 0.005 240) = rgb(237,241,243)) under dark
