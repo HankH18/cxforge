@@ -1,0 +1,5 @@
+ M .claude/rules/harness-protocol.md
+ M .claude/scripts/gen_tasks.py
+ M .claude/scripts/harness_lib.py
+ M backend/tests/plan/test_status_field.py
+?? backend/tests/hooks/test_supersede_terminal_state.py

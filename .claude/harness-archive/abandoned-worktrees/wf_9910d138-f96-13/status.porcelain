@@ -1,0 +1,6 @@
+ M .claude/scripts/harness_lib.py
+ M backend/tests/evals/test_labeled_set.py
+ M backend/tests/hooks/conftest.py
+ M backend/tests/hooks/test_close_unattributed_claim_gap.py
+ M backend/tests/hooks/test_scope_guard_append_only.py
+?? backend/tests/plan/test_citation_integrity.py

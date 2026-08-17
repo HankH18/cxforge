@@ -1,0 +1,105 @@
+diff --git a/.claude/scripts/harness_lib.py b/.claude/scripts/harness_lib.py
+index 8895eb2..b168a10 100644
+--- a/.claude/scripts/harness_lib.py
++++ b/.claude/scripts/harness_lib.py
+@@ -97,10 +97,41 @@ def fingerprint(scope):
+         except OSError: h.update(b"<unreadable>")
+     return h.hexdigest()
+ 
++class IntegrityUnavailable(Exception):
++    """git could not answer "what changed since <commit>" at all.
++
++    Raised rather than returning [] because an empty diff and an unanswerable
++    diff are opposite facts: the first says nothing changed, the second says we
++    do not know. The old code used `.stdout` regardless of returncode, so a
++    start_commit that did not resolve produced an empty list and the integrity
++    check passed VACUOUSLY — silently disabling scope enforcement for that close.
++    """
++
++
++def working_tree_dirty():
++    """Paths with uncommitted changes right now (staged, unstaged, untracked)."""
++    r = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=ROOT)
++    out = []
++    for line in r.stdout.splitlines():
++        if not line.strip():
++            continue
++        p = line[3:].strip()
++        if " -> " in p:            # rename: take the destination
++            p = p.split(" -> ", 1)[1]
++        out.append(p.strip('"'))
++    return sorted(set(out))
++
++
+ def changed_since(commit):
+     subprocess.run(["git", "add", "-A"], cwd=ROOT)
+     r = subprocess.run(["git", "diff", "--name-only", commit], capture_output=True, text=True, cwd=ROOT)
+     s = subprocess.run(["git", "diff", "--name-only", "--cached", commit], capture_output=True, text=True, cwd=ROOT)
++    if r.returncode != 0 or s.returncode != 0:
++        raise IntegrityUnavailable(
++            "git could not diff against start_commit %r (%s). The integrity check "
++            "cannot be evaluated, so this close is refused rather than passed."
++            % (commit, (r.stderr or s.stderr).strip()[:200])
++        )
+     return sorted(set(r.stdout.splitlines()) | set(s.stdout.splitlines()))
+ 
+ def integrity(tid, start_commit):
+@@ -144,16 +175,56 @@ def cmd_claim(tid, note):
+         if not receipt(d): return f"blocked: dependency {d} has no receipt", 1
+     errs = lint_verify(t["verify"])
+     if errs: return "verify-string lint (fix the plan first):\n  " + "\n  ".join(errs), 1
++    # W1: the ticket-start commit sweeps the whole tree (`git add -A`), and
++    # integrity() only diffs FORWARD from it — so anything already dirty here
++    # would be absorbed into the start commit and never checked at close. That
++    # made release+re-claim a general laundering route for any file, PROTECTED
++    # ones included. Refuse instead: out-of-scope work gets committed in the
++    # open, as its own commit, before a ticket claims the tree.
++    dirty = [p for p in working_tree_dirty()
++             if not (match_any(p, t["scope"]) or match_any(p, META_ALLOW, raw=True)
++                     or match_any(p, HARNESS_STATE, raw=True))]
++    if dirty:
++        return ("REFUSING to claim %s — the working tree carries changes outside its scope:\n  %s\n"
++                "The ticket-start commit would absorb these and the close-time integrity check "
++                "would never see them. Commit them as their own commit (or revert them) first, "
++                "then claim." % (tid, "\n  ".join(dirty))), 1
+     _git("add", "-A"); _git("commit", "-q", "--allow-empty", "-m", f"ticket-start: {tid}")
+     _write(cpath, {"ticket": tid, "session": sid, "note": note,
+                    "start_commit": _head(), "attempts": 0, "ts": int(time.time())})
+     return f"claimed {tid} @ {_head(True)} | scope: {t['scope']}", 0
+ 
+ def cmd_close():
+-    sid = _sid(); c = session_claim(sid)
++    sid = _sid()
++    try:
++        c = session_claim(sid)
++    except Exception as e:
++        # C1: an unparseable claim file used to crash with a raw JSONDecodeError.
++        return ("claim record for this session is unreadable (%s). It is written only by "
++                "claim.sh; if it has been corrupted, say so in .claude/NEEDS_HUMAN.md rather "
++                "than hand-editing it." % e), 1
+     if not c: return "no claim held by this session", 1
++    missing = [k for k in ("ticket", "start_commit") if not c.get(k)]
++    if missing:
++        # C1: KeyError -> named refusal identifying the offending record.
++        return ("claim record for this session is missing required field(s) %s — it carries no "
++                "usable attribution, so no gate may run and no evidence may be written for it."
++                % ", ".join(missing)), 1
+     tid, start = c["ticket"], c["start_commit"]; t = ticket(tid)
+-    bad = integrity(tid, start)
++    if not t: return f"claim names {tid}, which is not in docs/tickets.json", 1
++    if not (t.get("verify") or "").strip():
++        # C3: an empty verify trivially "passes" (`sh -c ""` exits 0).
++        return (f"{tid} has no verify command — closing would mint a fingerprint-bound receipt "
++                f"certifying that nothing was checked. Fix the plan."), 2
++    if _git("rev-parse", "--verify", "--quiet", start + "^{commit}").returncode != 0:
++        # C2: this used to leave integrity() passing vacuously.
++        return (f"claim's start_commit {start!r} does not resolve to a commit in this repo, so "
++                f"the close-time integrity check cannot be evaluated. Refusing rather than "
++                f"minting a receipt on an unchecked diff."), 2
++    try:
++        bad = integrity(tid, start)
++    except IntegrityUnavailable as e:
++        return str(e), 2
+     if bad:
+         return ("INTEGRITY FAIL — files changed outside %s scope/meta:\n  %s\n"
+                 "Out-of-scope changes (including via Bash) fail the close. Revert them or record the plan defect in .claude/NEEDS_HUMAN.md." % (tid, "\n  ".join(bad))), 2

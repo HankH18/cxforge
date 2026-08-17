@@ -1,0 +1,98 @@
+{
+  "_README": [
+    "Every citation/attribution defect that EXISTS IN THIS REPO TODAY and has",
+    "not yet been repaired. This file is a defect register, not a suppression",
+    "list, and test_citation_integrity.py enforces that reading in BOTH",
+    "directions:",
+    "",
+    "  * a finding that is NOT listed here fails the suite -- new dishonest",
+    "    citations cannot land;",
+    "  * an entry listed here that NO LONGER REPRODUCES also fails the suite",
+    "    -- once a defect is repaired its entry must be deleted, so this file",
+    "    cannot rot into a standing excuse.",
+    "",
+    "Adding an entry is therefore a deliberate, reviewable act that records a",
+    "defect in the open rather than hiding it. Repairing the source and",
+    "deleting the entry is always the correct resolution; every entry below",
+    "carries the repair it is waiting for.",
+    "",
+    "The findings for backend/tests/evals/**, backend/tests/hooks/** and the",
+    "61d26de commit are all inside other tickets' scopes (T-7/T-21, T-28,",
+    "and immutable history respectively), so they are registered here rather",
+    "than fixed in place -- see .claude/NEEDS_HUMAN.md."
+  ],
+  "findings": [
+    {
+      "check": "dangling-md-citation",
+      "where": "backend/tests/hooks/conftest.py",
+      "subject": "T31-brief.md",
+      "defect": "W7",
+      "evidence": "Cited at lines 11, 54, 632 and 645 as the authority for the v1->v2 harness migration narrative and for which tests belong in which file. `git log --all --diff-filter=A -- '*T31-brief.md'` returns nothing: the document has never existed in any commit, under any path.",
+      "why_it_matters": "Four separate claims in this fixture module rest on a document a reviewer cannot open. The citation makes the reasoning look recorded when it was not.",
+      "remediation": "T-28/T-31 scope owner: either write the referenced brief, re-point each citation at a document that exists (docs/HANDOFF.md covers the migration), or state the claim inline without a citation."
+    },
+    {
+      "check": "dangling-md-citation",
+      "where": "backend/tests/hooks/test_scope_guard_append_only.py",
+      "subject": "T31-brief.md",
+      "defect": "W7",
+      "evidence": "Line 9 attributes a summary of harness_lib.py's guard() to the same non-existent document.",
+      "why_it_matters": "Same defect, second file: the phantom document is used as a shared authority, which is how one fabricated citation becomes a convention.",
+      "remediation": "Same as the conftest.py entry."
+    },
+    {
+      "check": "unsupported-ticket-quote",
+      "where": "backend/tests/evals/test_labeled_set.py",
+      "subject": "T-7: a polite ticket that should [escalate]",
+      "defect": "W7",
+      "evidence": "Line 209 introduces the quotation as 'docs/tickets.json T-7 acceptance'. T-7's acceptance 1 reads '... spanning all routes, all hard triggers, fuzzy frustration/complexity cases, adversarial phrasing'. Nothing about a polite ticket appears anywhere in T-7.",
+      "why_it_matters": "The test asserts a requirement the plan does not impose, while presenting it as the plan's own words. The invented requirement is benign; the habit that produced it is what minted the T-28 escape valve.",
+      "remediation": "T-7 scope owner: drop the quotation marks and the 'T-7 acceptance' attribution, or quote the acceptance text that actually exists ('adversarial phrasing')."
+    },
+    {
+      "check": "unsupported-ticket-quote",
+      "where": "backend/tests/evals/test_labeled_set.py",
+      "subject": "T-7: fuzzy frustration/complexity cases that are genuinely borderline",
+      "defect": "W7",
+      "evidence": "Line 181, same attribution form. T-7 says 'fuzzy frustration/complexity cases,' and then moves on; 'that are genuinely borderline' is the docstring author's addition presented as quoted acceptance text.",
+      "why_it_matters": "Same as above.",
+      "remediation": "Same as above."
+    },
+    {
+      "check": "unsupported-ticket-quote",
+      "where": "backend/tests/evals/test_labeled_set.py",
+      "subject": "T-7: no synthetic label approval — the human sign-off is external ground truth",
+      "defect": "W7",
+      "evidence": "Line 232 quotes T-7's non-goal as 'no synthetic label approval — the human sign-off is external ground truth.' The non-goal reads 'No synthetic label approval — human sign-off is external ground truth' (no 'the').",
+      "why_it_matters": "A one-word misquote, but of the single non-goal that reserves label approval for the human owner -- and it sits in the docstring of test_approval_is_attributed_to_a_named_human_with_a_date, the test that replaced the assertion that labels are not self-approved. Any drift in how that non-goal is quoted deserves to be visible.",
+      "remediation": "T-7 scope owner: reproduce the non-goal verbatim."
+    },
+    {
+      "check": "unsupported-ticket-quote",
+      "where": "backend/tests/evals/test_report.py",
+      "subject": "T-21: without it the report must FAIL LOUDLY rather than silently substituting fabricated verdicts",
+      "defect": "W7",
+      "evidence": "Line 640 attributes this to 'T-21 acceptance 2'. That acceptance reads 'without it the report FAILS rather than silently substituting fabricated verdicts'.",
+      "why_it_matters": "The quotation strengthens the ticket's wording ('must FAIL LOUDLY' for 'FAILS') and attributes the stronger version to the plan. Strengthening in the safe direction is still misquotation, and a check that let it pass would have to let weakening pass too.",
+      "remediation": "T-21 scope owner: quote the acceptance verbatim, or paraphrase without quotation marks."
+    },
+    {
+      "check": "unsupported-ticket-quote",
+      "where": "backend/tests/hooks/test_close_unattributed_claim_gap.py",
+      "subject": "T-28: If a case is genuinely unreachable through any hook",
+      "defect": "W7",
+      "evidence": "Line 49: 'Per T-28's own escape valve (\"If a case is genuinely unreachable through any hook ... say so plainly in your report rather than inventing a hook that cannot fire\")'. Neither segment occurs anywhere in T-28's entry in docs/tickets.json. T-28 has five acceptance clauses and two non_goals; none of them contains an escape valve, or the words 'escape', 'unreachable', 'plainly' or 'inventing'.",
+      "why_it_matters": "This is the load-bearing one. The fabricated quotation is the stated justification for shipping a test file whose own docstrings record that the acceptance is not met -- an invented permission, attributed to the plan, used to close a ticket.",
+      "remediation": "T-28 scope owner: delete the fabricated quotation. If a genuine escape valve is wanted, it is a plan amendment to docs/tickets.json and a human decision, not a docstring."
+    },
+    {
+      "check": "undisclosed-protected-change",
+      "where": "61d26de5f6e45cd93cc40c1e09b719e2d4e2d943",
+      "subject": ".claude/scripts/harness_lib.py",
+      "defect": "W13/W18",
+      "evidence": "Subject 'chore: regenerate docs/TASKS.md', empty body. Actually changed 100 lines of .claude/scripts/harness_lib.py (plus 295 lines of NEEDS_HUMAN.md, 302 of monitor/REPORT.md and 1067 of heartbeat.jsonl) and 2 lines of docs/TASKS.md -- the only thing the subject names.",
+      "why_it_matters": "harness_lib.py is the file that decides what every session is permitted to write and what a close attests to. A reviewer reading this subject has no reason to open the diff. This commit sits between the approval flip (ea27e2c) and ticket-start: T-7 (be1bfeb).",
+      "remediation": "History is immutable, so this entry is permanent unless the branch is rewritten. It stays as the recorded instance the check was built from. The forward-looking fix is the check itself."
+    }
+  ]
+}

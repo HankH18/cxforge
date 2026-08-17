@@ -1,0 +1,448 @@
+diff --git a/.claude/scripts/harness_lib.py b/.claude/scripts/harness_lib.py
+index 6d9104d..48095cf 100644
+--- a/.claude/scripts/harness_lib.py
++++ b/.claude/scripts/harness_lib.py
+@@ -268,6 +268,403 @@ def integrity(tid, start_commit):
+                          or match_any(p, HARNESS_STATE, raw=True))]
+     return bad
+ 
++# ---------------- W12: receipt revalidation (STRICTLY READ-ONLY) ----------------
++# A receipt binds a ticket to (close commit, content fingerprint of its scope).
++# Both are snapshots taken once and never re-read: status() reports "resolved"
++# for as long as the FILE exists. So the moment a later commit edits an attested
++# file the certificate stops describing anything, silently, and the board stays
++# green. That is not hypothetical — aea59c0 ("provider: swap OpenAI for the
++# Anthropic Messages API") touched backend/tests/hooks/... with no ticket open,
++# inside the attested scope of T-27 and T-28.
++#
++# revalidate() recomputes every receipt's fingerprint at HEAD and, where it has
++# moved, says WHO moved it. The whole point is that an auditor can run it
++# against a live repo while another session holds an open claim, so nothing
++# below may run `git add`, write the index, or read the working tree:
++# changed_since() does `git add -A` and would stage that session's work, which
++# is exactly why `harness_lib.py integrity` is unusable for audit. Every fact
++# here comes from git plumbing over committed objects — ls-tree, cat-file,
++# rev-list, log — and the verdicts are therefore a property of history alone,
++# not of whatever anyone has open in an editor.
++
++VALID = "VALID"
++DRIFTED_EXPLAINED = "DRIFTED-EXPLAINED"
++DRIFTED_UNATTRIBUTED = "DRIFTED-UNATTRIBUTED"
++UNVERIFIABLE = "UNVERIFIABLE"
++
++_START_RE = re.compile(r"^ticket-start:\s*(T-\d+)\s*$")
++_CLOSE_RE = re.compile(r"^ticket-close:\s*(T-\d+)\s*$")
++
++
++def _ro(*a):
++    """Run a read-only git command. Nothing reached from here may write the index
++    — no `add`, no `status`, no plain `diff` against the worktree."""
++    return subprocess.run(["git", *a], capture_output=True, text=True, cwd=ROOT)
++
++
++def resolve_commit(c):
++    """Full sha for a commit-ish, or None if it does not resolve here."""
++    if not (isinstance(c, str) and c.strip()):
++        return None
++    r = _ro("rev-parse", "--verify", "--quiet", c.strip() + "^{commit}")
++    return r.stdout.strip() or None
++
++
++def tree_blobs(commit):
++    """{path: blob sha} at <commit>, straight from the tree — no index, no worktree.
++
++    `git ls-tree -r -- <glob>` cannot be used to pre-filter: its pathspec
++    matching drops every `dir/**` scope this plan uses (measured: 30 of the 54
++    declared globs return 0 paths that way, including `backend/**`). So the full
++    listing is taken and filtered with match_any — the SAME matcher integrity()
++    uses — which was verified to reproduce `git ls-files -- <glob>` exactly for
++    all 32 tickets, and to reproduce fingerprint() byte-for-byte.
++    """
++    r = _ro("ls-tree", "-r", "-z", commit)
++    if r.returncode != 0:
++        raise IntegrityUnavailable(
++            "git could not list the tree of %r (%s). Whether the receipt still "
++            "attests anything is therefore unknown." % (commit, (r.stderr or "").strip()[:200]))
++    out = {}
++    for rec in r.stdout.split("\0"):
++        if not rec:
++            continue
++        meta, _, path = rec.partition("\t")
++        parts = meta.split()
++        if len(parts) >= 3 and parts[1] == "blob":
++            out[path] = parts[2]
++    return out
++
++
++_BLOB_SHA256 = {}
++
++
++def _hash_blobs(shas):
++    """sha256 of each blob's bytes, batched and memoised by blob sha.
++
++    Keyed on the blob sha rather than the path, so a file that appears in ten
++    tickets' scopes across two commits is read once.
++    """
++    todo = sorted({s for s in shas if s not in _BLOB_SHA256})
++    if not todo:
++        return
++    p = subprocess.Popen(["git", "cat-file", "--batch"], cwd=ROOT,
++                         stdin=subprocess.PIPE, stdout=subprocess.PIPE)
++    out, _ = p.communicate(("\n".join(todo) + "\n").encode())
++    i = 0
++    for sha in todo:
++        j = out.find(b"\n", i)
++        if j < 0:
++            raise IntegrityUnavailable("git cat-file --batch truncated at object %s" % sha)
++        hdr = out[i:j].decode(errors="replace").split()
++        i = j + 1
++        if len(hdr) < 3:
++            raise IntegrityUnavailable("git cannot read object %s (%s)" % (sha, " ".join(hdr)))
++        size = int(hdr[2])
++        _BLOB_SHA256[sha] = hashlib.sha256(out[i:i + size]).digest()
++        i += size + 1
++
++
++def fingerprint_at(scope, commit, blobs=None):
++    """fingerprint(scope) as it would have been computed with <commit> checked out.
++
++    Mirrors fingerprint() exactly — sorted paths, path bytes then sha256 of the
++    content — but reads the committed tree instead of the working tree, so it is
++    safe on a dirty repo and reproducible for any point in history.
++    """
++    blobs = tree_blobs(commit) if blobs is None else blobs
++    files = sorted(p for p in blobs if match_any(p, scope))
++    _hash_blobs([blobs[f] for f in files])
++    h = hashlib.sha256()
++    for f in files:
++        h.update(f.encode())
++        h.update(_BLOB_SHA256[blobs[f]])
++    return h.hexdigest()
++
++
++def tickets_at(commit):
++    """docs/tickets.json as it stood at <commit>, or None if it wasn't there.
++
++    A receipt's fingerprint was computed against the scope the plan declared AT
++    THE TIME. If a later ticket edits docs/tickets.json and redefines that scope
++    (T-14, T-15 and T-26 all name it), the receipt silently starts attesting a
++    different set of files than the one it was minted over — a second, quieter
++    way for a receipt to stop meaning what it says.
++    """
++    r = _ro("show", "%s:docs/tickets.json" % commit)
++    if r.returncode != 0:
++        return None
++    try:
++        return json.loads(r.stdout)
++    except Exception:
++        return None
++
++
++def ticket_windows():
++    """{tid: [{"commits": {sha,...}, "closed": sha|None}, ...]}
++
++    A ticket's attested window is the commit range its own lifecycle bracketed:
++    from `ticket-start: T-x` through `ticket-close: T-x`, both inclusive (the
++    start commit sweeps the tree with `git add -A`, and the close commit carries
++    the ticket's final work). These boundary commits are written only by
++    cmd_claim/cmd_close, so they are the harness's own record of what it was
++    doing when.
++
++    Several windows can be open at once (parallel worktrees, protocol rule 10),
++    so a commit belongs to EVERY window open across it — attribution then has to
++    be settled by scope, which is what classify_change does. A ticket claimed,
++    released and re-claimed has more than one window, hence a list.
++
++    --topo-order --reverse guarantees ancestors are seen before descendants, so
++    "currently open" is well defined even on a non-linear history.
++    """
++    r = _ro("log", "--topo-order", "--reverse", "--format=%H%x00%s", "HEAD")
++    if r.returncode != 0:
++        raise IntegrityUnavailable(
++            "git could not walk this repo's history (%s), so no receipt's drift "
++            "can be attributed." % (r.stderr or "").strip()[:200])
++    open_, windows = {}, {}
++    for line in r.stdout.splitlines():
++        sha, _, subj = line.partition("\0")
++        m = _START_RE.match(subj.strip())
++        if m:
++            open_.setdefault(m.group(1), set())
++        for cs in open_.values():
++            cs.add(sha)
++        m = _CLOSE_RE.match(subj.strip())
++        if m and m.group(1) in open_:
++            windows.setdefault(m.group(1), []).append(
++                {"commits": open_.pop(m.group(1)), "closed": sha})
++    for tid, cs in open_.items():
++        windows.setdefault(tid, []).append({"commits": cs, "closed": None})
++    return windows
++
++
++def _commits_touching(path, base, head):
++    """[(sha, subject)] for commits in base..head that changed <path>.
++
++    `:(literal)` because a path is a path — a filename containing a glob
++    character must not be read as a pattern here.
++    """
++    r = _ro("log", "--full-history", "--format=%H%x00%s", "%s..%s" % (base, head),
++            "--", ":(literal)" + path)
++    if r.returncode != 0:
++        return []
++    out = []
++    for line in r.stdout.splitlines():
++        sha, _, subj = line.partition("\0")
++        if sha:
++            out.append((sha, subj))
++    return out
++
++
++def _is_ancestor(a, b):
++    return _ro("merge-base", "--is-ancestor", a, b).returncode == 0
++
++
++def window_is_corroborated(tid, w):
++    """Is this window's close boundary backed by the ticket's own receipt?
++
++    `ticket-start:`/`ticket-close:` are just commit SUBJECTS — `git commit -m
++    "ticket-close: T-9"` writes one, and nothing in git stops it. If window
++    membership alone granted attribution, an unticketed change could be
++    laundered into any closed ticket's scope simply by bracketing it with two
++    hand-written subjects. So the boundary has to be corroborated by evidence
++    the agent cannot write: the ticket's receipt (.claude/evidence/**, ABSOLUTE)
++    must exist and its commit must be the window's close or a descendant of it —
++    descendant rather than equal so that a ticket claimed, released and re-closed
++    (the T-0..T-9/T-19 remint chain) still vouches for its earlier windows.
++    """
++    r = receipt(tid)
++    if not (r and w.get("closed")):
++        return False
++    rc = resolve_commit(r.get("commit"))
++    return bool(rc) and _is_ancestor(w["closed"], rc)
++
++
++def classify_change(path, commits, windows, holder_tid):
++    """Who, if anyone, the plan says was entitled to change <path>.
++
++    A change is EXPLAINED only when some ticket OTHER than the receipt holder
++    (a) had a window open across the commit that made the change, (b) names the
++    path in its OWN scope, and (c) has that window corroborated by its own
++    receipt. Window membership alone explains nothing: T-7's close range carried
++    docs/eval-report/** while T-7's scope never named it, and treating "it
++    happened during some ticket" as attribution would launder exactly that.
++
++    META_ALLOW and HARNESS_STATE paths are exempt because every session may
++    write them by design (docs/TASKS.md is generated, .claude/monitor/** is
++    scratch); integrity() exempts the same two sets at close, so treating them
++    as drift here would contradict the gate that minted the receipt.
++    """
++    if match_any(path, META_ALLOW, raw=True) or match_any(path, HARNESS_STATE, raw=True):
++        return [], "path is META_ALLOW/HARNESS_STATE — writable by any session by design", \
++            [{"commit": s, "subject": sj, "attributed_to": []} for s, sj in commits]
++    # Attribution is settled PER COMMIT and the path is explained only if EVERY
++    # commit that touched it is. Aggregating over the path instead would let one
++    # legitimate in-scope edit vouch for an unticketed one to the same file — a
++    # single ratified touch would retroactively cover everything else that ever
++    # happened to it.
++    rows, unexplained, seen = [], 0, []
++    for sha, subj in commits:
++        owners = [(tid, w) for tid, wins in windows.items()
++                  for w in wins if sha in w["commits"] and tid != holder_tid]
++        seen += [tid for tid, _ in owners]
++        who = sorted({tid for tid, w in owners
++                      if (ticket(tid) and match_any(path, ticket(tid)["scope"])
++                          and window_is_corroborated(tid, w))})
++        if not who:
++            unexplained += 1
++        rows.append({"commit": sha, "subject": subj, "attributed_to": who})
++    if not rows:
++        return [], "the path differs between the two commits but no commit in the range " \
++                   "reports touching it — history may have been rewritten", rows
++    if not unexplained:
++        allwho = sorted({t for r in rows for t in r["attributed_to"]})
++        return allwho, "every commit that touched it fell inside the attested window of %s, " \
++                       "whose own scope names it" % ", ".join(allwho), rows
++    if seen:
++        return [], ("%d of %d commits touching it are unaccounted for; the windows open across "
++                    "them (%s) either do not name this path in their scope or are not "
++                    "corroborated by their own receipt — window membership is not authority"
++                    % (unexplained, len(rows), ", ".join(sorted(set(seen))))), rows
++    return [], "changed by %d commit(s) with no ticket open at all" % unexplained, rows
++
++
++def revalidate(head=None):
++    """Recompute every receipt against HEAD. Returns a JSON-able report."""
++    head_sha = resolve_commit(head or "HEAD")
++    if not head_sha:
++        raise IntegrityUnavailable("git could not resolve HEAD in %s" % ROOT)
++    windows = ticket_windows()
++    head_blobs = tree_blobs(head_sha)
++    rows = []
++    for fn in sorted(os.listdir(EVID)) if os.path.isdir(EVID) else []:
++        if not fn.endswith(".json"):
++            continue
++        tid = fn[:-5]
++        row = {"ticket": tid, "verdict": UNVERIFIABLE, "notes": [], "changes": []}
++        rows.append(row)
++        try:
++            rec = receipt(tid)
++        except Exception as e:
++            row["notes"].append("receipt is unreadable (%s)" % e)
++            continue
++        t = ticket(tid)
++        if not t:
++            row["notes"].append("no ticket %s in docs/tickets.json — there is no scope to "
++                                "recompute a fingerprint over" % tid)
++            continue
++        stored = rec.get("fingerprint")
++        rcommit = resolve_commit(rec.get("commit"))
++        row["receipt_commit"] = rec.get("commit")
++        row["stored_fingerprint"] = stored
++        if not rcommit:
++            row["notes"].append("receipt's commit %r does not resolve in this repo, so there "
++                                "is no baseline to compare HEAD against" % rec.get("commit"))
++            continue
++        if not (isinstance(stored, str) and stored):
++            row["notes"].append("receipt carries no fingerprint — it attests a commit and "
++                                "nothing about the content")
++            continue
++        row["receipt_commit"] = rcommit
++
++        # Does the receipt still describe HEAD?
++        now = fingerprint_at(t["scope"], head_sha, head_blobs)
++        row["fingerprint_at_head"] = now
++        if now == stored:
++            row["verdict"] = VALID
++            continue
++
++        # It does not. Is the receipt at least reproducible from its own commit,
++        # under the scope the plan declared back then?
++        doc_then = tickets_at(rcommit)
++        scope_then = next((x["scope"] for x in (doc_then or {}).get("tickets", [])
++                           if x.get("id") == tid), None)
++        if scope_then is None:
++            row["notes"].append("docs/tickets.json at %s does not declare %s, so the scope the "
++                                "fingerprint was minted over cannot be recovered" % (rcommit[:9], tid))
++        else:
++            if scope_then != t["scope"]:
++                row["notes"].append("SCOPE REDEFINED since this receipt: minted over %s, the plan "
++                                    "now says %s — the receipt attests a different set of files "
++                                    "than the one it names" % (scope_then, t["scope"]))
++            if fingerprint_at(scope_then, rcommit) != stored:
++                row["notes"].append("the stored fingerprint does NOT reproduce from the receipt's "
++                                    "own commit under the scope in force there — what this receipt "
++                                    "certified cannot be established")
++
++        # What moved, and who moved it.
++        base_blobs = tree_blobs(rcommit)
++        then = {p: s for p, s in base_blobs.items() if match_any(p, t["scope"])}
++        nowm = {p: s for p, s in head_blobs.items() if match_any(p, t["scope"])}
++        paths = sorted(set(then) | set(nowm))
++        unattributed = False
++        for p in paths:
++            if then.get(p) == nowm.get(p):
++                continue
++            commits = _commits_touching(p, rcommit, head_sha)
++            who, note, rows_ = classify_change(p, commits, windows, tid)
++            if not who and "META_ALLOW" not in note:
++                unattributed = True
++            row["changes"].append({
++                "path": p,
++                "kind": "added" if p not in then else "deleted" if p not in nowm else "modified",
++                "attributed_to": who, "note": note, "commits": rows_,
++            })
++        # A receipt whose own fingerprint will not reproduce is not "explained" by
++        # anything: nobody can say what it attested, so it cannot be cleared.
++        if any(n.startswith("the stored fingerprint does NOT reproduce") for n in row["notes"]):
++            unattributed = True
++        if not row["changes"] and not unattributed:
++            # Fingerprint moved with no in-scope content change: the scope itself was
++            # redefined (or the receipt predates the current fingerprint scheme).
++            row["notes"].append("no in-scope file changed between %s and HEAD, yet the fingerprint "
++                                "differs — the difference is in the scope definition, not the code"
++                                % rcommit[:9])
++        row["verdict"] = DRIFTED_UNATTRIBUTED if unattributed else DRIFTED_EXPLAINED
++    counts = {v: sum(1 for r in rows if r["verdict"] == v)
++              for v in (VALID, DRIFTED_EXPLAINED, DRIFTED_UNATTRIBUTED, UNVERIFIABLE)}
++    return {"head": head_sha, "root": ROOT, "counts": counts, "receipts": rows}
++
++
++def cmd_revalidate(argv):
++    """`revalidate [--json]` — exit 0 clean, 1 unattributed drift, 2 unanswerable.
++
++    1 vs 2 is the same distinction integrity() draws and IntegrityUnavailable
++    exists to protect: "this receipt no longer attests anything and no ticket
++    accounts for it" and "this receipt could not be checked at all" are opposite
++    facts and must not share an exit code.
++    """
++    try:
++        rep = revalidate()
++    except IntegrityUnavailable as e:
++        return str(e), 2
++    if "--json" in argv:
++        return json.dumps(rep, indent=1), (1 if rep["counts"][DRIFTED_UNATTRIBUTED]
++                                           else 2 if rep["counts"][UNVERIFIABLE] else 0)
++    L = ["receipt revalidation @ %s" % rep["head"][:9], ""]
++    for r in sorted(rep["receipts"], key=lambda r: (r["verdict"] != DRIFTED_UNATTRIBUTED, r["ticket"])):
++        L.append("%-22s %s" % (r["verdict"], r["ticket"]))
++        for n in r["notes"]:
++            L.append("      ! %s" % n)
++        for c in r["changes"]:
++            tag = ("attributed to " + ", ".join(c["attributed_to"])) if c["attributed_to"] else "UNATTRIBUTED"
++            L.append("      %s %s  [%s]" % (c["kind"][:3], c["path"], tag))
++            L.append("          %s" % c["note"])
++            for cm in c["commits"]:
++                L.append("          %s %-64s %s" % (cm["commit"][:9], cm["subject"][:64],
++                                                    ",".join(cm["attributed_to"]) or "UNATTRIBUTED"))
++    L += ["", "  ".join("%s=%d" % (k, v) for k, v in rep["counts"].items())]
++    if rep["counts"][DRIFTED_UNATTRIBUTED]:
++        L.append("\nA DRIFTED-UNATTRIBUTED receipt certifies nothing: its scope changed and no "
++                 "ticket in the plan accounts for the change. Record it in "
++                 ".claude/NEEDS_HUMAN.md — the receipt must be re-earned through a ticket, "
++                 "and only a human can decide which.")
++    return "\n".join(L), (1 if rep["counts"][DRIFTED_UNATTRIBUTED]
++                          else 2 if rep["counts"][UNVERIFIABLE] else 0)
++
++
+ LINT_RULES = [
+     (r"\|\|\s*true", "'|| true' makes the gate pass unconditionally"),
+     (r"(?<![($])\bcd\s+\S+\s*&&", "bare 'cd' across '&&' persists directory state; use a subshell '(cd X && ...)'"),
+@@ -471,16 +868,37 @@ def main2():
+     if fn == "claim": out, rc = cmd_claim(sys.argv[2], sys.argv[3])
+     elif fn == "close": out, rc = cmd_close()
+     elif fn == "release": out, rc = cmd_release(sys.argv[2])
++    elif fn == "revalidate": out, rc = cmd_revalidate(sys.argv[2:])
+     elif fn.startswith("hook-"): out, rc = cmd_hook(fn[5:])
+     else: return None
+     if out: print(out)
+     sys.exit(rc)
+ 
++# Every verb this harness has. A name NOT in here used to fall through the whole
++# elif chain and exit 0 with no output, so `harness_lib.py revalidate` read as a
++# clean pass for as long as revalidate did not exist — a typo, or a control an
++# auditor merely BELIEVES is installed, answering "all fine". Unknown verbs now
++# fail loudly, which is the same fail-closed rule the guard already follows.
++#
++# "status" is here because .claude/rules/harness-protocol.md tells every session
++# to run `claim.sh status` at session start and names status as one of the four
++# lifecycle verbs — but the elif chain only ever answered to "status_board", so
++# that documented command has printed nothing and exited 0 for this entire
++# build. Failing it loudly would be truthful and useless; making the documented
++# name do the documented thing is the actual repair.
++VERBS = ("claim", "close", "release", "revalidate", "status", "status_board",
++         "guard", "fingerprint", "integrity", "lint")
++
+ if __name__ == "__main__":
+-    if sys.argv[1] in ("claim","close","release") or sys.argv[1].startswith("hook-"):
++    if len(sys.argv) < 2:
++        print("usage: harness_lib.py <%s|hook-*> [args]" % "|".join(VERBS)); sys.exit(2)
++    if sys.argv[1] not in VERBS and not sys.argv[1].startswith("hook-"):
++        print("harness_lib.py: no such verb %r. Known verbs: %s, hook-*"
++              % (sys.argv[1], ", ".join(VERBS))); sys.exit(2)
++    if sys.argv[1] in ("claim","close","release","revalidate") or sys.argv[1].startswith("hook-"):
+         main2()
+     fn = sys.argv[1]
+-    if fn == "status_board":
++    if fn in ("status_board", "status"):
+         if not os.path.exists(TICKETS):
+             print("no docs/tickets.json — harness installed, plan not yet generated"); sys.exit(0)
+         for t in load_tickets()["tickets"]:

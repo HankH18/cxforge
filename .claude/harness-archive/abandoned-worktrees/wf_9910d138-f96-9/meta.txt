@@ -1,0 +1,9 @@
+worktree_name:   wf_9910d138-f96-9
+worktree_path:   /Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/cxforge/.claude/worktrees/wf_9910d138-f96-9
+branch:          worktree-wf_9910d138-f96-9
+head_sha:        4618752cd364316785cdf9c1d84da3d4791bb395
+head_subject:    ticket-close: T-28
+ancestor_of_master(972c13b): yes
+disk_size_before_removal:    462M
+dirty_file_count: 1
+untracked_count:  0

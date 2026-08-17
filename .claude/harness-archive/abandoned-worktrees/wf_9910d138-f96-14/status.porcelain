@@ -1,0 +1,3 @@
+ M .claude/scripts/harness_lib.py
+ M backend/tests/hooks/conftest.py
+?? backend/tests/hooks/test_changed_since_no_staging.py

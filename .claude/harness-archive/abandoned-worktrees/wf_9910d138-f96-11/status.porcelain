@@ -1,0 +1,3 @@
+ M .claude/scripts/harness_lib.py
+ M backend/tests/hooks/test_close_unattributed_claim_gap.py
+?? backend/tests/hooks/test_claim_attribution_coherence.py

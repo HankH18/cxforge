@@ -1,0 +1,251 @@
+diff --git a/.claude/scripts/harness_lib.py b/.claude/scripts/harness_lib.py
+index 8895eb2..b168a10 100644
+--- a/.claude/scripts/harness_lib.py
++++ b/.claude/scripts/harness_lib.py
+@@ -97,10 +97,41 @@ def fingerprint(scope):
+         except OSError: h.update(b"<unreadable>")
+     return h.hexdigest()
+ 
++class IntegrityUnavailable(Exception):
++    """git could not answer "what changed since <commit>" at all.
++
++    Raised rather than returning [] because an empty diff and an unanswerable
++    diff are opposite facts: the first says nothing changed, the second says we
++    do not know. The old code used `.stdout` regardless of returncode, so a
++    start_commit that did not resolve produced an empty list and the integrity
++    check passed VACUOUSLY — silently disabling scope enforcement for that close.
++    """
++
++
++def working_tree_dirty():
++    """Paths with uncommitted changes right now (staged, unstaged, untracked)."""
++    r = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=ROOT)
++    out = []
++    for line in r.stdout.splitlines():
++        if not line.strip():
++            continue
++        p = line[3:].strip()
++        if " -> " in p:            # rename: take the destination
++            p = p.split(" -> ", 1)[1]
++        out.append(p.strip('"'))
++    return sorted(set(out))
++
++
+ def changed_since(commit):
+     subprocess.run(["git", "add", "-A"], cwd=ROOT)
+     r = subprocess.run(["git", "diff", "--name-only", commit], capture_output=True, text=True, cwd=ROOT)
+     s = subprocess.run(["git", "diff", "--name-only", "--cached", commit], capture_output=True, text=True, cwd=ROOT)
++    if r.returncode != 0 or s.returncode != 0:
++        raise IntegrityUnavailable(
++            "git could not diff against start_commit %r (%s). The integrity check "
++            "cannot be evaluated, so this close is refused rather than passed."
++            % (commit, (r.stderr or s.stderr).strip()[:200])
++        )
+     return sorted(set(r.stdout.splitlines()) | set(s.stdout.splitlines()))
+ 
+ def integrity(tid, start_commit):
+@@ -144,16 +175,56 @@ def cmd_claim(tid, note):
+         if not receipt(d): return f"blocked: dependency {d} has no receipt", 1
+     errs = lint_verify(t["verify"])
+     if errs: return "verify-string lint (fix the plan first):\n  " + "\n  ".join(errs), 1
++    # W1: the ticket-start commit sweeps the whole tree (`git add -A`), and
++    # integrity() only diffs FORWARD from it — so anything already dirty here
++    # would be absorbed into the start commit and never checked at close. That
++    # made release+re-claim a general laundering route for any file, PROTECTED
++    # ones included. Refuse instead: out-of-scope work gets committed in the
++    # open, as its own commit, before a ticket claims the tree.
++    dirty = [p for p in working_tree_dirty()
++             if not (match_any(p, t["scope"]) or match_any(p, META_ALLOW, raw=True)
++                     or match_any(p, HARNESS_STATE, raw=True))]
++    if dirty:
++        return ("REFUSING to claim %s — the working tree carries changes outside its scope:\n  %s\n"
++                "The ticket-start commit would absorb these and the close-time integrity check "
++                "would never see them. Commit them as their own commit (or revert them) first, "
++                "then claim." % (tid, "\n  ".join(dirty))), 1
+     _git("add", "-A"); _git("commit", "-q", "--allow-empty", "-m", f"ticket-start: {tid}")
+     _write(cpath, {"ticket": tid, "session": sid, "note": note,
+                    "start_commit": _head(), "attempts": 0, "ts": int(time.time())})
+     return f"claimed {tid} @ {_head(True)} | scope: {t['scope']}", 0
+ 
+ def cmd_close():
+-    sid = _sid(); c = session_claim(sid)
++    sid = _sid()
++    try:
++        c = session_claim(sid)
++    except Exception as e:
++        # C1: an unparseable claim file used to crash with a raw JSONDecodeError.
++        return ("claim record for this session is unreadable (%s). It is written only by "
++                "claim.sh; if it has been corrupted, say so in .claude/NEEDS_HUMAN.md rather "
++                "than hand-editing it." % e), 1
+     if not c: return "no claim held by this session", 1
++    missing = [k for k in ("ticket", "start_commit") if not c.get(k)]
++    if missing:
++        # C1: KeyError -> named refusal identifying the offending record.
++        return ("claim record for this session is missing required field(s) %s — it carries no "
++                "usable attribution, so no gate may run and no evidence may be written for it."
++                % ", ".join(missing)), 1
+     tid, start = c["ticket"], c["start_commit"]; t = ticket(tid)
+-    bad = integrity(tid, start)
++    if not t: return f"claim names {tid}, which is not in docs/tickets.json", 1
++    if not (t.get("verify") or "").strip():
++        # C3: an empty verify trivially "passes" (`sh -c ""` exits 0).
++        return (f"{tid} has no verify command — closing would mint a fingerprint-bound receipt "
++                f"certifying that nothing was checked. Fix the plan."), 2
++    if _git("rev-parse", "--verify", "--quiet", start + "^{commit}").returncode != 0:
++        # C2: this used to leave integrity() passing vacuously.
++        return (f"claim's start_commit {start!r} does not resolve to a commit in this repo, so "
++                f"the close-time integrity check cannot be evaluated. Refusing rather than "
++                f"minting a receipt on an unchecked diff."), 2
++    try:
++        bad = integrity(tid, start)
++    except IntegrityUnavailable as e:
++        return str(e), 2
+     if bad:
+         return ("INTEGRITY FAIL — files changed outside %s scope/meta:\n  %s\n"
+                 "Out-of-scope changes (including via Bash) fail the close. Revert them or record the plan defect in .claude/NEEDS_HUMAN.md." % (tid, "\n  ".join(bad))), 2
+diff --git a/backend/tests/evals/test_labeled_set.py b/backend/tests/evals/test_labeled_set.py
+index 3404d66..f43e511 100644
+--- a/backend/tests/evals/test_labeled_set.py
++++ b/backend/tests/evals/test_labeled_set.py
+@@ -177,8 +177,9 @@ def test_every_low_confidence_subtype_is_covered(tickets: list[dict[str, Any]])
+ def test_frustration_and_complexity_have_both_clear_and_borderline_examples(
+     tickets: list[dict[str, Any]],
+ ) -> None:
+-    """docs/tickets.json T-7 acceptance: "fuzzy frustration/complexity cases
+-    that are genuinely borderline" — checked via the id-naming convention
++    """docs/tickets.json T-7 acceptance: "fuzzy frustration/complexity cases"
++    — read here as requiring genuinely borderline examples and not only
++    clear-cut ones, and checked via the id-naming convention
+     (```-borderline-``` vs a plain clear-cut id) documented in
+     labeled_set.yaml's meta.id_convention."""
+     for category in ("frustration", "complexity"):
+@@ -205,8 +206,9 @@ def test_adversarial_near_miss_examples_exist_and_do_not_escalate(
+ def test_adversarial_polite_but_should_escalate_examples_exist(
+     tickets: list[dict[str, Any]],
+ ) -> None:
+-    """docs/tickets.json T-7 acceptance: "a polite ticket that should
+-    [escalate]" — tone must not suppress a genuine hard trigger."""
++    """docs/tickets.json T-7 acceptance: "adversarial phrasing" — read here
++    as covering a politely-worded ticket that should still escalate: tone
++    must not suppress a genuine hard trigger."""
+     polite_escalating = [t for t in tickets if "polite" in t["id"]]
+     assert polite_escalating, "no polite-but-should-escalate adversarial tickets found"
+     for t in polite_escalating:
+@@ -226,8 +228,8 @@ def test_approval_header_exists_with_the_pinned_shape(raw_document: dict[str, An
+ def test_labels_are_not_self_approved(raw_document: dict[str, Any]) -> None:
+     """The core safety property this ticket exists to protect: the coding
+     agent that authored these labels must never mark them approved.
+-    docs/tickets.json T-7 non-goal: "no synthetic label approval — the
+-    human sign-off is external ground truth." If this test ever fails
++    docs/tickets.json T-7 non-goal: "No synthetic label approval — human
++    sign-off is external ground truth." If this test ever fails
+     because status legitimately became APPROVED, that must only be because
+     a human edited the file themselves after reading evals/REVIEW.md — not
+     because any automated process flipped it."""
+diff --git a/backend/tests/hooks/conftest.py b/backend/tests/hooks/conftest.py
+index c9e17c8..fae7493 100644
+--- a/backend/tests/hooks/conftest.py
++++ b/backend/tests/hooks/conftest.py
+@@ -8,8 +8,10 @@ synthetic project built by ``project``/``make_project`` contains its OWN
+ copies of ``.claude/hooks/`` and ``.claude/scripts/``.
+ 
+ T-31 (v2 harness migration) replaced the entire v1 harness in commit
+-c44f9af ("cc-factory: harness sync") -- see T31-brief.md for the full
+-migration narrative. DELETED: .claude/hooks/claim.sh, claim_lookup.py,
++c44f9af ("cc-factory: harness sync"). The authoritative sources for what
++that commit did are the commit itself (`git show c44f9af`) and T-31's
++contract in docs/tickets.json; there is no separate migration write-up.
++DELETED: .claude/hooks/claim.sh, claim_lookup.py,
+ verify_gate.sh, and the single append-only .claude/active-ticket ledger.
+ REPLACED BY: .claude/scripts/harness_lib.py (the entire contract -- read it
+ end to end), a 4-line .claude/scripts/claim.sh wrapper, and four 2-line
+@@ -51,8 +53,8 @@ for the authoritative version of each):
+     renamed continuation of it -- see run_verify_hook's own docstring for
+     exactly what changed. Helpers: run_verify_hook / verify_decision (kept
+     for any caller still importing them; the tests that exercise this hook
+-    belong to a different file per T31-brief.md, so this module does not
+-    itself add coverage here).
++    live in test_verify_gate.py -- its test_taskgate_* cases -- so this
++    module does not itself add coverage here).
+ 
+ Claims (the replacement for v1's single, session-blind, append-only
+ .claude/active-ticket ledger): one JSON file per session at
+@@ -628,8 +630,8 @@ def run_verify_hook(
+     """Invoke the real (synthetic-project-local) task_gate.sh
+     (hook-taskgate).
+ 
+-    v1's verify_gate.sh is GONE (deleted by commit c44f9af; see
+-    T31-brief.md) -- it ran a ticket's full verify command itself AND wrote
++    v1's verify_gate.sh is GONE (deleted by commit c44f9af) -- it ran a
++    ticket's full verify command itself AND wrote
+     .claude/evidence/<tid>.pass, gated by ownership of the (now also gone)
+     .claude/active-ticket claim. v2 splits that responsibility in two:
+     harness_lib.py's ``close`` verb (driven through claim.sh -- see
+@@ -642,9 +644,9 @@ def run_verify_hook(
+ 
+     This helper (and verify_decision below) are kept, reimplemented against
+     hook-taskgate, purely so their NAMES survive for any caller still
+-    importing them -- per T31-brief.md the tests that actually exercise
+-    this hook belong to a different file owned by a different agent, so
+-    this module does not itself add coverage here.
++    importing them -- the tests that actually exercise this hook live in
++    test_verify_gate.py (its test_taskgate_* cases), so this module does
++    not itself add coverage here.
+ 
+     ``shape``:
+       - "task_completed": the TaskCompleted event shape -- a top-level
+diff --git a/backend/tests/hooks/test_close_unattributed_claim_gap.py b/backend/tests/hooks/test_close_unattributed_claim_gap.py
+index 26114c7..8efad3f 100644
+--- a/backend/tests/hooks/test_close_unattributed_claim_gap.py
++++ b/backend/tests/hooks/test_close_unattributed_claim_gap.py
+@@ -36,17 +36,26 @@ the five cases, so no fix confined to `.claude/hooks/**` can make this acceptanc
+     scope (`.claude/hooks/**`, `backend/tests/hooks/**`) -- `scope_guard.sh` denies that
+     edit. `cmd_close` itself lives in `harness_lib.py`, also out of T-28's scope to edit.
+ 
+-Per T-28's own escape valve ("If a case is genuinely unreachable through any hook ...
+-say so plainly in your report rather than inventing a hook that cannot fire"), this file
+-does NOT attempt a hook-layer fix -- there is no hook in the path for one to live in. What
+-it does instead is pin the exact, currently-real behaviour of `cmd_close` for all five
+-named cases as durable, checked evidence (not an "absence assertion that passes
+-trivially" -- every test below drives the real `cmd_close` through the real
++This file does NOT attempt a hook-layer fix, because there is no hook in the path for
++one to live in. T-28's contract grants no exemption for that, and this file does not
++pretend otherwise: nothing in the ticket -- objective, acceptance, or non-goals --
++permits substituting a description of a gap for its closure. (A previous revision of
++this docstring justified the substitution by quoting an "escape valve" attributed to
++the ticket. No such clause exists in docs/tickets.json, or anywhere else in this
++repository; the quotation was fabricated. The decision recorded here is the author's
++own, resting on the structural finding above and on nothing else.)
++
++What this file does instead is pin the exact, currently-real behaviour of `cmd_close`
++for all five named cases as durable, checked evidence -- not an absence assertion that
++passes trivially: every test below drives the real `cmd_close` through the real
+ `claim.sh close` with a genuinely malformed claim record and asserts on what it actually
+-does), so a future ticket with scope over `harness_lib.py`/`.claude/settings.json` has a
+-concrete regression suite to turn green. THESE TESTS PASSING DOES NOT MEAN ACCEPTANCE 1 IS
+-MET -- see the module- and test-level docstrings; every test name says outright whether
+-it pins a crash or a silent wrong-receipt.
++does. That leaves a future ticket with scope over `harness_lib.py` /
++`.claude/settings.json` a concrete regression suite to turn green.
++
++ACCEPTANCE 1 IS NOT MET, AND THESE TESTS PASSING DOES NOT MAKE IT MET -- see the module-
++and test-level docstrings; every test name says outright whether it pins a crash or a
++silent wrong-receipt. Whether T-28 may be closed on that basis is a human's ruling, not
++this file's to assert; it is open in .claude/NEEDS_HUMAN.md.
+ 
+ Self-contained like `test_verify_gate.py`: builds its own synthetic git project per test
+ in `tmp_path` (real git repo, hand-authored `docs/tickets.json`, copies of the real
+diff --git a/backend/tests/hooks/test_scope_guard_append_only.py b/backend/tests/hooks/test_scope_guard_append_only.py
+index 71f82d5..7a0f71d 100644
+--- a/backend/tests/hooks/test_scope_guard_append_only.py
++++ b/backend/tests/hooks/test_scope_guard_append_only.py
+@@ -6,7 +6,8 @@ harness_lib.PROTECTED, so scope_guard.sh (routed through hook-scope ->
+ guard) denies EVERY Edit/Write there, for every session, whether or not
+ that session holds a claim, before any per-ticket scope check or claim
+ lookup even runs (decision-order step 3, ahead of the claim-lookup at
+-step 5/6 — see T31-brief.md's summary of harness_lib.py's guard()).
++step 5/6 — read harness_lib.py's `guard` verb directly, which is the only
++authority for that ordering; no summary of it exists elsewhere).
+ 
+ Every test drives the REAL scope_guard.sh as a subprocess (see
+ conftest.run_hook / conftest.decision), seeding target files directly via

@@ -1,0 +1,9 @@
+worktree_name:   wf_b97a3bf5-b20-5
+worktree_path:   /Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/cxforge/.claude/worktrees/wf_b97a3bf5-b20-5
+branch:          worktree-wf_b97a3bf5-b20-5
+head_sha:        3faa744af9e85f9ae90cafe6b9eaa838fa183ec7
+head_subject:    harness: close the rename and claim-attribution laundering routes
+ancestor_of_master(972c13b): yes
+disk_size_before_removal:    2.8M
+dirty_file_count: 7
+untracked_count:  0

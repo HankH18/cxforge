@@ -1,0 +1,9 @@
+worktree_name:   wf_9910d138-f96-15
+worktree_path:   /Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/cxforge/.claude/worktrees/wf_9910d138-f96-15
+branch:          worktree-wf_9910d138-f96-15
+head_sha:        aea59c0afbb7fb28af21e224ad6cea122eacfedd
+head_subject:    provider: swap OpenAI for the Anthropic Messages API (authorised by Hank)
+ancestor_of_master(972c13b): yes
+disk_size_before_removal:    474M
+dirty_file_count: 3
+untracked_count:  0

@@ -1,0 +1,2 @@
+ M .claude/scripts/harness_lib.py
+?? backend/tests/hooks/test_receipt_revalidation.py

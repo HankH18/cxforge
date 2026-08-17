@@ -1,0 +1,24 @@
+worktree_name:   agent-a767ac3940f609ac7
+worktree_path:   /Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/cxforge/.claude/worktrees/agent-a767ac3940f609ac7
+branch:          worktree-agent-a767ac3940f609ac7
+head_sha:        (unborn - no commit on branch)
+head_subject:    (unborn)
+ancestor_of_master(972c13b): n/a
+disk_size_before_removal:     88M
+dirty_file_count: 135
+untracked_count:  0
+
+SPECIAL CASE -- read this before assuming work was lost.
+This worktree sat on an UNBORN branch (refs/heads/worktree-agent-a767ac3940f609ac7
+never existed; `git worktree list` showed HEAD as 0000000). Its 135 "dirty" entries
+were 134 `A ` (staged-only) plus 1 `AM`.
+
+The staged index tree is 2224a6bb696f1173e91e7ee91be3764d7a7761ab. That tree is
+BYTE-IDENTICAL to the tree of commit 200ccc6 "T-9: start -- claim Portal UI", which
+is already an ancestor of master. So the 135 staged files contain ZERO unique
+content -- they are a stale snapshot of an old commit, not unmerged work.
+
+The only content unique to this worktree is the single `AM` file:
+  .claude/active-ticket : "T-9" (staged) -> "T-7" (working tree)
+captured in tracked.diff. Recover the full 135-file state with:
+  git checkout 200ccc6 -- .        (or: git archive 2224a6b | tar -x)

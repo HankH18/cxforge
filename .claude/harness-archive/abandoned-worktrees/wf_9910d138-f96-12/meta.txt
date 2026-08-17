@@ -1,0 +1,9 @@
+worktree_name:   wf_9910d138-f96-12
+worktree_path:   /Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/cxforge/.claude/worktrees/wf_9910d138-f96-12
+branch:          worktree-wf_9910d138-f96-12
+head_sha:        dc972bf96ced7d76df029f83de8bd808898abe2e
+head_subject:    baseline: pending unattributed harness_lib patch (not mine)
+ancestor_of_master(972c13b): no
+disk_size_before_removal:    462M
+dirty_file_count: 5
+untracked_count:  1

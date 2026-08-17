@@ -1,0 +1,1494 @@
+diff --git a/.claude/NEEDS_HUMAN.md b/.claude/NEEDS_HUMAN.md
+index 13d5ea8..ac39dd1 100644
+--- a/.claude/NEEDS_HUMAN.md
++++ b/.claude/NEEDS_HUMAN.md
+@@ -6,6 +6,101 @@ when it isn't.
+ 
+ ---
+ 
++## 🔵 ACTION FOR HANK — W10 fixed in the harness; the *binding* half needs two commands from you
++
++**Two minutes of your time, once. Nothing is blocked until you do it — but until you
++do, the top item in the RESOLVED block below ("the exposure is the *next* flip, not
++this one") is still true.**
++
++### What changed, and what it already buys
++
++`evals/labeled_set.yaml`, `.claude/approval/**` and `.claude/scripts/approval_gate.py`
++are now `harness_lib.HUMAN_ONLY`. That list is checked in three places, and only the
++first is the one people usually mean by "the guard":
++
++| where | before | now |
++|---|---|---|
++| Edit/Write guard, no claim held | ALLOW | DENY |
++| Edit/Write guard, holding T-7 (scope `evals/**`) | ALLOW | DENY |
++| `claim.sh close` integrity, file written via Bash mid-ticket | rc 0, receipt minted | rc 2, refused by name |
++| `claim.sh claim`, file written via Bash *before* claiming | rc 0, absorbed into the start commit | rc 1, refused |
++
++All four were reproduced against the shipped harness first. The third and fourth rows
++are the ones that matter: **the `Bash` tool is matched by no PreToolUse hook**
++(`.claude/settings.json` has exactly two matchers, `Edit|Write|NotebookEdit` and
++`TaskUpdate`), so `python3 -c` and `sed -i` can still *write* these files — including
++the way you yourself flipped the block. What they can no longer do is finish a ticket
++afterwards. That is the harness's own documented compensating control for the Bash
++hole (protocol rule 4), applied to the one file it had been leaving out.
++
++`evals/**` is now `PROTECTED` as well, which closes W10's other half — a session
++holding *no* claim was unconstrained for every non-PROTECTED path, so it could rewrite
++the eval corpus and `report.py` freely. PROTECTED yields to an explicit scope grant, so
++**T-7, T-15, T-21 and T-25 are unaffected** (verified case by case, T-21 included —
++it is in flight).
++
++### What still needs you: arm the signature anchor
++
++Right now nothing in this repo can tell your approval from an agent-written one — the
++verify reads three strings any agent can type. `.claude/scripts/approval_gate.py` fixes
++that by requiring a detached SSH signature over the labels *and* the approval fields,
++made with a key whose passphrase exists only in your head. It ships **unarmed**: with
++no key in the anchor it reports and refuses nothing, so nothing has changed for you yet.
++
++```sh
++# 1. a signing key — passphrase-protected, and never `ssh-add` it
++ssh-keygen -t ed25519 -C 'cxforge label approval' -f ~/.ssh/cxforge_approval
++
++# 2. record its public half as the trust anchor
++printf 'hank@cxforge %s\n' "$(cut -d' ' -f1,2 ~/.ssh/cxforge_approval.pub)" \
++  >> .claude/approval/allowed_signers
++```
++
++Then, each time you approve, three more commands — see `.claude/approval/README.md`.
++Once armed, any ticket whose verify *reads* the approval (T-7's does) is refused at
++close while that approval is unsignable. **Do not load the key into ssh-agent:** your
++launchd agent is reachable from the agent's own environment, and a key it holds is a
++key the agent can sign with, silently — measured, not assumed.
++
++Why this and not commit signing: an agent here already produced a `%G? = G`,
++`Good signature` commit with no prompt and no touch, using the agent-held ssh-agent
++key. A passphrase is the only zero-install secret on this machine that an unattended
++agent cannot supply — verified: with the private key file fully readable and no
++passphrase, `ssh-keygen -Y sign` fails and writes nothing.
++
++### What this does NOT stop — please read this part
++
++1. **The anchor is a file in a repo the agent can write.** An agent with Bash can
++   append its own key to `allowed_signers` and sign with it, and the result genuinely
++   verifies. What it cannot do is close the ticket: the anchor is HUMAN_ONLY, so the
++   close names it and refuses (there is a test for exactly this). **Tamper-evident and
++   close-blocking, not impossible.** Nothing living inside a repo the agent can write
++   can be more than that. Stronger needs a hardware touch — `brew install libfido2` +
++   `SSH_SK_PROVIDER` against the YubiKey already plugged in — which is an install and
++   your call.
++2. **Between tickets there is no window.** A write with no claim open, never followed
++   by a close, is checked by nothing. That is W12's gap and it is untouched here.
++3. **Your own workflow changes slightly.** Your sign-off must land as its own commit
++   with no claim open. If you edit it while a ticket is open, that ticket's close is
++   refused — deliberately, so your approval can never be laundered through an agent's
++   attested diff. The refusal explains the remedy (release → commit it alone →
++   re-claim) and explicitly tells the session **not** to `git reset --hard`, which
++   would delete your sign-off.
++
++### Two things found on the way, neither fixed here
++
++* **`uv run mypy backend` already fails at HEAD** — 2 errors, in
++  `backend/tests/plan/update_structural_snapshot.py:30` and
++  `test_structural_snapshot.py:89`, both predating this change. T-0's verify runs
++  `uv run mypy backend`, so **T-0 cannot currently be re-closed.** Those files belong
++  to the plan-test tickets, not to this one.
++* **`docs/tickets.json` has no `full_verify` key**, so `cmd_close`'s
++  `load_tickets().get("full_verify")` is always `None` and the "full regression suite"
++  protocol rule 5 promises has never run for any ticket. Independent of the above;
++  reported, not touched (the file is PROTECTED).
++
++---
++
+ ## ✅ RESOLVED — W10/W14/W16 factual allegation WITHDRAWN (Hank confirmed, 2026-08-15)
+ 
+ **Hank confirms he flipped `evals/labeled_set.yaml`'s approval block himself.**
+diff --git a/.claude/approval/README.md b/.claude/approval/README.md
+new file mode 100644
+index 0000000..ec71cd0
+--- /dev/null
++++ b/.claude/approval/README.md
+@@ -0,0 +1,93 @@
++# The label-approval gate — arming it, and what it is worth
++
++`evals/labeled_set.yaml`'s `approval:` block is the one gate the plan reserves for
++you (docs/tickets.json, T-7 non_goal: *"No synthetic label approval — human
++sign-off is external ground truth"*).
++
++Today that gate is three strings. T-7's verify reads exactly those three strings:
++
++```
++a['status']=='APPROVED' and a['approved_by'] and a['approved_date']
++```
++
++You typed them yourself — that is settled and not in question. The problem is that
++**the repo cannot tell that from the alternative.** An agent typing `"Hank
++Holcomb"` and today's date produces a byte-identical pass and a byte-identical
++receipt. The exposure is the *next* flip, not the last one.
++
++## Arming it (two commands, once)
++
++**1. Make a signing key. Passphrase-protected, and never `ssh-add` it.**
++
++```sh
++ssh-keygen -t ed25519 -C 'cxforge label approval' -f ~/.ssh/cxforge_approval
++```
++
++Choose a passphrase you do not store anywhere and do not type into an agent
++session. That passphrase is the entire mechanism. The agent runs as your uid and
++can *read* `~/.ssh/cxforge_approval` — verified. It cannot *use* it: with the key
++file fully readable and no passphrase, `ssh-keygen -Y sign` fails with
++`incorrect passphrase supplied` and writes nothing. Read access is not signing
++capability. Do **not** load it into ssh-agent: your launchd agent is reachable
++from the agent's own environment, and a key it holds is a key the agent can sign
++with, silently, in one Bash call.
++
++**2. Record the public half as the anchor.**
++
++```sh
++printf 'hank@cxforge %s\n' "$(cut -d' ' -f1,2 ~/.ssh/cxforge_approval.pub)" \
++  >> .claude/approval/allowed_signers
++```
++
++## Signing an approval (each time you approve)
++
++Set the three fields in `evals/labeled_set.yaml` as you do now, then:
++
++```sh
++python3 .claude/scripts/approval_gate.py payload > /tmp/cxforge-approval.txt
++cat /tmp/cxforge-approval.txt          # read it — this is what you are attesting
++ssh-keygen -Y sign -f ~/.ssh/cxforge_approval -n cxforge-label-approval \
++  /tmp/cxforge-approval.txt
++mv /tmp/cxforge-approval.txt.sig .claude/approval/labeled_set.sig
++python3 .claude/scripts/approval_gate.py verify    # expect exit 0
++```
++
++Commit the approval **as its own commit, with no ticket claim open.** The harness
++refuses to absorb a change to these files into any ticket's attested range — in
++either direction, at claim time and at close time — precisely so your sign-off can
++never be laundered through an agent's diff.
++
++The payload covers the labels *and* the three approval fields. Re-label a ticket
++after signing, or change the name or date, and the old signature stops verifying.
++That is intended: the signature attests to a specific set of labels, not to the
++file's name.
++
++## What this is worth, stated honestly
++
++**Binding.** Producing a valid signature requires the passphrase. Nothing on this
++machine can supply it: gpg is not installed, the attached YubiKey has no FIDO
++middleware (`ssh-keygen -t ecdsa-sk` → *"No FIDO SecurityKeyProvider specified"*),
++and the ssh-agent key is deliberately not this one. An unattended agent — the
++actual threat here, two hours of drift with nobody watching — cannot construct the
++artifact at all, as opposed to being merely forbidden to.
++
++**Not binding.** The anchor is a file in a repo the agent can write.
++
++- `.claude/approval/**` and `.claude/scripts/approval_gate.py` are
++  `harness_lib.HUMAN_ONLY`: Edit/Write denied under **every** claim including one
++  whose scope names them, and any ticket window that changes them **fails the
++  close-time integrity check**.
++- The `Bash` tool is matched by no PreToolUse hook. A `python3 -c` or `sed -i` can
++  still write any of these files. What it cannot do is finish the ticket
++  afterwards: the close names the file and refuses.
++- Between tickets, with no claim open and nothing subsequently closed, there is no
++  window and therefore no check. That is the same gap that voided T-27/T-28's
++  receipts (W12) and it is not fixed here.
++
++So: **an agent cannot forge an approval that verifies. It can still forge one that
++does not verify, and it can still substitute the anchor — and both of those now
++leave a close-blocking, named diff instead of a clean receipt.** Detection and
++cost, not impossibility, for the anchor; genuine structural incapability for the
++signature itself. Anything stronger needs a hardware token with a physical touch
++(`brew install libfido2` + `SSH_SK_PROVIDER`, using the YubiKey already attached),
++which is an install, not a config change, and is your call to make.
+diff --git a/.claude/approval/allowed_signers b/.claude/approval/allowed_signers
+new file mode 100644
+index 0000000..4fef6e2
+--- /dev/null
++++ b/.claude/approval/allowed_signers
+@@ -0,0 +1,22 @@
++# Trust anchor for the T-7 label-approval gate (.claude/scripts/approval_gate.py).
++#
++# UNARMED while this file holds no key line. In that state approval_gate.py
++# reports UNVERIFIABLE, the close path prints a notice, and nothing is refused —
++# installing the gate changed no existing behaviour.
++#
++# ARM IT by appending ONE line, in ssh allowed_signers format:
++#
++#     hank@cxforge ssh-ed25519 AAAAC3Nz...
++#
++# The key MUST be passphrase-protected and MUST NOT be loaded into ssh-agent.
++# A key the agent's ssh-agent holds is a key the agent can sign with — measured,
++# not assumed: an unconfirmed agent key produced a "Good signature" and a
++# `%G? = G` git commit in this environment with no prompt and no touch.
++#
++# See README.md in this directory for the two commands.
++#
++# This file and everything beside it are harness_lib.HUMAN_ONLY: Edit/Write is
++# denied under every claim, and any ticket window that changes them fails the
++# close-time integrity check. That does not make substitution impossible (Bash
++# is not covered by any PreToolUse matcher) — it makes it close-blocking and
++# visible in the diff.
+diff --git a/.claude/scripts/approval_gate.py b/.claude/scripts/approval_gate.py
+new file mode 100644
+index 0000000..6c4c7ad
+--- /dev/null
++++ b/.claude/scripts/approval_gate.py
+@@ -0,0 +1,284 @@
++#!/usr/bin/env python3
++"""Binds evals/labeled_set.yaml's `approval:` block to a HUMAN, not to a field value.
++
++WHY THIS EXISTS
++---------------
++The plan reserves exactly one gate for the project owner (docs/tickets.json T-7
++non_goal: "No synthetic label approval — human sign-off is external ground truth").
++T-7's verify tests that gate by reading three fields out of the very file a ticket
++in scope may write:
++
++    a['status']=='APPROVED' and a['approved_by'] and a['approved_date']
++
++Those three fields prove the fields are SET. They cannot prove a human set them —
++an agent writing `"Hank Holcomb"` and today's date produces a byte-identical pass.
++That is the standing top item in .claude/NEEDS_HUMAN.md ("with the approval
++genuine, the exposure is the *next* flip, not this one"), and it is what this file
++addresses: approval becomes an artifact the agent is STRUCTURALLY UNABLE to
++construct, rather than a string it is merely forbidden to type.
++
++THE MECHANISM, AND WHY IT IS THE ONLY ONE AVAILABLE HERE
++--------------------------------------------------------
++Measured on this machine (recon, 2026-08-15): the agent runs as the owner's own
++uid. There is no file it cannot write and no software key it cannot use — the
++launchd ssh-agent holds an unconfirmed ED25519 key IN THE AGENT'S OWN ENVIRONMENT,
++so `ssh-keygen -Y sign` and even a `%G? = G` signed git commit are one Bash call
++away, with no prompt and no touch. gpg is not installed; the attached YubiKey has
++no FIDO middleware (`ssh-keygen -t ecdsa-sk` fails: "No FIDO SecurityKeyProvider").
++
++So a mechanism binds only if satisfying it needs either a physical act at a
++hardware token or A SECRET THAT EXISTS ONLY IN THE OWNER'S HEAD and is never typed
++into an agent-visible process. This implements the second, with zero installs:
++
++  * a detached SSH signature over a canonical payload derived from the labeled set,
++  * made with an ed25519 key that is PASSPHRASE-PROTECTED and deliberately NOT
++    loaded into ssh-agent,
++  * verified with `ssh-keygen -Y verify` (present: OpenSSH_10.2p1) against an
++    allowed-signers anchor.
++
++Verified live: with full read access to the private key file but no passphrase,
++`ssh-keygen -Y sign` fails with "incorrect passphrase supplied" and writes nothing.
++That is the whole point — read access is not signing capability.
++
++HONEST LIMITS — read these before trusting this file
++----------------------------------------------------
++1. TRUST ANCHOR. `.claude/approval/allowed_signers` names the public key that
++   counts. An agent with Bash can overwrite it with its own key and re-sign. What
++   stops that from passing silently is NOT this file: it is harness_lib.HUMAN_ONLY,
++   which lists both the anchor and this script, denies Edit/Write to them under any
++   claim, and — the part Bash cannot route around — fails the close-time integrity
++   check for any ticket whose window changed them. So anchor substitution is
++   TAMPER-EVIDENT AND CLOSE-BLOCKING, not impossible. It cannot be made impossible
++   by anything living inside a repo the agent can write.
++2. This is not a gate on the FILE. It is a gate on the CLAIM the file makes. An
++   agent can still write `status: APPROVED` (via Bash — no PreToolUse matcher
++   covers Bash). What it cannot do is make that claim verify.
++3. UNARMED BY DEFAULT. With no key line in the anchor, `verify` reports
++   UNVERIFIABLE and the harness prints a notice rather than refusing anything, so
++   installing this file changes no existing behaviour. Arming is one command by the
++   owner — see .claude/approval/README.md.
++
++EXIT CODES (`verify`)
++  0  approved AND the signature verifies against the anchor
++  3  the file DECLARES approval that cannot be verified (unarmed, unsigned,
++     stale, or forged) — the interesting state
++  4  the file declares no approval (honest PROPOSED state)
++  2  infra: file unreadable, ssh-keygen missing/erroring
++"""
++from __future__ import annotations
++
++import hashlib
++import os
++import re
++import subprocess
++import sys
++
++ROOT = os.environ.get("CLAUDE_PROJECT_DIR") or subprocess.run(
++    ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True).stdout.strip()
++
++LABELED_SET = "evals/labeled_set.yaml"
++ANCHOR = os.path.join(".claude", "approval", "allowed_signers")
++SIGNATURE = os.path.join(".claude", "approval", "labeled_set.sig")
++NAMESPACE = "cxforge-label-approval"
++PAYLOAD_VERSION = "cxforge-label-approval v1"
++
++OK, INFRA, UNVERIFIED, NOT_APPROVED = 0, 2, 3, 4
++
++
++def _abs(rel: str) -> str:
++    return os.path.join(ROOT, rel)
++
++
++# ---------------------------------------------------------------------------
++# Parsing — deliberately WITHOUT pyyaml.
++# harness_lib.py's whole contract is "python3 + git, no third-party imports"
++# (that is why the lifecycle moved into it from jq-based shell in the first
++# place), and the close path calls this script. A gate that only runs when an
++# optional dependency happens to be installed is a gate that silently stops
++# running. The approval block is a flat, fixed, three-field mapping; a targeted
++# reader is both sufficient and one less thing that can be absent.
++# ---------------------------------------------------------------------------
++_FIELD = re.compile(r"^\s+(status|approved_by|approved_date)\s*:\s*(.*?)\s*$")
++
++
++def split_approval_block(text: str) -> tuple[list[str], list[str]]:
++    """(approval-block lines, everything-else lines).
++
++    The block runs from the line beginning `approval:` at column 0 up to the next
++    non-blank line that also begins at column 0 (the next top-level YAML key, or a
++    column-0 comment — the real file's in-block comments are all indented, and an
++    unindented one inside the block would merely end the block early, which fails
++    CLOSED: fewer fields parsed, approval reads as absent).
++    """
++    lines = text.splitlines(keepends=True)
++    start = next((i for i, ln in enumerate(lines) if ln.startswith("approval:")), None)
++    if start is None:
++        return [], lines
++    end = len(lines)
++    for j in range(start + 1, len(lines)):
++        ln = lines[j]
++        if ln.strip() and not ln[0].isspace():
++            end = j
++            break
++    return lines[start:end], lines[:start] + lines[end:]
++
++
++def approval_fields(block: list[str]) -> dict[str, str]:
++    out: dict[str, str] = {}
++    for ln in block:
++        m = _FIELD.match(ln)
++        if m:
++            val = m.group(2).strip()
++            if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
++                val = val[1:-1]
++            out.setdefault(m.group(1), val)
++    return out
++
++
++def canonical_payload(text: str) -> tuple[bytes, dict[str, str]]:
++    """The exact bytes a human signs.
++
++    Covers BOTH halves, and that pairing is the point:
++      * body_sha256 — the labels themselves, minus the approval block. Re-label a
++        ticket after sign-off and the old signature stops verifying.
++      * the three approval fields — so the approval cannot be lifted off one
++        (name, date, status) and re-used under another.
++    Plain text, not a digest blob, so the owner can read what they are signing.
++    """
++    block, rest = split_approval_block(text)
++    fields = approval_fields(block)
++    body = hashlib.sha256("".join(rest).encode()).hexdigest()
++    payload = (
++        f"{PAYLOAD_VERSION}\n"
++        f"file: {LABELED_SET}\n"
++        f"body_sha256: {body}\n"
++        f"status: {fields.get('status', '')}\n"
++        f"approved_by: {fields.get('approved_by', '')}\n"
++        f"approved_date: {fields.get('approved_date', '')}\n"
++    )
++    return payload.encode(), fields
++
++
++# ---------------------------------------------------------------------------
++# Anchor
++# ---------------------------------------------------------------------------
++def anchor_principals() -> list[str]:
++    """Principals named by non-comment lines in the allowed-signers anchor.
++
++    Empty list == UNARMED. An anchor file that exists but holds only comments is
++    unarmed too: a comment is not a key.
++    """
++    path = _abs(ANCHOR)
++    if not os.path.exists(path):
++        return []
++    out = []
++    try:
++        with open(path) as fh:
++            for ln in fh:
++                ln = ln.strip()
++                if not ln or ln.startswith("#"):
++                    continue
++                parts = ln.split()
++                if len(parts) >= 3:
++                    out.append(parts[0])
++    except OSError:
++        return []
++    return out
++
++
++def is_armed() -> bool:
++    return bool(anchor_principals())
++
++
++# ---------------------------------------------------------------------------
++# Verification
++# ---------------------------------------------------------------------------
++def verify() -> tuple[int, str]:
++    try:
++        with open(_abs(LABELED_SET)) as fh:
++            text = fh.read()
++    except OSError as e:
++        return INFRA, f"cannot read {LABELED_SET} ({e})"
++
++    payload, fields = canonical_payload(text)
++    declared = (
++        fields.get("status") == "APPROVED"
++        and bool(fields.get("approved_by"))
++        and bool(fields.get("approved_date"))
++    )
++    if not declared:
++        return NOT_APPROVED, (
++            f"{LABELED_SET} declares no approval (status={fields.get('status') or '<absent>'!r}) "
++            "— the honest un-signed-off state."
++        )
++
++    principals = anchor_principals()
++    if not principals:
++        return UNVERIFIED, (
++            f"{LABELED_SET} declares status: APPROVED by {fields.get('approved_by')!r} on "
++            f"{fields.get('approved_date')!r}, but {ANCHOR} names no key, so NOTHING IN THIS "
++            "REPO CAN TELL A HUMAN APPROVAL FROM AN AGENT-WRITTEN ONE. The three fields are "
++            "exactly what a coding agent can type. Arm the gate: see .claude/approval/README.md."
++        )
++    if not os.path.exists(_abs(SIGNATURE)):
++        return UNVERIFIED, (
++            f"{LABELED_SET} declares status: APPROVED but {SIGNATURE} does not exist. The "
++            "anchor is armed, so an approval without a signature is not an approval."
++        )
++
++    errors = []
++    for principal in principals:
++        try:
++            r = subprocess.run(
++                ["ssh-keygen", "-Y", "verify", "-f", _abs(ANCHOR), "-I", principal,
++                 "-n", NAMESPACE, "-s", _abs(SIGNATURE)],
++                input=payload, capture_output=True, timeout=30,
++            )
++        except FileNotFoundError:
++            return INFRA, ("ssh-keygen is not on PATH, so the approval signature cannot be "
++                           "checked at all. Refusing to report an unchecked approval as good.")
++        except Exception as e:  # timeout, OSError...
++            return INFRA, f"ssh-keygen could not run ({e}); approval left unverified."
++        if r.returncode == 0:
++            return OK, (f"approval on {LABELED_SET} VERIFIED: signature by {principal} over "
++                        f"the current labels and the current approval fields.")
++        errors.append(f"{principal}: {(r.stderr or b'').decode(errors='replace').strip()[:160]}")
++
++    return UNVERIFIED, (
++        f"{LABELED_SET} declares status: APPROVED by {fields.get('approved_by')!r}, but the "
++        f"signature in {SIGNATURE} does NOT verify against {ANCHOR}. Either the labels or the "
++        "approval fields changed after signing, or the signature was not made by the owner's "
++        "key. Details: " + " | ".join(errors)
++    )
++
++
++def main() -> int:
++    cmd = sys.argv[1] if len(sys.argv) > 1 else "verify"
++    if cmd == "payload":
++        # What the owner signs. Printed, never written, so nothing here can be
++        # mistaken for the signature itself.
++        try:
++            with open(_abs(LABELED_SET)) as fh:
++                text = fh.read()
++        except OSError as e:
++            sys.stderr.write(f"cannot read {LABELED_SET} ({e})\n")
++            return INFRA
++        sys.stdout.buffer.write(canonical_payload(text)[0])
++        return 0
++    if cmd == "armed":
++        armed = is_armed()
++        print("armed: " + (", ".join(anchor_principals()) if armed else "NO — anchor names no key"))
++        return 0 if armed else 1
++    if cmd in ("verify", "status"):
++        rc, msg = verify()
++        print(msg)
++        # `status` is the advisory form the close path uses: it reports, it never
++        # decides. Keeping the decision in `verify` alone means a caller cannot
++        # accidentally get a pass out of the reporting entry point.
++        return 0 if cmd == "status" else rc
++    sys.stderr.write(f"usage: approval_gate.py [verify|status|payload|armed]\n")
++    return INFRA
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/.claude/scripts/harness_lib.py b/.claude/scripts/harness_lib.py
+index 6d9104d..02cf236 100644
+--- a/.claude/scripts/harness_lib.py
++++ b/.claude/scripts/harness_lib.py
+@@ -16,19 +16,54 @@ META_ALLOW = [r"^\.claude/NEEDS_HUMAN\.md$", r"^\.claude/monitor/.*$", r"^docs/T
+ # Harness-written state: exempt from the close-time integrity diff (it changes at every
+ # boundary by design) but still Edit/Write-DENIED via PROTECTED — only scripts write it.
+ HARNESS_STATE = [r"^\.claude/claims/.*$", r"^\.claude/evidence/.*$", r"^\.claude/monitor/.*$"]
++# The HUMAN's own attestations, and the machinery that checks them. NEVER agent-written,
++# by any tool, under any claim, in any window — the plan reserves exactly one gate for the
++# project owner (T-7 non_goal: "No synthetic label approval — human sign-off is external
++# ground truth"), and evals/labeled_set.yaml sat in NEITHER ABSOLUTE NOR PROTECTED while
++# T-7's own scope glob `evals/**` granted write access to it. A ticket that may write the
++# artifact its verify reads is a closed loop: T-7's verify tests exactly
++# status/approved_by/approved_date, so an agent typing the owner's name and today's date
++# produces a byte-identical pass and a byte-identical receipt (.claude/NEEDS_HUMAN.md's
++# standing top item — "the exposure is the *next* flip, not this one").
++#
++# Unlike PROTECTED this does NOT yield to a ticket's scope, and unlike the rest of
++# ABSOLUTE it is NOT harness-written state, so it is enforced at close as well as at the
++# guard — see integrity() and cmd_claim. The anchor and the verifier are in here for the
++# same reason the approval is: a trust anchor a ticket could rewrite is not an anchor.
++#
++# WHAT THIS DOES NOT STOP, stated plainly: the Bash tool is matched by NO PreToolUse hook
++# (.claude/settings.json has exactly two matchers, "Edit|Write|NotebookEdit" and
++# "TaskUpdate"), so `python3 -c`, `sed -i` and `>` can still write every path below. The
++# guard half is a speed bump. The close half is the real control, and it is the harness's
++# own documented compensating mechanism for that hole (protocol rule 4): a Bash write to
++# one of these inside a ticket window fails the close by name instead of minting a receipt.
++# Between tickets, with no claim open and nothing later closed, there is no window and so
++# no check — that gap (W12) is real and is not closed here.
++HUMAN_ONLY = [r"^evals/labeled_set\.yaml$", r"^\.claude/approval/.*$",
++              r"^\.claude/scripts/approval_gate\.py$"]
+ # Receipts and claims: NEVER agent-writable, by any session, under any claim. These are
+ # the harness's own attestations — an agent that can forge a receipt can certify anything,
+ # so no ticket scope may unlock them. Checked before PROTECTED; never yields to scope.
+-ABSOLUTE = [r"^\.claude/claims/.*$", r"^\.claude/evidence/.*$"]
++# HUMAN_ONLY joins them: same "no scope unlocks this" rule at the guard, plus close-time
++# enforcement, since these are the only ABSOLUTE paths the harness does not itself write.
++ABSOLUTE = [r"^\.claude/claims/.*$", r"^\.claude/evidence/.*$"] + HUMAN_ONLY
+ # Plan + harness files: denied by default — a session not given these in a ticket contract
+ # has no business editing the plan or the harness. Unlike ABSOLUTE this YIELDS to an
+ # explicit scope grant: if the CLAIMED ticket's own scope names the path, the plan has
+ # sanctioned the edit and the close-time integrity check will attest it. Without that
+ # yield, T-22/T-26/T-27/T-28/T-29 are unimplementable — their contracts name exactly the
+ # paths the guard refuses (D1 in .claude/NEEDS_HUMAN.md).
++# `evals/.*` is here for the half of W10 that ABSOLUTE does not reach: with no claim open
++# the guard leaves a session UNCONSTRAINED for every non-PROTECTED path (see guard()'s
++# "non-owning sessions are unconstrained"), so before this line any unclaimed session could
++# rewrite the eval corpus and the report generator freely. It is PROTECTED rather than
++# ABSOLUTE because T-7 (`evals/**`), T-15 and T-25 (`evals/report.py`, `evals/REVIEW.md`)
++# and T-21 (`evals/report.py`) all legitimately write here — PROTECTED yields to an
++# explicit scope grant, so those four are unaffected, while a session with no claim is not.
++# evals/labeled_set.yaml is excluded from that yield by HUMAN_ONLY, checked first.
+ PROTECTED = [r"^docs/tickets\.json$", r"^docs/SPEC\.md$", r"^docs/DESIGN\.md$",
+              r"^\.claude/hooks/.*$", r"^\.claude/scripts/.*$", r"^\.claude/settings\.json$",
+-             r"^\.claude/claims/.*$", r"^\.claude/evidence/.*$"]
++             r"^\.claude/claims/.*$", r"^\.claude/evidence/.*$", r"^evals/.*$"]
+ 
+ def glob_re(g):
+     # Anchored BOTH ends (jarvisforge fix: unanchored search let backend/... slide past scope)
+@@ -258,15 +293,78 @@ def changed_since(commit):
+         )
+     return sorted(set(r.stdout.splitlines()) | set(s.stdout.splitlines()))
+ 
++def out_of_scope(paths, scope):
++    """Split changed paths into (out-of-scope, human-only). Shared by the close-time
++    integrity check and cmd_claim's dirty-tree gate so the two cannot drift.
++
++    HUMAN_ONLY is evaluated FIRST and does not consult `scope` at all. That ordering is
++    the entire fix for W10's close-time half: before it, ABSOLUTE and PROTECTED were
++    consulted only by the Edit/Write guard and NEVER at close, so a Bash-written approval
++    inside T-7's `evals/**` scope passed integrity without comment and minted a
++    fingerprint-bound receipt (reproduced: integrity rc=0). Scope is the plan's grant of
++    authority over source; it was never meant to be a grant of authority over the human's
++    own sign-off, and now it is not."""
++    human, bad = [], []
++    for p in paths:
++        if not p:
++            continue
++        if match_any(p, HUMAN_ONLY, raw=True):
++            human.append(p)
++        elif not (match_any(p, scope) or match_any(p, META_ALLOW, raw=True)
++                  or match_any(p, HARNESS_STATE, raw=True)):
++            bad.append(p)
++    return bad, human
++
++
++def human_only_msg(paths, verb, remedy):
++    return ("HUMAN-ONLY FILE %s — %s:\n  %s\n"
++            "These are the project owner's own attestation and the machinery that checks "
++            "it (harness_lib.HUMAN_ONLY). No ticket scope unlocks them, at the guard or "
++            "here, because a ticket that may write the artifact its verify reads proves "
++            "nothing. %s\n"
++            "DO NOT 'git reset --hard' to clear this: if the change is a genuine human "
++            "approval, reset would destroy it. Record what happened in "
++            ".claude/NEEDS_HUMAN.md." % (verb, "the harness cannot attribute these to a "
++                                         "human, and will not certify around them",
++                                         "\n  ".join(paths), remedy))
++
++
+ def integrity(tid, start_commit):
+     """Every file changed during the ticket must be in scope or meta-allowed.
+     This is the compensating control for the documented Bash hole: out-of-band
+     edits to protected files (the plan, the hooks) fail the close."""
+     t = ticket(tid)
+-    bad = [p for p in changed_since(start_commit)
+-           if p and not (match_any(p, t["scope"]) or match_any(p, META_ALLOW, raw=True)
+-                         or match_any(p, HARNESS_STATE, raw=True))]
+-    return bad
++    bad, human = out_of_scope(changed_since(start_commit), t["scope"])
++    return bad + human
++
++APPROVAL_GATE = os.path.join(".claude", "scripts", "approval_gate.py")
++APPROVED_ARTIFACT = "evals/labeled_set.yaml"
++
++
++def approval_state():
++    """(exit code, message) from the approval gate: 0 signed, 3 declared-but-unverifiable,
++    4 not declared, 2 infra. Kept as a subprocess call so harness_lib stays importable with
++    nothing but python3 + git, and so a broken gate cannot take the whole harness down."""
++    p = os.path.join(ROOT, APPROVAL_GATE)
++    if not os.path.exists(p):
++        return None, ""
++    try:
++        r = subprocess.run([sys.executable, p, "verify"], capture_output=True, text=True,
++                           cwd=ROOT, timeout=60)
++    except Exception as e:
++        return 2, "approval gate could not run (%s)" % e
++    return r.returncode, (r.stdout or r.stderr or "").strip()
++
++
++def verify_consumes_approval(t):
++    """Does this ticket's own verify read the human approval artifact?
++
++    Derived from the plan text rather than hardcoded to T-7, so a ticket added later that
++    gates on the same file is covered without editing this file. Scope alone is not enough
++    to trigger the check — a ticket may sit near the artifact without certifying against
++    it — but a verify that READS it is exactly W16's closed loop."""
++    return APPROVED_ARTIFACT in (t.get("verify") or "")
++
+ 
+ LINT_RULES = [
+     (r"\|\|\s*true", "'|| true' makes the gate pass unconditionally"),
+@@ -316,9 +414,21 @@ def cmd_claim(tid, note):
+         tree = working_tree_dirty()
+     except IntegrityUnavailable as e:
+         return str(e), 1
+-    dirty = [p for p in tree
+-             if not (match_any(p, t["scope"]) or match_any(p, META_ALLOW, raw=True)
+-                     or match_any(p, HARNESS_STATE, raw=True))]
++    dirty, dirty_human = out_of_scope(tree, t["scope"])
++    if dirty_human:
++        # W10's laundering half. Without this the close-time HUMAN_ONLY check is a
++        # formality: write the approval via Bash BEFORE claiming, and because
++        # evals/labeled_set.yaml matches T-7's own `evals/**` scope the ticket-start
++        # commit absorbs it and integrity() — which only diffs FORWARD — never sees it.
++        # Reproduced against the shipped harness: claim rc=0, integrity rc=0, receipt
++        # mintable. The dirty-tree gate must refuse these regardless of scope, exactly as
++        # the close does.
++        return human_only_msg(
++            dirty_human, "UNCOMMITTED AT CLAIM TIME",
++            "%s's ticket-start commit would absorb them and the close-time check only "
++            "looks FORWARD from it, so they would never be examined. If this is the "
++            "owner's real sign-off, commit it on its own first, with no claim held, then "
++            "claim %s." % (tid, tid)), 1
+     if dirty:
+         return ("REFUSING to claim %s — the working tree carries changes outside its scope:\n  %s\n"
+                 "The ticket-start commit would absorb these and the close-time integrity check "
+@@ -363,9 +473,20 @@ def cmd_close():
+                 f"in this repo, so the close-time integrity check cannot be evaluated. Refusing "
+                 f"rather than minting a receipt on an unchecked diff."), 2
+     try:
+-        bad = integrity(tid, start)
++        bad, human = out_of_scope(changed_since(start), t["scope"])
+     except IntegrityUnavailable as e:
+         return str(e), 2
++    if human:
++        # Separated from the generic message on purpose. "Out of scope" invites the
++        # materiality rule's `git reset --hard <start>`, which for a genuine human
++        # approval would silently DELETE the owner's sign-off — the one file in the repo
++        # whose loss cannot be reconstructed by re-running anything.
++        return human_only_msg(
++            human, "CHANGED INSIDE %s's ATTESTED RANGE" % tid,
++            "If this is the owner's real sign-off, it must land OUTSIDE any ticket window: "
++            "`claim.sh release \"human approval landed mid-ticket\"`, commit that file on "
++            "its own with no claim held, then re-claim and redo the close — the fresh "
++            "ticket-start commit puts it behind the new window."), 2
+     if bad:
+         return ("INTEGRITY FAIL — files changed outside %s scope/meta:\n  %s\n"
+                 "Out-of-scope changes (including via Bash) fail the close. Revert them or record the plan defect in .claude/NEEDS_HUMAN.md." % (tid, "\n  ".join(bad))), 2
+@@ -379,7 +500,50 @@ def cmd_close():
+         if c["attempts"] >= 2:
+             msg += "\n2 failed attempts: release with a reason, add details to .claude/NEEDS_HUMAN.md, and stop for the human."
+         return msg, 2
++    # W16, as far as a non-plan file can reach it. A ticket whose verify READS the human
++    # approval (T-7's first sub-command is exactly `a['status']=='APPROVED' and
++    # a['approved_by'] and a['approved_date']`) is testing three strings any agent can
++    # type; it cannot distinguish a human from itself. Once the owner has armed the
++    # signature anchor, this refuses to let such a ticket mint a receipt against an
++    # approval the harness cannot attribute. UNARMED (the state as shipped) it only
++    # reports, so installing the gate changes nothing until the owner acts.
++    approval_rc, approval_msg = (None, "")
++    if verify_consumes_approval(t):
++        approval_rc, approval_msg = approval_state()
++        if approval_rc == 3:
++            armed = subprocess.run([sys.executable, os.path.join(ROOT, APPROVAL_GATE), "armed"],
++                                   capture_output=True, text=True, cwd=ROOT)
++            if armed.returncode == 0:
++                return ("APPROVAL NOT ATTRIBUTABLE — %s's verify reads %s, and the approval "
++                        "there does not verify against the owner's signing key:\n  %s\n"
++                        "Refusing to mint a receipt certifying an approval the harness cannot "
++                        "tell from an agent-written one. This is not something to fix in the "
++                        "tree: it needs the owner (.claude/approval/README.md), so record it in "
++                        ".claude/NEEDS_HUMAN.md and stop."
++                        % (tid, APPROVED_ARTIFACT, approval_msg)), 2
+     if subprocess.run(t["verify"], shell=True, cwd=ROOT).returncode != 0: return fail()
++    # The integrity check above ran BEFORE the verify, and the commit below happens AFTER
++    # it — so anything the verify command itself writes lands inside the attested range
++    # having never been checked (W15; demonstrated live by T-7's own close, whose range
++    # contains three docs/eval-report/ files its verify generated). The general fix is to
++    # re-run the whole check here, and it is not this ticket's: re-running it wholesale
++    # FAILS T-7 outright, because T-7's verify legitimately writes docs/eval-report/**
++    # which its scope does not name — that needs a plan amendment only Hank can make.
++    # This re-checks HUMAN_ONLY and nothing else, which has zero blast radius (no verify
++    # in the plan writes any of these paths) while closing the one route that would
++    # otherwise defeat everything above: a verify command that writes the approval.
++    try:
++        _, late_human = out_of_scope(changed_since(start), t["scope"])
++    except IntegrityUnavailable as e:
++        return str(e), 2
++    if late_human:
++        return human_only_msg(
++            late_human, "WRITTEN BY %s's OWN VERIFY COMMAND" % tid,
++            "The pre-verify integrity check could not see this: it ran before the verify, "
++            "and the close commit happens after it. A verify that writes the owner's "
++            "sign-off is a plan defect, not an agent error — do NOT retry. Note the "
++            "check has left these staged, so the next claim will refuse the tree until "
++            "you deal with them: release, record it in .claude/NEEDS_HUMAN.md, and stop."), 2
+     full = load_tickets().get("full_verify")
+     if full and subprocess.run(full, shell=True, cwd=ROOT).returncode != 0:
+         return fail(" (cross-ticket regression gate)")
+@@ -393,7 +557,17 @@ def cmd_close():
+         subprocess.run([sys.executable, os.path.join(ROOT, ".claude/scripts/gen_tasks.py")],
+                        capture_output=True, cwd=ROOT)
+     except Exception: pass
+-    return f"closed {tid} | receipt bound to {_head(True)} fp={fp[:12]}…", 0
++    msg = f"closed {tid} | receipt bound to {_head(True)} fp={fp[:12]}…"
++    if approval_rc == 3:
++        # Unarmed. The receipt is real and the verify passed — but a receipt is only worth
++        # what its gate proved, and this one's gate proved three strings were present. Say
++        # so at the moment the receipt is minted rather than leaving the reader to infer
++        # it. The receipt shape itself is fixed by test_claim_format (an exact key set), so
++        # this is a spoken caveat, not a stored one.
++        msg += ("\n  UNVERIFIED APPROVAL: " + approval_msg
++                + "\n  This receipt certifies that the fields are set, not that a human set "
++                  "them. Put it in .claude/NEEDS_HUMAN.md.")
++    return msg, 0
+ 
+ def cmd_release(reason):
+     sid = _sid(); c, defects = usable_claim(sid)
+@@ -500,6 +674,15 @@ if __name__ == "__main__":
+                 print("allow"); sys.exit(0)          # out-of-repo scratchpads are allowed (jarvis/othram A1)
+             rel = os.path.relpath(rp, root)
+             if match_any(rel, META_ALLOW, raw=True): print("allow"); sys.exit(0)
++            if match_any(rel, HUMAN_ONLY, raw=True):
++                # Checked before the rest of ABSOLUTE so the reason names the right
++                # thing: this is the OWNER's attestation, not the harness's.
++                print("deny:%s is the project owner's own attestation (or the machinery that "
++                      "verifies it). No ticket scope unlocks it — not even a ticket whose scope "
++                      "glob covers it, because a ticket that may write the artifact its own "
++                      "verify reads proves nothing. Only the human sets this, by hand, outside "
++                      "any ticket window; see .claude/approval/README.md. If you believe it is "
++                      "wrong, say so in .claude/NEEDS_HUMAN.md and stop." % rel); sys.exit(0)
+             if match_any(rel, ABSOLUTE, raw=True):
+                 print("deny:%s is harness-written attestation state (claims and receipts). No ticket scope unlocks it — only the lifecycle scripts write here. If a receipt or claim looks wrong, say so in .claude/NEEDS_HUMAN.md." % rel); sys.exit(0)
+             # An incoherent claim record unlocks nothing and constrains nothing coherently
+diff --git a/backend/tests/hooks/test_human_only_approval_gate.py b/backend/tests/hooks/test_human_only_approval_gate.py
+new file mode 100644
+index 0000000..b3bf085
+--- /dev/null
++++ b/backend/tests/hooks/test_human_only_approval_gate.py
+@@ -0,0 +1,671 @@
++"""W10 — the human approval gate is not agent-authorable.
++
++WHAT WAS BROKEN (reproduced against the shipped harness before the fix, all five
++routes ALLOW/rc=0):
++
++  1. guard, no claim held        Edit evals/labeled_set.yaml  -> ALLOW
++  2. guard, holding T-7          Edit evals/labeled_set.yaml  -> ALLOW
++  3. guard, no claim held        Edit evals/report.py         -> ALLOW
++  4. Bash-write inside a T-7 window, then `harness_lib.py integrity T-7 <start>`
++                                                              -> rc 0 (clean)
++  5. Bash-write BEFORE claiming T-7, then claim                -> rc 0, the write
++     absorbed into the ticket-start commit, invisible to a check that only ever
++     diffs FORWARD from it
++
++`evals/labeled_set.yaml` was in neither ABSOLUTE nor PROTECTED, and T-7's own
++scope glob `evals/**` granted write access to the very file T-7's verify reads:
++
++    a['status']=='APPROVED' and a['approved_by'] and a['approved_date']
++
++Those three strings prove the fields are SET. An agent typing the owner's name
++and today's date produces a byte-identical pass and a byte-identical receipt.
++(.claude/NEEDS_HUMAN.md records that the real flip WAS the owner's own — the
++exposure this file addresses is the next one, not that one.)
++
++WHAT THE FIX IS, AND WHAT IT IS NOT.  harness_lib.HUMAN_ONLY covers the approval
++artifact, the trust anchor and the verifier. It is checked at THREE points, and
++the last two are the ones that matter:
++  * the Edit/Write guard  — denies, under every claim, ignoring scope entirely;
++  * cmd_claim's dirty gate — refuses to absorb them into a ticket-start commit;
++  * integrity()/cmd_close — fails the close by name, regardless of scope.
++The Bash tool is matched by NO PreToolUse hook, so route (1)-(3) can still be
++driven by `python3 -c`. The point of the last two is that doing so no longer
++ends in a receipt. That is the harness's own documented compensating control for
++the Bash hole (protocol rule 4), applied to the one file it had been omitting.
++
++The signature half (`.claude/scripts/approval_gate.py`) is what makes an approval
++an artifact an agent cannot CONSTRUCT rather than one it is merely forbidden to
++type: a detached SSH signature under a passphrase-protected key that is never
++loaded into ssh-agent. Shipped UNARMED — the anchor names no key — so it reports
++and does not refuse until the owner arms it.
++"""
++
++from __future__ import annotations
++
++import json
++import os
++import shutil
++import subprocess
++import sys
++from pathlib import Path
++
++import pytest
++
++from .conftest import (
++    REAL_SCOPES,
++    REPO_ROOT,
++    _assert_real_repo_untouched,
++    _subprocess_env,
++    expect,
++    make_project,
++    write_claim,
++)
++
++REAL_LABELED_SET = REPO_ROOT / "evals" / "labeled_set.yaml"
++LABELED_SET = "evals/labeled_set.yaml"
++
++# Every ticket that legitimately writes under evals/. T-21 is IN FLIGHT with
++# scope [evals/report.py, backend/tests/evals/**, docs/eval-report/**]; none of
++# these may have been narrowed by making evals/** PROTECTED.
++EVALS_WRITERS = ["T-7", "T-15", "T-21", "T-25"]
++
++
++# ---------------------------------------------------------------------------
++# Classification
++# ---------------------------------------------------------------------------
++def _matches(path: str, listname: str) -> bool:
++    """Ask the REAL harness_lib whether `path` matches one of its pattern lists.
++
++    Run as a subprocess rather than imported, following
++    test_evidence_migration.py's convention: harness_lib.py lives outside any
++    package (it is the vendored harness, excluded from ruff and unresolvable by
++    mypy), and it resolves ROOT from CLAUDE_PROJECT_DIR at import time -- so
++    importing it into the test process would bind it to whatever this process
++    happens to think the root is.
++    """
++    script = (
++        "import json,sys;"
++        "sys.path.insert(0, sys.argv[1]);"
++        "import harness_lib as h;"
++        "raw = sys.argv[3] != 'scope';"
++        "pats = getattr(h, sys.argv[3]) if raw else json.loads(sys.argv[4]);"
++        "print(json.dumps(h.match_any(sys.argv[2], pats, raw=raw)))"
++    )
++    result = subprocess.run(
++        [sys.executable, "-c", script, str(REPO_ROOT / ".claude" / "scripts"),
++         path, listname, "[]"],
++        capture_output=True, text=True, check=True, timeout=30,
++    )
++    return bool(json.loads(result.stdout))
++
++
++def _scope_matches(path: str, scope: list[str]) -> bool:
++    script = (
++        "import json,sys;"
++        "sys.path.insert(0, sys.argv[1]);"
++        "import harness_lib as h;"
++        "print(json.dumps(h.match_any(sys.argv[2], json.loads(sys.argv[3]))))"
++    )
++    result = subprocess.run(
++        [sys.executable, "-c", script, str(REPO_ROOT / ".claude" / "scripts"),
++         path, json.dumps(scope)],
++        capture_output=True, text=True, check=True, timeout=30,
++    )
++    return bool(json.loads(result.stdout))
++
++
++def test_the_approval_artifact_and_its_anchor_are_human_only() -> None:
++    """Classification, asserted directly — the guard/claim/close behaviours below
++    all key off this list, so a path silently dropping out of it would weaken all
++    three at once while each individual behavioural test still had *something* to
++    assert about the remaining paths.
++    """
++    for path in (LABELED_SET, ".claude/approval/allowed_signers",
++                 ".claude/approval/labeled_set.sig",
++                 ".claude/scripts/approval_gate.py"):
++        assert _matches(path, "HUMAN_ONLY"), path
++    # HUMAN_ONLY is a subset of ABSOLUTE (the guard reaches it via the same
++    # never-yields-to-scope branch), but NOT of HARNESS_STATE -- that distinction
++    # is exactly what makes it enforceable at close time. .claude/claims/** and
++    # .claude/evidence/** are exempt from integrity() because the harness writes
++    # them at every boundary; these are not written by anything but a human.
++    for path in (LABELED_SET, ".claude/approval/allowed_signers"):
++        assert _matches(path, "ABSOLUTE")
++        assert not _matches(path, "HARNESS_STATE")
++        assert not _matches(path, "META_ALLOW")
++
++
++def test_evals_is_protected_so_an_unclaimed_session_cannot_rewrite_the_corpus() -> None:
++    for path in ("evals/report.py", "evals/REVIEW.md", LABELED_SET):
++        assert _matches(path, "PROTECTED"), path
++    # ...and the near miss stays a near miss: PROTECTED must not have become a
++    # prefix match that swallows unrelated trees.
++    assert not _matches("eval/report.py", "PROTECTED")
++    assert not _matches("backend/evals/report.py", "PROTECTED")
++
++
++# ---------------------------------------------------------------------------
++# Guard
++# ---------------------------------------------------------------------------
++@pytest.fixture
++def evals_project(tmp_path: Path) -> Path:
++    """A synthetic project carrying the real plan plus a real evals/ tree."""
++    tickets = json.loads((REPO_ROOT / "docs" / "tickets.json").read_text())
++    project = make_project(tmp_path, tickets)
++    (project / "evals").mkdir(exist_ok=True)
++    shutil.copyfile(REAL_LABELED_SET, project / "evals" / LABELED_SET.split("/")[1])
++    (project / "evals" / "report.py").write_text("# report\n")
++    (project / "evals" / "REVIEW.md").write_text("# review\n")
++    for dep in ("T-6", "T-15"):
++        ev = project / ".claude" / "evidence"
++        ev.mkdir(parents=True, exist_ok=True)
++        (ev / f"{dep}.json").write_text(json.dumps({"ticket": dep, "session": "seed"}))
++    subprocess.run(["git", "add", "-A"], cwd=project, check=True, capture_output=True)
++    subprocess.run(["git", "commit", "-q", "-m", "evals"], cwd=project, check=True,
++                   capture_output=True)
++    return project
++
++
++@pytest.mark.parametrize("ticket", [None, *EVALS_WRITERS])
++def test_no_claim_state_whatsoever_unlocks_the_approval_artifact(
++    evals_project: Path, ticket: str | None,
++) -> None:
++    """The regression that matters most. T-7's scope glob `evals/**` COVERS this
++    path -- before the fix that made it an ALLOW, which is how a ticket came to
++    hold write authority over the gate its own verify reads. `ticket=None` is
++    W10's other half: with no claim open the guard leaves a session
++    unconstrained for every non-PROTECTED path.
++    """
++    expect(evals_project, ticket=ticket,
++           file_path=str(evals_project / LABELED_SET), want="deny")
++
++
++@pytest.mark.parametrize("ticket", EVALS_WRITERS)
++def test_scope_still_covers_the_labeled_set_so_the_deny_is_not_an_accident(
++    ticket: str,
++) -> None:
++    """Proves the test above is testing HUMAN_ONLY and not a typo.
++
++    If T-7's scope stopped matching evals/labeled_set.yaml for some unrelated
++    reason, the deny would still pass while asserting nothing. Only T-7 declares
++    a glob broad enough to reach it; the other three are near it but never over
++    it, which is their own non_goal ("NEVER edits evals/labeled_set.yaml").
++    """
++    covered = _scope_matches(LABELED_SET, REAL_SCOPES[ticket])
++    assert covered is (ticket == "T-7"), (ticket, REAL_SCOPES[ticket])
++
++
++@pytest.mark.parametrize(
++    ("ticket", "path"),
++    [
++        ("T-21", "evals/report.py"),
++        ("T-21", "backend/tests/evals/test_report.py"),
++        ("T-21", "docs/eval-report/metrics.json"),
++        ("T-7", "evals/report.py"),
++        ("T-7", "backend/src/escalation/engine.py"),
++        ("T-15", "evals/report.py"),
++        ("T-15", "evals/REVIEW.md"),
++        ("T-25", "evals/report.py"),
++    ],
++)
++def test_the_legitimate_evals_writers_are_untouched(
++    evals_project: Path, ticket: str, path: str,
++) -> None:
++    """Making evals/** PROTECTED must cost the four tickets that live there
++    nothing: PROTECTED yields to an explicit scope grant. T-21 is in flight right
++    now, so its three scope entries are the load-bearing rows here.
++    """
++    expect(evals_project, ticket=ticket, file_path=str(evals_project / path), want="allow")
++
++
++def test_an_unclaimed_session_can_no_longer_rewrite_the_report_generator(
++    evals_project: Path,
++) -> None:
++    expect(evals_project, ticket=None,
++           file_path=str(evals_project / "evals/report.py"), want="deny")
++
++
++# ---------------------------------------------------------------------------
++# Lifecycle: claim-time and close-time, i.e. the half Bash cannot route around
++# ---------------------------------------------------------------------------
++def _lib_run(project: Path, session: str, *args: str) -> subprocess.CompletedProcess[str]:
++    env = _subprocess_env(project, {"CLAUDE_CODE_SESSION_ID": session})
++    result = subprocess.run(
++        [sys.executable, str(project / ".claude" / "scripts" / "harness_lib.py"), *args],
++        capture_output=True, text=True, env=env, cwd=project, timeout=120,
++    )
++    _assert_real_repo_untouched()
++    return result
++
++
++def _forge_via_bash(project: Path) -> None:
++    """Write the approval WITHOUT the Edit tool. No PreToolUse matcher covers
++    Bash -- this is the route the guard genuinely cannot see, and the whole
++    reason the claim/close checks exist.
++    """
++    path = project / LABELED_SET
++    subprocess.run(
++        [sys.executable, "-c",
++         "import sys,pathlib;p=pathlib.Path(sys.argv[1]);"
++         "p.write_text(p.read_text().replace('status: PROPOSED_AWAITING_HUMAN_REVIEW',"
++         "'status: APPROVED'))", str(path)],
++        check=True, capture_output=True,
++    )
++    assert "status: APPROVED" in path.read_text()
++
++
++@pytest.fixture
++def proposed_project(evals_project: Path) -> Path:
++    """evals_project with the approval reset to the honest un-signed-off state,
++    committed, so a later flip is a real diff rather than a no-op."""
++    path = evals_project / LABELED_SET
++    path.write_text(path.read_text().replace(
++        "  status: APPROVED", "  status: PROPOSED_AWAITING_HUMAN_REVIEW"))
++    subprocess.run(["git", "add", "-A"], cwd=evals_project, check=True, capture_output=True)
++    subprocess.run(["git", "commit", "-q", "-m", "honest PROPOSED state"],
++                   cwd=evals_project, check=True, capture_output=True)
++    return evals_project
++
++
++def test_a_bash_forged_approval_inside_a_ticket_window_fails_the_close(
++    proposed_project: Path,
++) -> None:
++    """Route 4. Before the fix: integrity rc=0, receipt mintable, because
++    integrity() consulted scope/META_ALLOW/HARNESS_STATE only and never ABSOLUTE.
++    """
++    claimed = _lib_run(proposed_project, "sess-forge", "claim", "T-7", "probe")
++    assert claimed.returncode == 0, claimed.stdout + claimed.stderr
++    _forge_via_bash(proposed_project)
++
++    start = json.loads(
++        (proposed_project / ".claude" / "claims" / "sess-forge.json").read_text()
++    )["start_commit"]
++    checked = _lib_run(proposed_project, "sess-forge", "integrity", "T-7", start)
++    assert checked.returncode == 1, checked.stdout + checked.stderr
++    assert LABELED_SET in checked.stdout
++
++    closed = _lib_run(proposed_project, "sess-forge", "close")
++    assert closed.returncode == 2, closed.stdout + closed.stderr
++    assert LABELED_SET in closed.stdout
++    assert not (proposed_project / ".claude" / "evidence" / "T-7.json").exists()
++    # The materiality rule's usual remedy must NOT be offered here: for a genuine
++    # human approval `git reset --hard <start>` would destroy the one artifact in
++    # the repo that cannot be regenerated by re-running anything.
++    assert "reset --hard" not in closed.stdout.replace("DO NOT 'git reset --hard'", "")
++
++
++def test_a_bash_forged_approval_cannot_be_laundered_through_the_start_commit(
++    proposed_project: Path,
++) -> None:
++    """Route 5, the subtle one. `git add -A` in cmd_claim sweeps the whole tree
++    and integrity() only ever diffs FORWARD from the resulting commit -- so a
++    forgery written BEFORE the claim was absorbed into it and never examined.
++    evals/labeled_set.yaml matches T-7's own scope, so the pre-existing
++    dirty-tree gate waved it through.
++    """
++    _forge_via_bash(proposed_project)
++    claimed = _lib_run(proposed_project, "sess-launder", "claim", "T-7", "probe")
++    assert claimed.returncode == 1, claimed.stdout + claimed.stderr
++    assert LABELED_SET in claimed.stdout
++    assert not (proposed_project / ".claude" / "claims" / "sess-launder.json").exists()
++
++
++def test_an_unrelated_ticket_cannot_carry_the_approval_either(
++    proposed_project: Path,
++) -> None:
++    """HUMAN_ONLY does not consult scope at all, so the refusal cannot be dodged
++    by doing the write under some other ticket's claim.
++    """
++    claimed = _lib_run(proposed_project, "sess-other", "claim", "T-16", "probe")
++    assert claimed.returncode == 0, claimed.stdout + claimed.stderr
++    _forge_via_bash(proposed_project)
++    closed = _lib_run(proposed_project, "sess-other", "close")
++    assert closed.returncode == 2, closed.stdout + closed.stderr
++    assert LABELED_SET in closed.stdout
++
++
++def test_a_ticket_that_touches_nothing_human_only_still_closes(
++    proposed_project: Path,
++) -> None:
++    """The fix must be selective, not a blanket refusal: an ordinary ticket that
++    leaves these files alone closes exactly as before.
++    """
++    write_claim(proposed_project, None, "sess-clean")
++    claimed = _lib_run(proposed_project, "sess-clean", "claim", "T-16", "probe")
++    assert claimed.returncode == 0, claimed.stdout + claimed.stderr
++    target = proposed_project / "backend" / "tests" / "graph"
++    target.mkdir(parents=True, exist_ok=True)
++    (target / "test_probe.py").write_text("def test_ok():\n    assert True\n")
++    closed = _lib_run(proposed_project, "sess-clean", "close")
++    assert closed.returncode == 0, closed.stdout + closed.stderr
++    assert (proposed_project / ".claude" / "evidence" / "T-16.json").exists()
++
++
++# ---------------------------------------------------------------------------
++# The signature: an approval an agent cannot construct
++# ---------------------------------------------------------------------------
++GATE = ".claude/scripts/approval_gate.py"
++NAMESPACE = "cxforge-label-approval"
++
++
++def _gate(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
++    return subprocess.run(
++        [sys.executable, str(project / GATE), *args],
++        capture_output=True, text=True, env=_subprocess_env(project), cwd=project, timeout=60,
++    )
++
++
++def _arm(project: Path, tmp_path: Path) -> Path:
++    key = tmp_path / "approval_key"
++    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "pp", "-f", str(key), "-q"],
++                   check=True, capture_output=True)
++    pub = (tmp_path / "approval_key.pub").read_text().split()
++    anchor = project / ".claude" / "approval" / "allowed_signers"
++    anchor.parent.mkdir(parents=True, exist_ok=True)
++    with anchor.open("a") as fh:
++        fh.write(f"hank@cxforge {pub[0]} {pub[1]}\n")
++    return key
++
++
++def _sign(project: Path, tmp_path: Path, key: Path) -> None:
++    payload = _gate(project, "payload")
++    assert payload.returncode == 0, payload.stderr
++    blob = tmp_path / "payload.txt"
++    blob.write_text(payload.stdout)
++    env = dict(os.environ)
++    env["SSH_ASKPASS_REQUIRE"] = "never"
++    subprocess.run(["ssh-keygen", "-Y", "sign", "-f", str(key), "-n", NAMESPACE,
++                    "-P", "pp", str(blob)], check=True, capture_output=True, env=env)
++    shutil.copyfile(str(blob) + ".sig", project / ".claude" / "approval" / "labeled_set.sig")
++
++
++def test_the_gate_ships_unarmed_so_installing_it_refuses_nothing() -> None:
++    """The committed anchor must name no key. An armed anchor landed by an agent
++    would be an agent-chosen trust root -- and would also turn the suite red
++    while the owner is away, which is the reason the corroboration test that was
++    proposed in NEEDS_HUMAN.md was deliberately not landed either.
++    """
++    anchor = REPO_ROOT / ".claude" / "approval" / "allowed_signers"
++    assert anchor.exists(), "the anchor slot must exist so arming is an append, not a guess"
++    keys = [ln for ln in anchor.read_text().splitlines()
++            if ln.strip() and not ln.strip().startswith("#")]
++    assert keys == [], f"the committed anchor names a key: {keys}"
++
++
++def test_unarmed_the_gate_reports_that_it_cannot_attribute_the_approval(
++    evals_project: Path,
++) -> None:
++    """The real repo's state today: APPROVED, and unverifiable. rc 3 is the whole
++    finding -- "the fields are set" is not "a human set them".
++    """
++    result = _gate(evals_project, "verify")
++    assert result.returncode == 3, result.stdout + result.stderr
++    assert "APPROVED" in result.stdout
++
++
++def test_the_honest_proposed_state_is_not_reported_as_a_failure(
++    proposed_project: Path,
++) -> None:
++    result = _gate(proposed_project, "verify")
++    assert result.returncode == 4, result.stdout + result.stderr
++
++
++def test_a_signature_by_the_owners_key_verifies(
++    evals_project: Path, tmp_path: Path,
++) -> None:
++    key = _arm(evals_project, tmp_path)
++    _sign(evals_project, tmp_path, key)
++    result = _gate(evals_project, "verify")
++    assert result.returncode == 0, result.stdout + result.stderr
++    assert "VERIFIED" in result.stdout
++
++
++def test_an_agent_cannot_sign_without_the_passphrase(tmp_path: Path) -> None:
++    """The binding property, asserted rather than assumed.
++
++    The agent runs as the owner's uid: it can READ the private key file. That is
++    the whole threat model here -- everything else on this machine (the launchd
++    ssh-agent key, git commit signing) is forgeable in one call precisely because
++    no secret is required. This proves read access is not signing capability.
++    """
++    key = tmp_path / "k"
++    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "a-secret-only-hank-knows",
++                    "-f", str(key), "-q"], check=True, capture_output=True)
++    assert key.read_bytes(), "the agent can read the key file"
++
++    blob = tmp_path / "forged.txt"
++    blob.write_text("status: APPROVED\n")
++    env = dict(os.environ)
++    env["SSH_ASKPASS_REQUIRE"] = "never"
++    env.pop("SSH_ASKPASS", None)
++    env.pop("DISPLAY", None)
++    result = subprocess.run(["ssh-keygen", "-Y", "sign", "-f", str(key), "-n", NAMESPACE,
++                             str(blob)], capture_output=True, text=True, env=env,
++                            stdin=subprocess.DEVNULL, timeout=30)
++    assert result.returncode != 0
++    assert not (tmp_path / "forged.txt.sig").exists()
++
++
++def test_relabelling_after_sign_off_invalidates_the_signature(
++    evals_project: Path, tmp_path: Path,
++) -> None:
++    """The payload covers the labels, not just the three approval fields -- so an
++    approval cannot be obtained for one corpus and kept across a rewrite of it.
++    Without this the gate would only bind a name and a date to a filename.
++    """
++    key = _arm(evals_project, tmp_path)
++    _sign(evals_project, tmp_path, key)
++    assert _gate(evals_project, "verify").returncode == 0
++
++    path = evals_project / LABELED_SET
++    path.write_text(path.read_text().replace("expected_escalate: true",
++                                             "expected_escalate: false", 1))
++    result = _gate(evals_project, "verify")
++    assert result.returncode == 3, result.stdout + result.stderr
++    assert "does NOT verify" in result.stdout
++
++
++def test_rewriting_the_approval_fields_after_sign_off_invalidates_the_signature(
++    evals_project: Path, tmp_path: Path,
++) -> None:
++    key = _arm(evals_project, tmp_path)
++    _sign(evals_project, tmp_path, key)
++    path = evals_project / LABELED_SET
++    path.write_text(path.read_text().replace('approved_date: "2026-08-15"',
++                                             'approved_date: "2026-09-01"'))
++    assert _gate(evals_project, "verify").returncode == 3
++
++
++def test_an_agent_substituting_its_own_anchor_does_not_produce_a_clean_close(
++    proposed_project: Path, tmp_path: Path,
++) -> None:
++    """The residual attack the README states openly: an agent CAN write its own
++    key into the anchor and sign with it (nothing in a repo the agent can write
++    can prevent that). What it cannot do is finish the ticket -- the anchor is
++    HUMAN_ONLY, so the close names it and refuses.
++    """
++    claimed = _lib_run(proposed_project, "sess-anchor", "claim", "T-7", "probe")
++    assert claimed.returncode == 0, claimed.stdout + claimed.stderr
++
++    agent_key = tmp_path / "agent_key"
++    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(agent_key), "-q"],
++                   check=True, capture_output=True)
++    pub = (tmp_path / "agent_key.pub").read_text().split()
++    anchor = proposed_project / ".claude" / "approval" / "allowed_signers"
++    anchor.parent.mkdir(parents=True, exist_ok=True)
++    with anchor.open("a") as fh:
++        fh.write(f"attacker {pub[0]} {pub[1]}\n")
++    _forge_via_bash(proposed_project)
++    _sign(proposed_project, tmp_path, agent_key)
++    # The forged approval genuinely verifies -- against the forged anchor.
++    assert _gate(proposed_project, "verify").returncode == 0
++
++    closed = _lib_run(proposed_project, "sess-anchor", "close")
++    assert closed.returncode == 2, closed.stdout + closed.stderr
++    assert ".claude/approval/allowed_signers" in closed.stdout
++    assert LABELED_SET in closed.stdout
++    assert not (proposed_project / ".claude" / "evidence" / "T-7.json").exists()
++
++
++def test_armed_a_ticket_whose_verify_reads_the_approval_cannot_close_unsigned(
++    tmp_path: Path,
++) -> None:
++    """W16's closed loop, as far as a non-plan file can reach it.
++
++    T-7's verify tests exactly the three fields a scoped ticket could write. Once
++    the anchor is armed, a ticket whose verify READS the approval artifact may not
++    mint a receipt while that approval is unattributable -- the verify itself
++    still passes, which is the point: the gate the plan relies on proves nothing,
++    so a second one has to sit behind it.
++
++    Trigger is derived from the plan text (does the verify string name the
++    artifact), not hardcoded to T-7, so a later ticket gating on the same file is
++    covered without editing harness_lib.py.
++    """
++    tickets = {"project": "probe", "tickets": [{
++        "id": "S-1", "title": "gates on the human approval",
++        "verify": ("python3 -c \"import sys;"
++                   "sys.exit(0 if 'status: APPROVED' in "
++                   "open('evals/labeled_set.yaml').read() else 1)\""),
++        "scope": ["src/**"], "depends_on": [], "acceptance": [], "non_goals": [],
++    }]}
++    project = make_project(tmp_path / "proj", tickets)
++    (project / "evals").mkdir(exist_ok=True)
++    shutil.copyfile(REAL_LABELED_SET, project / LABELED_SET)
++    (project / "src").mkdir(exist_ok=True)
++    (project / "src" / "a.py").write_text("x = 1\n")
++    _arm(project, tmp_path)
++    subprocess.run(["git", "add", "-A"], cwd=project, check=True, capture_output=True)
++    subprocess.run(["git", "commit", "-q", "-m", "armed"], cwd=project, check=True,
++                   capture_output=True)
++
++    claimed = _lib_run(project, "sess-w16", "claim", "S-1", "probe")
++    assert claimed.returncode == 0, claimed.stdout + claimed.stderr
++    (project / "src" / "a.py").write_text("x = 2\n")
++
++    closed = _lib_run(project, "sess-w16", "close")
++    assert closed.returncode == 2, closed.stdout + closed.stderr
++    assert "APPROVAL NOT ATTRIBUTABLE" in closed.stdout
++    assert not (project / ".claude" / "evidence" / "S-1.json").exists()
++
++    # ...and the documented remedy actually works. Signing is a HUMAN_ONLY write,
++    # so it may not happen inside the window either -- doing it here refuses the
++    # close a second time, on the .sig rather than on the approval. The message
++    # tells the session to release, land the sign-off on its own, and re-claim;
++    # this walks exactly that, which is the only way the gate is escapable at all.
++    released = _lib_run(project, "sess-w16", "release", "human approval landed mid-ticket")
++    assert released.returncode == 0, released.stdout + released.stderr
++    _sign(project, tmp_path, tmp_path / "approval_key")
++    subprocess.run(["git", "add", "-A"], cwd=project, check=True, capture_output=True)
++    subprocess.run(["git", "commit", "-q", "-m", "owner: sign off on the labeled set"],
++                   cwd=project, check=True, capture_output=True)
++
++    reclaimed = _lib_run(project, "sess-w16", "claim", "S-1", "probe")
++    assert reclaimed.returncode == 0, reclaimed.stdout + reclaimed.stderr
++    (project / "src" / "a.py").write_text("x = 3\n")
++    reclosed = _lib_run(project, "sess-w16", "close")
++    assert reclosed.returncode == 0, reclosed.stdout + reclosed.stderr
++    assert (project / ".claude" / "evidence" / "S-1.json").exists()
++
++
++def test_a_verify_command_that_writes_the_approval_still_fails_the_close(
++    tmp_path: Path,
++) -> None:
++    """The last route, and the subtlest: integrity() runs BEFORE the verify and the
++    close commit happens AFTER it, so whatever a verify writes lands inside the
++    attested range unchecked (W15 -- demonstrated live by T-7's own close, whose
++    range carries three docs/eval-report/ files its verify generated).
++
++    Every other check in this file would be defeated by moving the write into the
++    verify string. The re-check after the verify is deliberately HUMAN_ONLY-only:
++    re-running the FULL integrity check there fails T-7 outright, because T-7's
++    verify legitimately writes docs/eval-report/** which its scope does not name.
++    """
++    tickets = {"project": "probe", "tickets": [{
++        "id": "S-2", "title": "verify writes the approval",
++        "verify": ("python3 -c \"import pathlib;"
++                   "p=pathlib.Path('evals/labeled_set.yaml');"
++                   "p.write_text(p.read_text().replace("
++                   "'status: PROPOSED_AWAITING_HUMAN_REVIEW','status: APPROVED'))\""),
++        "scope": ["evals/**"], "depends_on": [], "acceptance": [], "non_goals": [],
++    }]}
++    project = make_project(tmp_path / "proj", tickets)
++    (project / "evals").mkdir(exist_ok=True)
++    (project / LABELED_SET).write_text(
++        REAL_LABELED_SET.read_text().replace(
++            "  status: APPROVED", "  status: PROPOSED_AWAITING_HUMAN_REVIEW"))
++    subprocess.run(["git", "add", "-A"], cwd=project, check=True, capture_output=True)
++    subprocess.run(["git", "commit", "-q", "-m", "proposed"], cwd=project, check=True,
++                   capture_output=True)
++
++    claimed = _lib_run(project, "sess-verify", "claim", "S-2", "probe")
++    assert claimed.returncode == 0, claimed.stdout + claimed.stderr
++    closed = _lib_run(project, "sess-verify", "close")
++    # The verify itself SUCCEEDS -- it is a plain write. The close still refuses.
++    assert "status: APPROVED" in (project / LABELED_SET).read_text()
++    assert closed.returncode == 2, closed.stdout + closed.stderr
++    assert LABELED_SET in closed.stdout
++    assert "VERIFY COMMAND" in closed.stdout
++    assert not (project / ".claude" / "evidence" / "S-2.json").exists()
++
++
++def test_a_verify_that_writes_only_ordinary_files_is_not_newly_refused(
++    tmp_path: Path,
++) -> None:
++    """The re-check must stay narrow. A verify that writes generated artifacts
++    outside its scope -- exactly what T-7's `python -m evals.report` does into
++    docs/eval-report/ -- must close as it does today, or this change would break
++    T-7 while pretending to be about the approval gate.
++    """
++    tickets = {"project": "probe", "tickets": [{
++        "id": "S-3", "title": "verify writes a generated artifact out of scope",
++        "verify": ("python3 -c \"import pathlib;"
++                   "d=pathlib.Path('docs/eval-report');d.mkdir(parents=True,exist_ok=True);"
++                   "(d/'metrics.json').write_text('{}')\""),
++        "scope": ["src/**"], "depends_on": [], "acceptance": [], "non_goals": [],
++    }]}
++    project = make_project(tmp_path / "proj", tickets)
++    (project / "src").mkdir(exist_ok=True)
++    (project / "src" / "a.py").write_text("x = 1\n")
++    subprocess.run(["git", "add", "-A"], cwd=project, check=True, capture_output=True)
++    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=project, check=True,
++                   capture_output=True)
++
++    claimed = _lib_run(project, "sess-gen", "claim", "S-3", "probe")
++    assert claimed.returncode == 0, claimed.stdout + claimed.stderr
++    (project / "src" / "a.py").write_text("x = 2\n")
++    closed = _lib_run(project, "sess-gen", "close")
++    assert closed.returncode == 0, closed.stdout + closed.stderr
++    assert (project / ".claude" / "evidence" / "S-3.json").exists()
++
++
++def test_unarmed_the_same_close_succeeds_but_says_the_approval_is_unverified(
++    tmp_path: Path,
++) -> None:
++    """Installing the gate must not brick a build whose owner has not armed it.
++    The receipt is minted; the caveat is spoken at the moment it is minted, since
++    the receipt's own key set is fixed by test_claim_format and cannot carry it.
++    """
++    tickets = {"project": "probe", "tickets": [{
++        "id": "S-1", "title": "gates on the human approval",
++        "verify": ("python3 -c \"import sys;"
++                   "sys.exit(0 if 'status: APPROVED' in "
++                   "open('evals/labeled_set.yaml').read() else 1)\""),
++        "scope": ["src/**"], "depends_on": [], "acceptance": [], "non_goals": [],
++    }]}
++    project = make_project(tmp_path / "proj", tickets)
++    (project / "evals").mkdir(exist_ok=True)
++    shutil.copyfile(REAL_LABELED_SET, project / LABELED_SET)
++    (project / "src").mkdir(exist_ok=True)
++    (project / "src" / "a.py").write_text("x = 1\n")
++    subprocess.run(["git", "add", "-A"], cwd=project, check=True, capture_output=True)
++    subprocess.run(["git", "commit", "-q", "-m", "unarmed"], cwd=project, check=True,
++                   capture_output=True)
++
++    claimed = _lib_run(project, "sess-unarmed", "claim", "S-1", "probe")
++    assert claimed.returncode == 0, claimed.stdout + claimed.stderr
++    (project / "src" / "a.py").write_text("x = 2\n")
++    closed = _lib_run(project, "sess-unarmed", "close")
++    assert closed.returncode == 0, closed.stdout + closed.stderr
++    assert (project / ".claude" / "evidence" / "S-1.json").exists()
++    assert "UNVERIFIED APPROVAL" in closed.stdout
+diff --git a/backend/tests/hooks/test_scope_guard.py b/backend/tests/hooks/test_scope_guard.py
+index 722d8e9..5c28a09 100644
+--- a/backend/tests/hooks/test_scope_guard.py
++++ b/backend/tests/hooks/test_scope_guard.py
+@@ -73,7 +73,11 @@ BASE_COVERAGE: list[tuple[str, str, str, str]] = [
+         "T-6", "backend/src/escalation/engine.py", "backend/src/escalations/engine.py",
+         "escalation vs escalations",
+     ),
+-    ("T-7", "evals/labeled_set.yaml", "eval/labeled_set.yaml", "missing trailing s"),
++    (
++        "T-7", "evals/report.py", "eval/report.py",
++        "missing trailing s (probe moved off evals/labeled_set.yaml, now HUMAN_ONLY — "
++        "see test_human_only_approval_gate.py for the assertion that replaced it)",
++    ),
+     ("T-8", "backend/src/portal/api.py", "portal/src/api.ts", "frontend, not T-8's backend scope"),
+     (
+         "T-9", "portal/src/App.tsx", "backend/src/portal/routes.py",

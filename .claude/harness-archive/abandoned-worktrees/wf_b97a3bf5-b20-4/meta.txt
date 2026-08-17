@@ -1,0 +1,9 @@
+worktree_name:   wf_b97a3bf5-b20-4
+worktree_path:   /Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/cxforge/.claude/worktrees/wf_b97a3bf5-b20-4
+branch:          worktree-wf_b97a3bf5-b20-4
+head_sha:        078baf2e45e743044e35482dd5ce8490f5e7c1af
+head_subject:    docs: authoritative status block at the top of the human-decision log
+ancestor_of_master(972c13b): yes
+disk_size_before_removal:    429M
+dirty_file_count: 3
+untracked_count:  0

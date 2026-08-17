@@ -1,0 +1,3 @@
+ M .claude/NEEDS_HUMAN.md
+ M .claude/scripts/harness_lib.py
+ A backend/tests/hooks/test_verify_write_channel.py

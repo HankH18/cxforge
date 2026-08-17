@@ -1,0 +1,7 @@
+M  .claude/NEEDS_HUMAN.md
+A  .claude/approval/README.md
+A  .claude/approval/allowed_signers
+A  .claude/scripts/approval_gate.py
+M  .claude/scripts/harness_lib.py
+A  backend/tests/hooks/test_human_only_approval_gate.py
+M  backend/tests/hooks/test_scope_guard.py

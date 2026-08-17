@@ -1,0 +1,3 @@
+?? backend/tests/plan/_citationlib.py
+?? backend/tests/plan/known_citation_defects.json
+?? backend/tests/plan/test_citation_integrity.py

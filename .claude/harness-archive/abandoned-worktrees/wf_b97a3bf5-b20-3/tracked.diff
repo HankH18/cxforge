@@ -1,0 +1,709 @@
+diff --git a/.claude/NEEDS_HUMAN.md b/.claude/NEEDS_HUMAN.md
+index 13d5ea8..c93b4df 100644
+--- a/.claude/NEEDS_HUMAN.md
++++ b/.claude/NEEDS_HUMAN.md
+@@ -919,6 +919,73 @@ instruction, reporting rather than working around the scope boundary.
+ 
+ ---
+ 
++## 🔴 OPEN — DECISION NEEDED: T-7's verify writes outside T-7's scope (W15)
++
++**The gap the T-29 entry immediately above describes as "documented rather than
++addressed in code" is now closed in code.** `cmd_close` re-runs the integrity
++check *after* the verify and before the `git add -A`, so files a verify command
++writes can no longer land inside the range its receipt attests. One ticket
++fails that check, and fixing it is a plan edit only you can make.
++
++### The decision
++
++**T-7's verify writes three files its scope does not name.** Its step 2 is
++`uv run python -m evals.report`, which renders `docs/eval-report/metrics.json`,
++`report.md` and `pr_curve.png`; T-7's scope is `["evals/**",
++"backend/tests/evals/**", "backend/src/escalation/**"]`. Verified with the
++harness's own matcher — all three come back `in_scope=False meta=False
++harness_state=False`. It is deterministic, not intermittent: `metrics.json`
++embeds a fresh `run_timestamp_utc` on every invocation, so the bytes differ
++every run.
++
++This is not hypothetical history. T-7's existing receipt is bound to
++`be1bfeb..be08848`, and that range consists of exactly those three files plus
++harness state. The attested range of that close is made *entirely* of files the
++scope check never saw.
++
++**T-7 already has a receipt, so nothing is blocked today.** What the fix blocks
++is any future *re-close* of T-7 — which is on the critical path if the approval
++question is ever reopened.
++
++Pick one:
++
++1. **Redirect the verify** — `uv run python -m evals.report --output-dir <tmp>`.
++   The flag already exists (`evals/report.py:942`). Keeps `docs/eval-report/`
++   a deliberate, ticketed artifact of T-21/T-11 rather than a side effect of
++   T-7's approval gate. **Recommended.**
++2. **Widen T-7's scope** to include `docs/eval-report/**`. Precedented — T-21
++   declares that exact glob and T-11 covers it via `docs/**` — but it grants
++   T-7 write authority over the rendered report, which is the artifact a
++   FINAL-bannered summary is generated from. Given that history, argued against.
++3. **A generic generated-artifact exemption.** Argued against: it would let any
++   ticket write anything into `docs/eval-report/` unchecked, replacing a narrow
++   hole with a wider one.
++
++Either (1) or (2) edits `docs/tickets.json`, which is PROTECTED. No session may
++take this on its own initiative.
++
++### Two things found while fixing it, both PRE-EXISTING, neither introduced here
++
++- **`git reset --hard <start_commit>` — the recovery command the shipped
++  `VERIFY FAIL` message itself prints — deletes the session's own claim
++  record.** The claim file is untracked at the start commit and staged by
++  `integrity()`'s `git add -A`, so the reset removes it, leaving a session
++  that cannot even `release`. Demonstrated against the shipped harness on the
++  existing failure path (verify `false`), so it is unrelated to the W15 change.
++  The new refusal does not repeat the trap: it reverts the verify's output
++  itself and tells the session *not* to reset.
++- **`docs/tickets.json` has no `full_verify` key**, so
++  `full = load_tickets().get("full_verify")` is always `None` and the
++  "full regression suite" protocol rule 5 promises `claim.sh close` runs **has
++  never run for any ticket**. For most tickets the only close-time gate is a
++  narrow per-directory pytest subset. Left as-is — adding the key is a plan
++  edit, and choosing what it should run is your call.
++- **`uv run mypy backend` (step 4 of T-0's verify) fails at HEAD** with 2 errors
++  in `backend/tests/plan/{update_structural_snapshot,test_structural_snapshot}.py`.
++  Confirmed on a pristine checkout with no local changes.
++
++---
++
+ ## History
+ 
+ - [2026-08-15T01:39:06Z] T-25 released by 1ed89054-d046-46fd-8a20-42f43c6ed16d: Close blocked by INTEGRITY FAIL on docs/tickets.json — a concurrent monitor session appended T-31 to the plan mid-ticket. Releasing and immediately re-claiming so the monitor's amendment lands in a fresh ticket-start commit rather than inside T-25's attested diff. T-25 work is complete and green in the tree.
+diff --git a/.claude/scripts/harness_lib.py b/.claude/scripts/harness_lib.py
+index 6d9104d..abbf923 100644
+--- a/.claude/scripts/harness_lib.py
++++ b/.claude/scripts/harness_lib.py
+@@ -258,15 +258,75 @@ def changed_since(commit):
+         )
+     return sorted(set(r.stdout.splitlines()) | set(s.stdout.splitlines()))
+ 
+-def integrity(tid, start_commit):
++def out_of_scope(paths, scope):
++    """The subset of `paths` that `scope` does not sanction. Split out of
++    integrity() so the close can ask the question twice against the SAME scope
++    list — see cmd_close's W15 re-check, which must not re-read docs/tickets.json
++    after running the verify."""
++    return [p for p in paths
++            if p and not (match_any(p, scope) or match_any(p, META_ALLOW, raw=True)
++                          or match_any(p, HARNESS_STATE, raw=True))]
++
++def revert_paths(paths, start_commit):
++    """Put exactly `paths` back to their state at `start_commit`. Returns
++    (restored, removed, stuck).
++
++    Used only by cmd_close's W15 refusal, and only on paths that check has just
++    proved are OUTSIDE the ticket's scope — never on anything the session wrote
++    (the pre-verify check already certified all of that as in-scope). Without it
++    the refusal is worse than the disease: changed_since() has `git add -A`'d the
++    verify's output into the index, so leaving it there makes cmd_claim's W1
++    dirty-tree check refuse EVERY subsequent claim on EVERY ticket until a human
++    notices — one ticket's plan defect wedging the whole build. The alternative
++    advice, `git reset --hard <start>`, clears it but also discards the session's
++    legitimate in-scope work AND the claim record itself (untracked at the start
++    commit, so reset deletes it, leaving a session that cannot even release).
++
++    Restoring rather than blanket-deleting matters: a verify that DELETED or
++    overwrote a tracked out-of-scope file is using the same write channel, and
++    `git checkout` puts those back instead of finishing the job."""
++    restored, removed, stuck = [], [], []
++    for p in paths:
++        if _git("cat-file", "-e", "%s:%s" % (start_commit, p)).returncode == 0:
++            (restored if _git("checkout", start_commit, "--", p).returncode == 0
++             else stuck).append(p)
++        else:
++            _git("rm", "-q", "-f", "--cached", "--", p)
++            try:
++                os.remove(os.path.join(ROOT, p)); removed.append(p)
++                _prune_empty_dirs(os.path.dirname(os.path.join(ROOT, p)))
++            except OSError:
++                stuck.append(p)
++    return restored, removed, stuck
++
++def _prune_empty_dirs(d):
++    """Remove directories the verify created and we have just emptied, walking up
++    until something is non-empty or we reach ROOT. os.rmdir REFUSES a non-empty
++    directory, which is what makes this safe — it can only ever delete a
++    directory the removed files were the sole contents of — and the ROOT prefix
++    bound stops it climbing out of the repo. git never reports empty directories,
++    so leaving them wedges nothing; they are pruned only so the refusal's
++    "nothing for you to clean up" is literally true."""
++    root = os.path.realpath(ROOT)
++    while os.path.realpath(d).startswith(root + os.sep):
++        try:
++            os.rmdir(d)
++        except OSError:
++            return
++        d = os.path.dirname(d)
++
++def integrity(tid, start_commit, scope=None):
+     """Every file changed during the ticket must be in scope or meta-allowed.
+     This is the compensating control for the documented Bash hole: out-of-band
+-    edits to protected files (the plan, the hooks) fail the close."""
+-    t = ticket(tid)
+-    bad = [p for p in changed_since(start_commit)
+-           if p and not (match_any(p, t["scope"]) or match_any(p, META_ALLOW, raw=True)
+-                         or match_any(p, HARNESS_STATE, raw=True))]
+-    return bad
++    edits to protected files (the plan, the hooks) fail the close.
++
++    `scope` overrides the ticket's declared scope with a caller-held snapshot.
++    cmd_close passes the list it read BEFORE running the verify: re-reading the
++    plan afterwards would let a verify command widen its own ticket's scope and
++    then pass the very check that is supposed to judge what it wrote."""
++    if scope is None:
++        scope = ticket(tid)["scope"]
++    return out_of_scope(changed_since(start_commit), scope)
+ 
+ LINT_RULES = [
+     (r"\|\|\s*true", "'|| true' makes the gate pass unconditionally"),
+@@ -362,27 +422,86 @@ def cmd_close():
+         return (f"{claim_file(sid)}: claim's start_commit {start!r} does not resolve to a commit "
+                 f"in this repo, so the close-time integrity check cannot be evaluated. Refusing "
+                 f"rather than minting a receipt on an unchecked diff."), 2
++    # W15: snapshot everything the close will judge itself by BEFORE the verify
++    # runs. The verify is arbitrary shell with write access to the whole repo, so
++    # re-reading docs/tickets.json after it would let a verify amend its own
++    # scope, its own gate, or the cross-ticket gate and then be measured against
++    # the amended plan. `t` was read above; these two come from the same read.
++    scope_at_close = list(t.get("scope") or [])
++    full = load_tickets().get("full_verify")
+     try:
+-        bad = integrity(tid, start)
++        bad = integrity(tid, start, scope_at_close)
+     except IntegrityUnavailable as e:
+         return str(e), 2
+     if bad:
+         return ("INTEGRITY FAIL — files changed outside %s scope/meta:\n  %s\n"
+                 "Out-of-scope changes (including via Bash) fail the close. Revert them or record the plan defect in .claude/NEEDS_HUMAN.md." % (tid, "\n  ".join(bad))), 2
+-    def fail(extra=""):
++    def bump_attempt():
+         # .get: a record with no "attempts" is malformed but not MISattributed, so it
+         # reaches here; counting from 0 beats a KeyError traceback mid-close.
++        # EVERY non-minting exit past this point routes through here — a failure path
++        # that skips it silently exempts itself from protocol rule 6's 2-strikes rule,
++        # letting a session retry the same refusal forever without ever escalating.
+         c["attempts"] = int(c.get("attempts") or 0) + 1
+         _write(os.path.join(CLAIMS, f"{sid}.json"), c)
+-        msg = (f"VERIFY FAIL for {tid} (attempt {c['attempts']}).{extra} Materiality rule: style/lint-only "
++        return c["attempts"]
++    def fail(extra=""):
++        n = bump_attempt()
++        msg = (f"VERIFY FAIL for {tid} (attempt {n}).{extra} Materiality rule: style/lint-only "
+                f"failures may be fixed in place; behavioral failures require 'git reset --hard {start}' first.")
+-        if c["attempts"] >= 2:
++        if n >= 2:
+             msg += "\n2 failed attempts: release with a reason, add details to .claude/NEEDS_HUMAN.md, and stop for the human."
+         return msg, 2
+     if subprocess.run(t["verify"], shell=True, cwd=ROOT).returncode != 0: return fail()
+-    full = load_tickets().get("full_verify")
+     if full and subprocess.run(full, shell=True, cwd=ROOT).returncode != 0:
+         return fail(" (cross-ticket regression gate)")
++    # W15: the verify has now run, and the commit below sweeps the whole tree with
++    # `git add -A`. Without this second check, anything the verify WROTE lands
++    # inside the range the receipt attests — after the only scope check had already
++    # passed — which makes a ticket's own verify command an unaudited write channel
++    # into an attested commit. Demonstrated live on T-7: its verify's step 2
++    # (`uv run python -m evals.report`) renders docs/eval-report/{metrics.json,
++    # report.md,pr_curve.png}, none of which its scope names, and the close passed.
++    # The pre-verify check above already returned clean, so every path found here is
++    # attributable to the verify itself and the refusal says so.
++    try:
++        wrote = integrity(tid, start, scope_at_close)
++    except IntegrityUnavailable as e:
++        bump_attempt()
++        return str(e), 2
++    if wrote:
++        n = bump_attempt()
++        vshown = " ".join((t["verify"] or "").split())
++        if len(vshown) > 200: vshown = vshown[:200] + " …"
++        restored, removed, stuck = revert_paths(wrote, start)
++        cleanup = ("They have been put back to their state at %s (%d removed, %d restored). "
++                   "Your in-scope work and this session's claim are untouched, so nothing is "
++                   "wedged and there is NOTHING for you to clean up — in particular do not "
++                   "'git reset --hard', which would discard your in-scope work and this "
++                   "session's claim record along with it."
++                   % (start[:12], len(removed), len(restored)))
++        if stuck:
++            cleanup = ("Could not put these back to their state at %s: %s — remove them by "
++                       "hand before anything else claims a ticket, or the next claim is "
++                       "refused for a dirty tree." % (start[:12], ", ".join(stuck)))
++        msg = ("VERIFY WROTE OUT OF SCOPE — refusing to close %s (attempt %d).\n"
++               "The pre-verify integrity check passed, so these files were written by "
++               "%s's OWN verify command, not by the session:\n  %s\n"
++               "  verify: %s\n"
++               "Committing now would absorb them into the range this receipt attests, "
++               "which is how a verify command becomes an unaudited write channel into an "
++               "attested commit. %s\n"
++               "This is a PLAN DEFECT, not an agent error, and RETRYING CANNOT FIX IT: the "
++               "verify writes where the plan did not say it writes. The fix is either to "
++               "redirect the verify's output (e.g. an --output-dir under a temp dir) or to "
++               "name these paths in %s's scope — both are edits to docs/tickets.json, which "
++               "is read-only to you. Record the defect in .claude/NEEDS_HUMAN.md, release "
++               "the claim with a reason, and stop for the human."
++               % (tid, n, tid, "\n  ".join(wrote), vshown, cleanup, tid))
++        if n >= 2:
++            msg += ("\n2 failed attempts: release with a reason, add details to "
++                    ".claude/NEEDS_HUMAN.md, and stop for the human.")
++        return msg, 2
+     _git("add", "-A"); _git("commit", "-q", "--allow-empty", "-m", f"ticket-close: {tid}")
+     fp = fingerprint(t["scope"])
+     _write(os.path.join(EVID, f"{tid}.json"),
+diff --git a/backend/tests/hooks/test_verify_write_channel.py b/backend/tests/hooks/test_verify_write_channel.py
+new file mode 100644
+index 0000000..214a63e
+--- /dev/null
++++ b/backend/tests/hooks/test_verify_write_channel.py
+@@ -0,0 +1,446 @@
++"""W15: a ticket's own verify command must not be an unaudited write channel
++into the commit its receipt attests.
++
++`cmd_close` runs its gates in this order:
++
++    integrity(scope) -> verify -> [full_verify] -> git add -A -> commit -> receipt
++
++The integrity check is the ONLY thing that asks "is everything that changed
++during this ticket inside the scope the plan declared". It ran once, *before*
++the verify. The `git add -A` that follows sweeps the whole tree. So anything the
++verify command itself WROTE landed inside the range the receipt attests, after
++the only scope check had already passed -- and no gate anywhere ever looked at
++it. A verify is arbitrary shell with write access to the entire repo, so that is
++a general-purpose write channel into an attested commit, reachable by any ticket,
++requiring no Bash call from the session and leaving no trace in any refusal.
++
++This was not hypothetical. T-7's scope is
++``["evals/**", "backend/tests/evals/**", "backend/src/escalation/**"]`` and step
++2 of its verify is ``uv run python -m evals.report``, which renders
++``docs/eval-report/{metrics.json,report.md,pr_curve.png}`` -- three files no part
++of that scope names. T-7 closed clean, and the range its receipt is bound to
++(``be1bfeb..be08848``) contains exactly those three files and nothing else of
++substance. The attested range of that close is, in other words, entirely made of
++files the scope check never saw.
++
++The fix adds a SECOND integrity call, after the verify (and after any
++``full_verify``) and before the commit, judged against a scope list snapshotted
++*before* the verify ran. Because the pre-verify check already returned clean,
++every path the second call reports is attributable to the verify itself, and the
++refusal says so in those words.
++
++Test map:
++
++  * ``test_close_refuses_when_the_verify_writes_outside_scope`` -- T-7's exact
++    shape, and the headline assertion: refuse, no receipt, and the files stay out
++    of every attested range.
++  * ``test_refusal_names_the_verify_as_the_writer_and_the_paths_it_wrote`` --
++    the diagnosis has to be actionable, or the next session re-runs it blind.
++  * ``test_verify_that_writes_nothing_still_closes`` and
++    ``test_verify_that_writes_inside_scope_still_closes`` -- selectivity. A check
++    that refused every close would "fix" W15 by breaking the harness; RECON A
++    measured all 16 distinct verify strings in the real plan and found T-7 the
++    only one that writes at all.
++  * ``test_verify_that_deletes_an_out_of_scope_file_is_refused`` -- the channel
++    is symmetric; a verify that removes a file is writing to the tree too.
++  * ``test_verify_cannot_widen_its_own_scope_to_launder_what_it_wrote`` -- why
++    the scope list is snapshotted rather than re-read.
++  * ``test_post_verify_refusal_increments_attempts`` -- protocol rule 6's
++    2-strikes/release rule only applies to failure paths that do the
++    bookkeeping; a path that skips it can be retried forever.
++  * ``test_pre_verify_integrity_failure_is_reported_separately`` -- the two
++    failures have different causes and different fixes (agent error vs. plan
++    defect) and must not be conflated into one message.
++
++Every test builds a disposable project in ``tmp_path``: ``git init``, a
++hand-authored ``docs/tickets.json``, and copies of the real ``.claude/scripts/``
++and ``.claude/hooks/``. Nothing here reads or writes the real repo's
++``.claude/claims/`` or ``.claude/evidence/`` -- a live session holds a claim
++there.
++"""
++
++from __future__ import annotations
++
++import json
++import os
++import shutil
++import subprocess
++import sys
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[3]
++REAL_SCRIPTS_DIR = REPO_ROOT / ".claude" / "scripts"
++REAL_HOOKS_DIR = REPO_ROOT / ".claude" / "hooks"
++
++SESSION = "sess-w15"
++
++
++# ---------------------------------------------------------------------------
++# synthetic-project construction (same shape as test_evidence_binding.py)
++# ---------------------------------------------------------------------------
++def _ticket(tid: str, scope: list[str], verify: str) -> dict:
++    return {
++        "id": tid,
++        "title": f"synthetic ticket {tid}",
++        "objective": "W15 verify-write-channel fixture",
++        "acceptance": ["n/a"],
++        "verify": verify,
++        "scope": scope,
++        "depends_on": [],
++        "non_goals": [],
++        "parallel_safe": False,
++        "status": "open",
++    }
++
++
++def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
++    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=30)
++
++
++def _build_project(tmp_path: Path, tickets: list[dict], files: dict[str, str]) -> Path:
++    root = tmp_path / "proj"
++    (root / "docs").mkdir(parents=True)
++    (root / "docs" / "tickets.json").write_text(json.dumps({"tickets": tickets}, indent=2))
++
++    ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
++    shutil.copytree(REAL_SCRIPTS_DIR, root / ".claude" / "scripts", ignore=ignore)
++    shutil.copytree(REAL_HOOKS_DIR, root / ".claude" / "hooks", ignore=ignore)
++
++    for rel, content in files.items():
++        p = root / rel
++        p.parent.mkdir(parents=True, exist_ok=True)
++        p.write_text(content)
++
++    assert _git(["init", "-q"], root).returncode == 0
++    _git(["config", "user.email", "w15-test@example.invalid"], root)
++    _git(["config", "user.name", "W15 Test"], root)
++    _git(["config", "commit.gpgsign", "false"], root)
++    _git(["add", "-A"], root)
++    r = _git(["commit", "-q", "-m", "initial"], root)
++    assert r.returncode == 0, r.stderr
++    return root
++
++
++def _run_harness(root: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
++    env = dict(os.environ)
++    env["CLAUDE_PROJECT_DIR"] = str(root)
++    env["CLAUDE_CODE_SESSION_ID"] = SESSION
++    return subprocess.run(
++        [sys.executable, str(root / ".claude" / "scripts" / "harness_lib.py"), *args],
++        cwd=root, capture_output=True, text=True, env=env, timeout=120,
++    )
++
++
++def _claim(root: Path, tid: str) -> subprocess.CompletedProcess[str]:
++    r = _run_harness(root, ["claim", tid, "W15 fixture"])
++    assert r.returncode == 0, r.stdout + r.stderr
++    return r
++
++
++def _close(root: Path) -> subprocess.CompletedProcess[str]:
++    return _run_harness(root, ["close"])
++
++
++def _claim_file(root: Path) -> Path:
++    return root / ".claude" / "claims" / f"{SESSION}.json"
++
++
++def _start_commit(root: Path) -> str:
++    return json.loads(_claim_file(root).read_text())["start_commit"]
++
++
++def _receipt(root: Path, tid: str) -> Path:
++    return root / ".claude" / "evidence" / f"{tid}.json"
++
++
++def _head(root: Path) -> str:
++    return _git(["rev-parse", "HEAD"], root).stdout.strip()
++
++
++# A verify that renders a report into docs/eval-report/, exactly as T-7's step 2
++# (`uv run python -m evals.report`) does -- without needing evals/report.py, an
++# ANTHROPIC_API_KEY, or a live model call. Two files, so the refusal has to
++# enumerate rather than name one.
++_RENDER_REPORT = (
++    "import json,pathlib;"
++    "d=pathlib.Path('docs/eval-report');d.mkdir(parents=True,exist_ok=True);"
++    "(d/'metrics.json').write_text(json.dumps({'auc':0.91}));"
++    "(d/'report.md').write_text('# eval report')"
++)
++_T7_SHAPED_VERIFY = f'python3 -c "{_RENDER_REPORT}" && python3 -c "import sys; sys.exit(0)"'
++
++
++def _t7_shaped_project(tmp_path: Path) -> Path:
++    """T-7's shape: scope covers the eval SOURCES, the verify renders a report
++    into docs/ -- which the scope does not name."""
++    return _build_project(
++        tmp_path,
++        [_ticket("T-7X", ["evals/**"], _T7_SHAPED_VERIFY)],
++        {"evals/labeled_set.yaml": "approval:\n  status: PROPOSED\n"},
++    )
++
++
++# ---------------------------------------------------------------------------
++# the headline: T-7's exact shape must now be refused
++# ---------------------------------------------------------------------------
++def test_close_refuses_when_the_verify_writes_outside_scope(tmp_path: Path) -> None:
++    """Before the fix this close returned 0, minted a fingerprint-bound receipt,
++    and the range that receipt attests contained docs/eval-report/metrics.json
++    and docs/eval-report/report.md -- neither of which T-7X's scope
++    (``evals/**``) names, and neither of which any gate had looked at.
++    """
++    root = _t7_shaped_project(tmp_path)
++    _claim(root, "T-7X")
++    start = _start_commit(root)
++
++    # real, in-scope work, so the ticket's window is not vacuous
++    (root / "evals" / "labeled_set.yaml").write_text("approval:\n  status: PROPOSED\n  n: 42\n")
++
++    result = _close(root)
++
++    assert result.returncode == 2, f"close must refuse; got {result.returncode}: {result.stdout}"
++    assert not _receipt(root, "T-7X").exists(), "no receipt may be minted for a refused close"
++
++    # Nothing was committed, so the files are in no attested range.
++    assert _head(root) == start, "a refused close must not create the ticket-close commit"
++    for path in _git(["diff", "--name-only", start, _head(root)], root).stdout.split():
++        assert not path.startswith("docs/eval-report/"), (
++            f"{path} was committed into the attested range by the verify"
++        )
++
++    # The claim survives the refusal, so the session can still release it.
++    assert _claim_file(root).exists()
++
++
++def test_refusal_leaves_no_mess_for_the_next_claim_to_trip_over(tmp_path: Path) -> None:
++    """The refusal must undo the verify's out-of-scope writes, not just decline
++    to commit them.
++
++    ``changed_since`` reaches its answer via ``git add -A``, so at the moment of
++    refusal the verify's output is STAGED. Left there, ``cmd_claim``'s W1
++    dirty-tree check refuses every subsequent claim on every ticket -- one
++    ticket's plan defect wedging the entire build until a human notices. The
++    documented escape, ``git reset --hard <start>``, does clear it, but it also
++    discards the session's legitimate in-scope work and deletes the claim record
++    (untracked at the start commit), leaving a session that cannot even release.
++
++    So the refusal reverts exactly the paths it named -- and nothing else.
++    """
++    root = _t7_shaped_project(tmp_path)
++    _claim(root, "T-7X")
++    (root / "evals" / "labeled_set.yaml").write_text("approval:\n  status: PROPOSED\n  n: 42\n")
++
++    assert _close(root).returncode == 2
++
++    # the verify's out-of-scope output is gone, from the tree and from the index
++    assert not (root / "docs" / "eval-report" / "metrics.json").exists()
++    assert not (root / "docs" / "eval-report" / "report.md").exists()
++    # ...including the directory it created, which git would not have reported
++    assert not (root / "docs" / "eval-report").exists()
++    dirty = _git(["status", "--porcelain", "-uall"], root).stdout
++    assert "docs/eval-report" not in dirty, f"verify output still dirties the tree:\n{dirty}"
++
++    # but pruning stops at the first non-empty directory: docs/ predates the
++    # verify and holds tickets.json, so it must survive
++    assert (root / "docs" / "tickets.json").exists()
++
++    # the session's in-scope work is NOT collateral damage
++    assert "n: 42" in (root / "evals" / "labeled_set.yaml").read_text()
++    # ...and neither is the claim record, so `release` is still available
++    assert _claim_file(root).exists()
++
++
++def test_refusal_names_the_verify_as_the_writer_and_the_paths_it_wrote(
++    tmp_path: Path,
++) -> None:
++    """A refusal that just said "out of scope" would send the next session
++    hunting for an edit it never made. The pre-verify check passed, so the
++    harness KNOWS the verify is the writer and must say so, name every path, and
++    say that retrying cannot help (the plan, not the session, is what is wrong).
++    """
++    root = _t7_shaped_project(tmp_path)
++    _claim(root, "T-7X")
++    out = _close(root).stdout
++
++    assert "docs/eval-report/metrics.json" in out
++    assert "docs/eval-report/report.md" in out
++    assert "verify" in out.lower()
++    # attribution: the verify wrote these, not the session
++    assert "OWN verify command" in out
++    # classification + the exit, per protocol rules 1/6/7
++    assert "PLAN DEFECT" in out
++    assert "RETRYING CANNOT FIX IT" in out
++    assert ".claude/NEEDS_HUMAN.md" in out
++    assert "release the claim" in out
++    # It must not SEND the session at `git reset --hard` -- here that would
++    # destroy in-scope work and the claim record to clean up something the
++    # refusal has already cleaned up itself. The string may appear only as the
++    # warning against it, never as an instruction.
++    assert "do not 'git reset --hard'" in out
++    assert out.count("reset --hard") == 1
++
++
++# ---------------------------------------------------------------------------
++# selectivity: the check must not refuse closes that are actually fine
++# ---------------------------------------------------------------------------
++def test_verify_that_writes_nothing_still_closes(tmp_path: Path) -> None:
++    """RECON A measured all 16 distinct verify strings in the real plan: 15 of
++    them write nothing into the tree at all (every backend/tests suite routes
++    its writes through tmp_path). Those closes must be completely unaffected.
++    """
++    root = _build_project(
++        tmp_path,
++        [_ticket("T-A", ["src/**"], "python3 -c \"import sys; sys.exit(0)\"")],
++        {"src/a.txt": "a\n"},
++    )
++    _claim(root, "T-A")
++    (root / "src" / "a.txt").write_text("worked on it\n")
++
++    result = _close(root)
++    assert result.returncode == 0, result.stdout + result.stderr
++    assert _receipt(root, "T-A").exists()
++
++
++def test_verify_that_writes_inside_scope_still_closes(tmp_path: Path) -> None:
++    """A verify legitimately allowed to generate an artifact -- the plan named
++    the path in the ticket's scope -- is exactly what the scope grant is FOR.
++    The check judges where the write landed, not that a write happened.
++    """
++    root = _build_project(
++        tmp_path,
++        [_ticket(
++            "T-B", ["src/**"],
++            "python3 -c \"import pathlib; pathlib.Path('src/generated.txt').write_text('g')\"",
++        )],
++        {"src/a.txt": "a\n"},
++    )
++    _claim(root, "T-B")
++
++    result = _close(root)
++    assert result.returncode == 0, result.stdout + result.stderr
++    assert _receipt(root, "T-B").exists()
++    # and the in-scope artifact IS attested, which is the point of scoping it
++    assert (root / "src" / "generated.txt").exists()
++
++
++# ---------------------------------------------------------------------------
++# the channel is symmetric, and cannot be laundered
++# ---------------------------------------------------------------------------
++def test_verify_that_deletes_an_out_of_scope_file_is_refused(tmp_path: Path) -> None:
++    """"Writes into the attested commit" includes removing things from it. A
++    verify that deletes an out-of-scope file is using the same channel to make
++    the attested range say something false -- and `git add -A` stages deletions
++    just as happily as additions.
++    """
++    root = _build_project(
++        tmp_path,
++        [_ticket(
++            "T-C", ["src/**"],
++            "python3 -c \"import pathlib; pathlib.Path('docs/keepme.md').unlink()\"",
++        )],
++        {"src/a.txt": "a\n", "docs/keepme.md": "load-bearing\n"},
++    )
++    _claim(root, "T-C")
++
++    result = _close(root)
++    assert result.returncode == 2, result.stdout
++    assert "docs/keepme.md" in result.stdout
++    assert not _receipt(root, "T-C").exists()
++    # and the cleanup RESTORES rather than finishing the deletion
++    assert (root / "docs" / "keepme.md").read_text() == "load-bearing\n"
++
++
++def test_verify_cannot_widen_its_own_scope_to_launder_what_it_wrote(
++    tmp_path: Path,
++) -> None:
++    """The post-verify check reads its scope from a snapshot taken before the
++    verify ran, not from docs/tickets.json.
++
++    If it re-read the plan, this verify would defeat the whole fix in one line:
++    write the out-of-scope artifact, then rewrite its own ticket's scope to
++    include both the artifact AND docs/tickets.json, and the second check --
++    judging the tree against the plan the verify just authored -- would pass
++    everything, including the plan edit itself.
++    """
++    widen = (
++        "import json,pathlib;"
++        "pathlib.Path('docs/eval-report').mkdir(parents=True,exist_ok=True);"
++        "pathlib.Path('docs/eval-report/report.md').write_text('x');"
++        "p=pathlib.Path('docs/tickets.json');d=json.loads(p.read_text());"
++        "d['tickets'][0]['scope']=['src/**','docs/**'];"
++        "p.write_text(json.dumps(d))"
++    )
++    root = _build_project(
++        tmp_path,
++        [_ticket("T-D", ["src/**"], f'python3 -c "{widen}"')],
++        {"src/a.txt": "a\n"},
++    )
++    _claim(root, "T-D")
++
++    result = _close(root)
++    assert result.returncode == 2, (
++        "a verify that rewrites its own ticket's scope must not be judged against "
++        f"the rewritten scope; got rc={result.returncode}: {result.stdout}"
++    )
++    assert not _receipt(root, "T-D").exists()
++    # both the artifact and the plan edit are named, judged against the ORIGINAL scope
++    assert "docs/eval-report/report.md" in result.stdout
++    assert "docs/tickets.json" in result.stdout
++    # and the plan is put back: a refusal that left the widened scope on disk
++    # would hand the next close exactly the laundering it just refused
++    plan = json.loads((root / "docs" / "tickets.json").read_text())
++    assert plan["tickets"][0]["scope"] == ["src/**"]
++
++
++# ---------------------------------------------------------------------------
++# bookkeeping and message separation
++# ---------------------------------------------------------------------------
++def test_post_verify_refusal_increments_attempts(tmp_path: Path) -> None:
++    """Protocol rule 6's "after 2 failed attempts, release and escalate" is
++    driven entirely by the claim record's `attempts` counter. A failure path that
++    returns without incrementing it exempts itself from that rule -- the session
++    can re-run the identical refusal indefinitely and never be told to stop.
++
++    This is also the test that proves the cleanup is what makes the counter
++    reachable. Without it, attempt 2 never gets as far as the verify: the
++    leftover output from attempt 1 trips the PRE-verify integrity check instead,
++    which deliberately does not touch the claim record (see
++    test_verify_gate.py::test_close_fails_integrity_when_a_file_outside_scope_
++    changed). The counter would freeze at 1 forever and the escalation rule would
++    never fire for this failure class -- and the message the session got would
++    blame it for files its verify wrote.
++    """
++    root = _t7_shaped_project(tmp_path)
++    _claim(root, "T-7X")
++    assert json.loads(_claim_file(root).read_text())["attempts"] == 0
++
++    assert _close(root).returncode == 2
++    assert json.loads(_claim_file(root).read_text())["attempts"] == 1
++
++    second = _close(root)
++    assert second.returncode == 2
++    assert json.loads(_claim_file(root).read_text())["attempts"] == 2
++    assert "release" in second.stdout.lower()
++
++
++def test_pre_verify_integrity_failure_is_reported_separately(tmp_path: Path) -> None:
++    """The two integrity failures have opposite causes and opposite remedies:
++    the pre-verify one means the SESSION edited out of scope (revert it), the
++    post-verify one means the PLAN is wrong (escalate, do not retry). One shared
++    message would send half of each case the wrong way.
++    """
++    root = _build_project(
++        tmp_path,
++        [_ticket("T-E", ["src/**"], "python3 -c \"import sys; sys.exit(0)\"")],
++        {"src/a.txt": "a\n", "docs/other.md": "x\n"},
++    )
++    _claim(root, "T-E")
++    # the SESSION writes out of scope, before any verify runs
++    (root / "docs" / "other.md").write_text("edited out of scope by the session\n")
++
++    result = _close(root)
++    assert result.returncode == 2
++    assert "INTEGRITY FAIL" in result.stdout
++    assert "VERIFY WROTE OUT OF SCOPE" not in result.stdout
++    assert "docs/other.md" in result.stdout
++    assert not _receipt(root, "T-E").exists()

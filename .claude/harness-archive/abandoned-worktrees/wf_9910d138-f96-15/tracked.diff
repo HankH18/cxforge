@@ -1,0 +1,376 @@
+diff --git a/.claude/NEEDS_HUMAN.md b/.claude/NEEDS_HUMAN.md
+index fe2152d..9f42d20 100644
+--- a/.claude/NEEDS_HUMAN.md
++++ b/.claude/NEEDS_HUMAN.md
+@@ -190,21 +190,66 @@ Recorded because they were invisible until T-0 became claimable for the first ti
+ 
+ ---
+ 
+-## OPEN — W2: do NOT apply D3 as written (watchdog, 2026-08-15T20:29Z)
+-
+-D3 above proposes adding `r"^docs/tickets\.json$"` to `HARNESS_STATE`. **Please
+-decline that specific fix.** `integrity()` allows scope ∪ `META_ALLOW` ∪
+-`HARNESS_STATE`, so this exempts the authoritative plan from the close-time
+-integrity check. That check is, by its own docstring (harness_lib.py:107-109),
+-"the compensating control for the documented Bash hole" — and `PROTECTED` only
+-covers Edit/Write, because the PreToolUse matcher never sees Bash. Applying D3
+-would let any session rewrite `docs/tickets.json` mid-ticket and still close
+-clean: the graded party editing its own acceptance criteria, with nothing left
+-to catch it.
+-
+-D3 is framed as a one-line convenience fix for a real annoyance, and it is a
+-tightening nowhere. The defect it actually treats is W3 below — a monitor
+-writing the plan file. Fix that instead and D3's symptom disappears.
++## OPEN — W2: REJECT D3. Verified in the code and reproduced end to end (watchdog)
++
++D3 above proposes adding `r"^docs/tickets\.json$"` to `HARNESS_STATE`. **Decline
++it.** This is no longer an argument from reading: it was run twice against the
++real lifecycle in a throwaway project, with that one line as the only difference.
++
++**What the code does.** Line numbers are for `.claude/scripts/harness_lib.py`
++*with the pending close-hardening patch applied*:
++
++- `integrity()` (l.137, union at l.142-144) allows `scope ∪ META_ALLOW ∪
++  HARNESS_STATE` in a single `or`. Anything named in `HARNESS_STATE` is
++  structurally invisible to the close-time check — that is the list's purpose.
++- That check's own docstring (l.138-140) calls itself "the compensating control
++  for the documented Bash hole: out-of-band edits to protected files (the plan,
++  the hooks) fail the close."
++- `PROTECTED` cannot cover for it. `PROTECTED` is read only by the PreToolUse
++  guard, and `.claude/settings.json`'s only PreToolUse matchers are
++  `Edit|Write|NotebookEdit` and `TaskUpdate`. The Bash tool — which harness rule 2
++  makes the *required* way to drive the lifecycle — matches neither, and
++  `backend/tests/hooks/test_close_unattributed_claim_gap.py::test_no_pretooluse_hook_matches_bash_tool_calls`
++  already pins that. For `docs/tickets.json`, `integrity()` is therefore not *a*
++  control, it is the *only* one. D3 removes it.
++
++**Reproduction.** A session claims a ticket whose verify is
++`test -f src/done.txt`, never creates that file, rewrites its own ticket through
++Bash so the verify becomes `true`, and closes:
++
++    D3 off : close -> rc=2  INTEGRITY FAIL — files changed outside T-A scope/meta:
++                              docs/tickets.json
++    D3 on  : close -> rc=0  closed T-A | receipt bound to 08bcf7a
++             receipt: {"ticket":"T-A","session":"s1","verify":"true", ...}
++
++Under D3 the harness mints a fingerprint-bound receipt certifying `true` for work
++never done, against acceptance criteria the graded party rewrote mid-ticket. Same
++failure class as D5, reached deliberately rather than by accident.
++
++**The pending close-hardening patch makes D3 strictly worse.** That patch adds a
++claim-time refusal when the tree is dirty outside scope (the W1 fix), and it
++reuses the same three lists — `scope ∪ META_ALLOW ∪ HARNESS_STATE` (l.184-186).
++So after the patch, HARNESS_STATE waives a path from **two** gates, not one.
++Step one of the same run:
++
++    D3 off : claim with an uncommitted docs/tickets.json -> rc=1
++             "REFUSING to claim T-A — the working tree carries changes outside its scope"
++    D3 on  : claim with an uncommitted docs/tickets.json -> rc=0  claimed T-A
++             (absorbed into the ticket-start commit; never checked at close)
++
++The second line is exactly the laundering route W1 was written to close. So: yes,
++the pending patch changes the analysis — it strengthens the case against D3
++twice. It widens what HARNESS_STATE waives, and it already delivers the honest
++version of D3's convenience, because it forces an out-of-scope plan amendment to
++be committed **in the open, as its own commit,** before the next claim, where D3
++would make the same edit invisible.
++
++D3's symptom — a monitor's mid-ticket plan append failing an unrelated close — is
++caused by W3 (a session writing the authoritative plan out of band), not by
++`integrity()` being too strict. Fix the writer. If the annoyance persists, the
++safe shapes are (a) amend the plan only between tickets, in a human-approved
++commit, or (b) have `integrity()` *record* the plan diff into the receipt instead
++of waiving it — never (c) stop looking.
+ 
+ ## OPEN — W1: `ticket-start` launders uncommitted work past the integrity check
+ 
+@@ -270,6 +315,134 @@ close either way — specifically whether the new tests would still fail if the
+ legacy authority were restored. T-29 has the identical scope and verify, so the
+ same question lands again immediately after.
+ 
++## OPEN — W7: strike `.claude/evidence/**` from T-31's scope (plan amendment, needs your approval)
++
++T-31's contract names the receipts directory in its own `scope`. The plan
++therefore *says* a ticket is authorised to write the harness's attestations. It
++should not say that, and the entry buys the holder nothing legitimate.
++
++What was measured, driving the real guard and the real lifecycle:
++
++- `Edit`/`Write` to `.claude/evidence/**` is denied even while holding T-31 —
++  `ABSOLUTE` is checked before `PROTECTED` and never yields to scope. Good.
++- The same write through **Bash** succeeds, `integrity()` ignores it
++  (`.claude/evidence/**` is in `HARNESS_STATE`, and receipts are `.gitignore`d
++  besides), and the close mints a clean receipt. In the run: a hand-written
++  `.claude/evidence/T-Z.json` flipped T-Z to `resolved`, made `claim T-Z` refuse
++  as "already has a receipt", and unblocked its dependent T-W — for a ticket
++  whose verify never ran.
++- **The forgery behaves identically with the scope entry removed.** So striking
++  it is *necessary but not sufficient*: it withdraws the plan's sanction, it does
++  not withdraw the capability. The capability comes from Bash being unmatched
++  plus evidence being waived by `integrity()`, and that is a harness defect that
++  needs its own ticket (see D5/W2 for the same shape).
++
++Safe to apply retroactively even though T-31 is closed: `.claude/evidence/` is
++`.gitignore`d, so `git ls-files -- '.claude/evidence/**'` is empty at `master`
++(checked) and the glob contributes nothing to `fingerprint()`. Measured directly
++— T-31's scope fingerprint is byte-identical with and without the entry, so the
++minted receipt (`fp=98b340f6…`) stays recomputable.
++
++The exact edit (either form; both are idempotent, and the python form re-emits
++the file byte-identically apart from the struck line):
++
++    python3 - <<'PY'
++    import json, pathlib
++    p = pathlib.Path("docs/tickets.json")
++    d = json.loads(p.read_text())
++    for t in d["tickets"]:
++        if t["id"] == "T-31":
++            t["scope"] = [g for g in t["scope"] if g != ".claude/evidence/**"]
++    p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
++    PY
++
++    # or, equivalently:
++    jq --indent 2 '(.tickets[] | select(.id == "T-31") | .scope) |=
++        map(select(. != ".claude/evidence/**"))' docs/tickets.json > /tmp/t.json \
++      && mv /tmp/t.json docs/tickets.json
++
++`.claude/evidence-v1/**` stays in scope — T-31's acceptance 2 is about that
++archive, and it is tracked, so removing it would change the fingerprint.
++
++Then run `python3 .claude/scripts/gen_tasks.py` (see W9).
++
++## OPEN — W8: T-28 and T-29 are graded against artifacts that no longer exist
++
++Both tickets were written against the v1 harness. `verify_gate.sh`,
++`stop_guard`'s legacy-line handling, `claim_lookup.py` and `.claude/active-ticket`
++were all deleted whole by `c44f9af`. Verified against the current tree:
++`verify_gate` exists nowhere and is wired nowhere; there is no
++`test_legacy_claim_line_allows_regardless_of_evidence`; and **no test anywhere
++mentions `.claude/active-ticket`**.
++
++**T-29 is the urgent half.** T-28 now has a receipt, so T-29 is claimable *right
++now*, and every one of its four acceptance clauses names a v1 artifact. Worse, a
++session that claims it walks into the same trap T-28 hit: the thing the clauses
++describe (receipt writing) lives in `harness_lib.py`, which T-29's scope does not
++name, so the ticket is unimplementable as written. The proposed amendment rewrites
++the four clauses against what v2 actually does (receipt = ticket, session, verify
++string, close commit, scope fingerprint, attempts), keeps the existing v1-inertness
++proofs as "stay green, do not weaken", adds the one real gap found while checking
++— **a scope resolving to zero tracked files fingerprints as `sha256("")` =
++`e3b0c442…`, i.e. certifies nothing while looking identical to a real receipt** —
++and widens scope to the files those clauses name
++(`backend/tests/plan/**`, `.claude/rules/harness-protocol.md`) with the verify
++widened to match (`uv run pytest backend/tests/hooks backend/tests/plan -q`).
++Deliberately **not** granted: `.claude/scripts/**`. Under D1 that would let the
++ticket edit the harness that grades it; the empty-scope defect is therefore
++*pinned by a test and recorded here*, not fixed inside T-29.
++
++**T-28 is closed, so its half is bookkeeping and it is your call.** I did not
++silently re-grade it. The proposed amendment leaves all five original clauses
++verbatim and appends a marked `— SUPERSEDED (post-close note)` sentence to
++clauses 1, 3 and 4 saying what the v2 equivalent is and where it is pinned. It
++also records two things that would otherwise be lost:
++
++- Acceptance 1 is **not fully met**: a claim record whose `session` field
++  disagrees with its filename still mints a receipt —
++  `test_close_silently_mints_a_receipt_when_session_field_disagrees_with_filename`
++  says so by name, and the pending patch does not change it.
++- Acceptance 4 has a real, cheap gap: nothing reads `.claude/active-ticket`
++  today, but nothing *asserts* that a re-created one confers no authority.
++
++Your ruling, please, on three things: (a) amend T-29 as proposed, or mark it
++satisfied-by-supersession and skip it — the amendment is worth applying either
++way, since leaving the v1 wording in place invites the next session to close it
++on absence-assertions; (b) whether a closed ticket's acceptance text may carry
++post-close notes at all, or whether that history belongs only here; (c) the scope
++widening in (a), which is an authority grant however small.
++
++## OPEN — W9: the pending close-hardening patch turns four committed tests red
++
++Measured on a clean checkout of `aea59c0` with a coherent receipt set, running
++`uv run pytest backend/tests/plan backend/tests/hooks -q`:
++
++- without the patch: **6 failed / 383 passed** — the five
++  `test_close_unattributed_claim_gap.py` refusal tests (which the T-28 close
++  committed in their post-fix form, so they need this patch) plus a TASKS.md
++  drift artifact of the clone.
++- with the patch: **4 failed / 385 passed**, and all four fail for one reason:
++
++      REFUSING to claim T-… — the working tree carries changes outside its scope:
++        .claude/scripts/__pycache__/
++
++`working_tree_dirty()` reads `git status --porcelain`, which honours
++`.gitignore`. The real repo ignores `__pycache__/`; the synthetic projects in
++`backend/tests/hooks/conftest.py::_build_project` have no `.gitignore` at all, so
++running the harness inside one dirties it and every later claim is refused. It is
++a fixture gap, not a behaviour change in the real repo — but the suite is the
++`close` gate, so **as things stand the next `claim.sh close` fails**. One line in
++`_build_project` (write a `.gitignore` containing `__pycache__/`, as the real repo
++has) restores it. Not applied here: `backend/tests/hooks/**` belongs to T-29's
++scope, and this file is the watchdog's only writable surface.
++
++Also: applying any `docs/tickets.json` amendment (W7/W8) requires running
++`python3 .claude/scripts/gen_tasks.py` afterwards, because `docs/TASKS.md` renders
++acceptance, verify and scope. Verified: with the amendment and without
++regenerating, `test_tasks_md_sync` fails; after `gen_tasks.py` the plan and hooks
++suites return to exactly the same 4 failed / 385 passed as before the amendment,
++i.e. the plan edit is test-neutral.
++
+ ---
+ 
+ ## History
+diff --git a/.claude/scripts/harness_lib.py b/.claude/scripts/harness_lib.py
+index 8895eb2..b168a10 100644
+--- a/.claude/scripts/harness_lib.py
++++ b/.claude/scripts/harness_lib.py
+@@ -97,10 +97,41 @@ def fingerprint(scope):
+         except OSError: h.update(b"<unreadable>")
+     return h.hexdigest()
+ 
++class IntegrityUnavailable(Exception):
++    """git could not answer "what changed since <commit>" at all.
++
++    Raised rather than returning [] because an empty diff and an unanswerable
++    diff are opposite facts: the first says nothing changed, the second says we
++    do not know. The old code used `.stdout` regardless of returncode, so a
++    start_commit that did not resolve produced an empty list and the integrity
++    check passed VACUOUSLY — silently disabling scope enforcement for that close.
++    """
++
++
++def working_tree_dirty():
++    """Paths with uncommitted changes right now (staged, unstaged, untracked)."""
++    r = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=ROOT)
++    out = []
++    for line in r.stdout.splitlines():
++        if not line.strip():
++            continue
++        p = line[3:].strip()
++        if " -> " in p:            # rename: take the destination
++            p = p.split(" -> ", 1)[1]
++        out.append(p.strip('"'))
++    return sorted(set(out))
++
++
+ def changed_since(commit):
+     subprocess.run(["git", "add", "-A"], cwd=ROOT)
+     r = subprocess.run(["git", "diff", "--name-only", commit], capture_output=True, text=True, cwd=ROOT)
+     s = subprocess.run(["git", "diff", "--name-only", "--cached", commit], capture_output=True, text=True, cwd=ROOT)
++    if r.returncode != 0 or s.returncode != 0:
++        raise IntegrityUnavailable(
++            "git could not diff against start_commit %r (%s). The integrity check "
++            "cannot be evaluated, so this close is refused rather than passed."
++            % (commit, (r.stderr or s.stderr).strip()[:200])
++        )
+     return sorted(set(r.stdout.splitlines()) | set(s.stdout.splitlines()))
+ 
+ def integrity(tid, start_commit):
+@@ -144,16 +175,56 @@ def cmd_claim(tid, note):
+         if not receipt(d): return f"blocked: dependency {d} has no receipt", 1
+     errs = lint_verify(t["verify"])
+     if errs: return "verify-string lint (fix the plan first):\n  " + "\n  ".join(errs), 1
++    # W1: the ticket-start commit sweeps the whole tree (`git add -A`), and
++    # integrity() only diffs FORWARD from it — so anything already dirty here
++    # would be absorbed into the start commit and never checked at close. That
++    # made release+re-claim a general laundering route for any file, PROTECTED
++    # ones included. Refuse instead: out-of-scope work gets committed in the
++    # open, as its own commit, before a ticket claims the tree.
++    dirty = [p for p in working_tree_dirty()
++             if not (match_any(p, t["scope"]) or match_any(p, META_ALLOW, raw=True)
++                     or match_any(p, HARNESS_STATE, raw=True))]
++    if dirty:
++        return ("REFUSING to claim %s — the working tree carries changes outside its scope:\n  %s\n"
++                "The ticket-start commit would absorb these and the close-time integrity check "
++                "would never see them. Commit them as their own commit (or revert them) first, "
++                "then claim." % (tid, "\n  ".join(dirty))), 1
+     _git("add", "-A"); _git("commit", "-q", "--allow-empty", "-m", f"ticket-start: {tid}")
+     _write(cpath, {"ticket": tid, "session": sid, "note": note,
+                    "start_commit": _head(), "attempts": 0, "ts": int(time.time())})
+     return f"claimed {tid} @ {_head(True)} | scope: {t['scope']}", 0
+ 
+ def cmd_close():
+-    sid = _sid(); c = session_claim(sid)
++    sid = _sid()
++    try:
++        c = session_claim(sid)
++    except Exception as e:
++        # C1: an unparseable claim file used to crash with a raw JSONDecodeError.
++        return ("claim record for this session is unreadable (%s). It is written only by "
++                "claim.sh; if it has been corrupted, say so in .claude/NEEDS_HUMAN.md rather "
++                "than hand-editing it." % e), 1
+     if not c: return "no claim held by this session", 1
++    missing = [k for k in ("ticket", "start_commit") if not c.get(k)]
++    if missing:
++        # C1: KeyError -> named refusal identifying the offending record.
++        return ("claim record for this session is missing required field(s) %s — it carries no "
++                "usable attribution, so no gate may run and no evidence may be written for it."
++                % ", ".join(missing)), 1
+     tid, start = c["ticket"], c["start_commit"]; t = ticket(tid)
+-    bad = integrity(tid, start)
++    if not t: return f"claim names {tid}, which is not in docs/tickets.json", 1
++    if not (t.get("verify") or "").strip():
++        # C3: an empty verify trivially "passes" (`sh -c ""` exits 0).
++        return (f"{tid} has no verify command — closing would mint a fingerprint-bound receipt "
++                f"certifying that nothing was checked. Fix the plan."), 2
++    if _git("rev-parse", "--verify", "--quiet", start + "^{commit}").returncode != 0:
++        # C2: this used to leave integrity() passing vacuously.
++        return (f"claim's start_commit {start!r} does not resolve to a commit in this repo, so "
++                f"the close-time integrity check cannot be evaluated. Refusing rather than "
++                f"minting a receipt on an unchecked diff."), 2
++    try:
++        bad = integrity(tid, start)
++    except IntegrityUnavailable as e:
++        return str(e), 2
+     if bad:
+         return ("INTEGRITY FAIL — files changed outside %s scope/meta:\n  %s\n"
+                 "Out-of-scope changes (including via Bash) fail the close. Revert them or record the plan defect in .claude/NEEDS_HUMAN.md." % (tid, "\n  ".join(bad))), 2
+diff --git a/docs/tickets.json b/docs/tickets.json
+index efaf76f..60f1270 100644
+--- a/docs/tickets.json
++++ b/docs/tickets.json
+@@ -920,10 +920,10 @@
+         "T-13#acceptance-1"
+       ],
+       "acceptance": [
+-        "verify_gate refuses to run a gate or write evidence for a claim record with no session attribution; the refusal names the offending record",
++        "verify_gate refuses to run a gate or write evidence for a claim record with no session attribution; the refusal names the offending record — SUPERSEDED (post-close note, not a re-grading): verify_gate.sh was deleted whole by c44f9af; the \"run the gate, write the evidence\" responsibility is harness_lib.py's cmd_close, reached only through .claude/scripts/claim.sh close. Read as: close refuses to run a ticket's verify or mint a receipt for a claim record with no usable attribution (unparseable JSON, empty file, missing ticket, missing or unresolvable start_commit) and the refusal names the offending record. Pinned by backend/tests/hooks/test_close_unattributed_claim_gap.py. RESIDUAL, still open: a claim whose session field disagrees with its filename still mints a receipt — see that file's test_close_silently_mints_a_receipt_when_session_field_disagrees_with_filename.",
+         "stop_guard treats a legacy bare line as inert history: it neither blocks nor authorizes; current-claim resolution considers only JSON records",
+-        "pre-authorized test edits, and ONLY these, per the justify-test-edit rule: test_legacy_claim_line_allows_regardless_of_evidence (stop_guard) and the verify_gate amnesty tests are rewritten to assert the new fail-closed behaviour with the same fixtures",
+-        "the stale bare first line of .claude/active-ticket is retired via a sanctioned migration (JSON tombstone record or a dedicated migration commit); raw Edit/Write rewrites of the ledger remain denied",
++        "pre-authorized test edits, and ONLY these, per the justify-test-edit rule: test_legacy_claim_line_allows_regardless_of_evidence (stop_guard) and the verify_gate amnesty tests are rewritten to assert the new fail-closed behaviour with the same fixtures — SUPERSEDED (post-close note): test_legacy_claim_line_allows_regardless_of_evidence and the verify_gate amnesty tests were deleted with their hooks in c44f9af, so there was nothing to pre-authorise and no test edit was needed. Read as: no existing assertion may be edited or weakened; the behaviour is pinned by NEW coverage in backend/tests/hooks/test_close_unattributed_claim_gap.py.",
++        "the stale bare first line of .claude/active-ticket is retired via a sanctioned migration (JSON tombstone record or a dedicated migration commit); raw Edit/Write rewrites of the ledger remain denied — SUPERSEDED (post-close note): .claude/active-ticket was deleted whole by c44f9af, so there is no stale first line to retire and no ledger to migrate — the deletion IS the sanctioned migration, and .claude/claims/** is now denied to Edit/Write unconditionally (ABSOLUTE). GAP recorded rather than papered over: no test pins that a RE-CREATED .claude/active-ticket confers no authority on any session; nothing in the tree reads the path today, and that is asserted nowhere.",
+         "scope_guard may keep reading legacy lines for scope decisions (the 113 pre-T-13 scope tests stay valid); only gating and stopping authority is withdrawn"
+       ],
+       "verify": "uv run pytest backend/tests/hooks -q",
+@@ -950,15 +950,17 @@
+         "OBSM#C6"
+       ],
+       "acceptance": [
+-        "verify_gate records epoch, HEAD commit hash, and a dirty-tree flag as single-line JSON in .claude/evidence/<id>.pass; a fixture without git is recorded as such rather than crashing the gate",
+-        "claim refusal (T-13 acceptance 4) and stop_guard parse both formats during migration: a bare-epoch legacy file is honoured for already-closed tickets but never newly written",
+-        "hooks tests assert the recorded hash equals the fixture repo's HEAD at gate time and that a dirty tree is flagged",
+-        "the hook header documents what the binding proves and does not prove: it certifies the tree the verify ran on, not that that tree was committed"
++        "claim.sh close (harness_lib.py cmd_close) is the only writer of a receipt, and the receipt at .claude/evidence/<id>.json records, from real state and never fabricated: ticket id, owning session, the exact verify string that ran, the HEAD commit the close itself created, the content fingerprint of the ticket's scope, and the attempt count — pinned field-by-field by a test that drives a real close",
++        "v1's bare-epoch .claude/evidence-v1/<id>.pass records stay inert under T-31's migration policy: never honoured as a receipt, never upgraded in place, never newly written; the existing proofs (backend/tests/hooks/test_claim_format.py::test_legacy_v1_pass_record_is_inert_while_a_v2_json_receipt_is_honoured and backend/tests/plan/test_evidence_migration.py) stay green and are not weakened",
++        "the binding is proven in both directions: the recorded commit equals the repo HEAD the close created, and the fingerprint changes when a scope file's bytes change. A scope that resolves to zero tracked files must NOT be certified as if it had been checked — today it fingerprints as sha256(\"\") = e3b0c442…, which is indistinguishable from 'nothing was in scope'; this ticket pins that case in a named test and records it in .claude/NEEDS_HUMAN.md as a harness_lib.py defect for a ticket that holds harness scope, rather than reaching outside this ticket's scope to fix it",
++        ".claude/rules/harness-protocol.md states what a receipt does and does not prove: it certifies the scope's content at close time and the commit the close created — not that the verify observed that same content, not anything about files outside the scope, and not anything about paths excluded by .gitignore (receipts themselves are gitignored, so no receipt is ever inside any fingerprint)"
+       ],
+-      "verify": "uv run pytest backend/tests/hooks -q",
++      "verify": "uv run pytest backend/tests/hooks backend/tests/plan -q",
+       "scope": [
+         ".claude/hooks/**",
+-        "backend/tests/hooks/**"
++        ".claude/rules/harness-protocol.md",
++        "backend/tests/hooks/**",
++        "backend/tests/plan/**"
+       ],
+       "depends_on": [
+         "T-28"
+@@ -1021,7 +1023,6 @@
+         ".claude/hooks/**",
+         ".claude/scripts/**",
+         ".claude/evidence-v1/**",
+-        ".claude/evidence/**",
+         ".claude/settings.json",
+         "backend/tests/hooks/**",
+         "backend/tests/plan/**"

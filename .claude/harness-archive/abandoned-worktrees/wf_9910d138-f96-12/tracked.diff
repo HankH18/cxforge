@@ -1,0 +1,506 @@
+diff --git a/.claude/rules/harness-protocol.md b/.claude/rules/harness-protocol.md
+index d4c31b9..bb4fade 100644
+--- a/.claude/rules/harness-protocol.md
++++ b/.claude/rules/harness-protocol.md
+@@ -3,8 +3,10 @@
+ Approved plan: docs/SPEC.md (intent), docs/DESIGN.md (contracts),
+ docs/tickets.json (task graph — AUTHORITATIVE and read-only).
+ docs/TASKS.md is generated; never hand-edit it. Ticket status is never
+-stored anywhere — it is derived: receipt in .claude/evidence/ = resolved,
+-claim in .claude/claims/ = in progress, otherwise queued.
++stored anywhere — it is derived from .claude/evidence/<id>.json's `kind`:
++kind "receipt" = resolved (its verify ran and passed), kind "superseded" =
++its acceptance was proven unreachable and NOTHING was verified; a claim in
++.claude/claims/ = in progress; otherwise queued.
+ Task list name: cxforge (a visibility mirror only; the claim ledger rules).
+ 
+ ## Rules
+@@ -15,7 +17,7 @@ Task list name: cxforge (a visibility mirror only; the claim ledger rules).
+    .claude/hooks|scripts — not with Edit, not with Bash. The close-time
+    integrity check fails the ticket if you do.
+ 2. **All ticket lifecycle goes through `.claude/scripts/claim.sh`** —
+-   claim / close / release / status. Nothing else. Claiming requires a
++   claim / close / supersede / release / status. Nothing else. Claiming requires a
+    one-line ordering note (why this ticket next); if docs/TASKS.md or the
+    plan defines a priority order, follow it and say so in the note.
+ 3. **One ticket at a time.** `claim.sh claim T-x "note"` makes the start
+@@ -28,6 +30,16 @@ Task list name: cxforge (a visibility mirror only; the claim ledger rules).
+    integrity (everything you changed is in scope), runs the ticket verify,
+    runs the full regression suite, and mints a receipt bound to the close
+    commit + a content fingerprint of the scope. Never weaken a test.
++5b. **If the acceptance is genuinely unreachable in the declared scope,
++   say so — do not mint a receipt for it.** `claim.sh supersede "<reason>"`
++   is the second terminal state: it records that the ticket ends here and
++   that NOTHING was verified. It still runs the integrity check and the
++   regression gate — it is not an escape from either — but it never runs
++   the ticket's own verify and never claims a pass. Use it only when you
++   have PROVEN unreachability (name the proof in the reason), never for a
++   verify you could not get green: that is `release`, then stop. A ticket
++   whose acceptance you know is unmet must never be closed with a receipt.
++
+ 6. **On a failed close — materiality rule:** style/lint-only failures may
+    be fixed in place and re-closed; behavioral/test failures require
+    `git reset --hard <start commit>` first (close prints it). After 2
+diff --git a/.claude/scripts/gen_tasks.py b/.claude/scripts/gen_tasks.py
+index 18f1aee..b5d1c83 100644
+--- a/.claude/scripts/gen_tasks.py
++++ b/.claude/scripts/gen_tasks.py
+@@ -2,16 +2,29 @@
+ """Render docs/TASKS.md FROM docs/tickets.json + derived status. Never hand-edit TASKS.md."""
+ import os, sys
+ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+-from harness_lib import ROOT, load_tickets, status
++from harness_lib import ROOT, SUPERSEDED, evidence, load_tickets, status
+ d = load_tickets()
+ L = ["# Task Graph (GENERATED from tickets.json — do not hand-edit)", ""]
+ for t in d["tickets"]:
+-    L += [f"### {t['id']}: {t['title']}  `[{status(t['id'])}]`",
+-          f"- **Objective**: {t['objective']}",
++    st = status(t["id"])
++    L += [f"### {t['id']}: {t['title']}  `[{st}]`"]
++    if st == SUPERSEDED:
++        # Rendered ABOVE the objective and in shouting caps on purpose: a reader
++        # skimming the board must not be able to mistake this line for a close.
++        # It is the one status here that certifies nothing.
++        rec = evidence(t["id"]) or {}
++        L += [f"- **⚠ SUPERSEDED — NOT VERIFIED, NO GATE WAS RUN**: {rec.get('reason', '<no reason recorded>')}",
++              f"- **Superseded at**: `{rec.get('commit', '?')}` by session `{rec.get('session', '?')}` · "
++              f"the verify that was NOT run: `{rec.get('verify_not_run', '?')}` · "
++              f"dependents may claim on top of this edge, inheriting an unverified gap"]
++    L += [f"- **Objective**: {t['objective']}",
+           f"- **Acceptance**: " + " ".join(f"{i+1}) {a}" for i, a in enumerate(t["acceptance"])),
+           f"- **Verify**: `{t['verify']}`",
+           f"- **Scope**: `{', '.join(t['scope'])}`",
+-          f"- **Depends on**: {', '.join(t['depends_on']) or 'none'} · **parallel_safe**: {str(t.get('parallel_safe', False)).lower()}",
++          # A superseded edge is marked WHEREVER it is depended on, not only on its own
++          # entry: whoever reads a downstream ticket has to see that its foundation was
++          # never verified.
++          f"- **Depends on**: {', '.join(f'{x} (SUPERSEDED — unverified edge)' if status(x) == SUPERSEDED else x for x in t['depends_on']) or 'none'} · **parallel_safe**: {str(t.get('parallel_safe', False)).lower()}",
+           f"- **Non-goals**: {'; '.join(t.get('non_goals', []))}", ""]
+ open(os.path.join(ROOT, "docs", "TASKS.md"), "w").write("\n".join(L))
+ print("docs/TASKS.md regenerated")
+diff --git a/.claude/scripts/harness_lib.py b/.claude/scripts/harness_lib.py
+index b168a10..7cfce33 100644
+--- a/.claude/scripts/harness_lib.py
++++ b/.claude/scripts/harness_lib.py
+@@ -1,7 +1,14 @@
+ #!/usr/bin/env python3
+ """Shared harness logic: glob matching, status derivation, fingerprints, integrity.
+ Status is DERIVED, never stored (kills the bookkeeping treadmill):
+-  queue = no claim & no receipt | in_progress = claim exists | resolved = receipt exists
++  queue      no claim and no terminal record
++  in_progress a claim names it
++  resolved   a terminal record of kind "receipt"    — its verify RAN and PASSED
++  superseded a terminal record of kind "superseded" — its acceptance was proven
++             UNREACHABLE in its declared scope; NO gate ran, nothing is certified
++  invalid    a terminal record exists whose kind this harness will not honour
++The two terminal kinds are never interchangeable: see the RECEIPT/SUPERSEDED
++block below for why the second one had to exist at all.
+ """
+ import hashlib, json, os, re, subprocess, sys, time
+ 
+@@ -16,9 +23,11 @@ META_ALLOW = [r"^\.claude/NEEDS_HUMAN\.md$", r"^\.claude/monitor/.*$", r"^docs/T
+ # Harness-written state: exempt from the close-time integrity diff (it changes at every
+ # boundary by design) but still Edit/Write-DENIED via PROTECTED — only scripts write it.
+ HARNESS_STATE = [r"^\.claude/claims/.*$", r"^\.claude/evidence/.*$", r"^\.claude/monitor/.*$"]
+-# Receipts and claims: NEVER agent-writable, by any session, under any claim. These are
+-# the harness's own attestations — an agent that can forge a receipt can certify anything,
+-# so no ticket scope may unlock them. Checked before PROTECTED; never yields to scope.
++# Claims and terminal records (BOTH kinds — receipts and superseded records): NEVER
++# agent-writable, by any session, under any claim. These are the harness's own
++# attestations — an agent that can forge a receipt can certify anything, and one that
++# can forge a superseded record can retire any ticket it finds hard — so no ticket
++# scope may unlock them. Checked before PROTECTED; never yields to scope.
+ ABSOLUTE = [r"^\.claude/claims/.*$", r"^\.claude/evidence/.*$"]
+ # Plan + harness files: denied by default — a session not given these in a ticket contract
+ # has no business editing the plan or the harness. Unlike ABSOLUTE this YIELDS to an
+@@ -67,14 +76,67 @@ def session_claim(sid):
+         with open(p) as f: return json.load(f)
+     return None
+ 
+-def receipt(tid):
++# ---------------- terminal records (.claude/evidence/<tid>.json) ----------------
++# A ticket has exactly one terminal record, and it comes in exactly two KINDS
++# that mean OPPOSITE things. The "kind" discriminator is what keeps them from
++# ever being confused:
++#
++#   RECEIPT    the ticket's own verify command RAN and PASSED at the bound
++#              commit, over the bound scope fingerprint. This certifies work.
++#   SUPERSEDED the ticket's acceptance was PROVEN unreachable within its
++#              declared scope. NO gate was run and NOTHING is certified. It
++#              carries a mandatory reason and the commit it was decided at.
++#
++# Why the second kind exists: before it, the only two outcomes were "receipt"
++# or "nothing", so an agent that had correctly proven its ticket unachievable
++# had no honest way to end it — and the standing incentive was to mint a full
++# receipt anyway. T-28 did exactly that: it closed with a receipt while its own
++# shipped test file states in capitals that those tests passing does not mean
++# its acceptance 1 is met. A superseded record makes that outcome sayable.
++#
++# Records minted before the discriminator existed carry no "kind" key at all;
++# they are read as receipts, because that is precisely what they were. An
++# UNRECOGNISED kind is never coerced to a receipt — only absence is.
++RECEIPT, SUPERSEDED = "receipt", "superseded"
++
++def evidence(tid):
++    """The raw terminal record for tid, of whatever kind, or None.
++    A record that exists but cannot be read is NOT reported as absent (that
++    would silently re-queue a finished ticket) and NOT reported as a receipt
++    (that would certify unreadable bytes) — it surfaces as its own bad kind."""
+     p = os.path.join(EVID, f"{tid}.json")
+-    if os.path.exists(p):
+-        with open(p) as f: return json.load(f)
+-    return None
++    if not os.path.exists(p): return None
++    try:
++        with open(p) as f: rec = json.load(f)
++    except Exception as e:
++        return {"ticket": tid, "kind": f"unreadable ({e})"}
++    return rec if isinstance(rec, dict) else {"ticket": tid, "kind": "unreadable (not a JSON object)"}
++
++def evidence_kind(rec):
++    """RECEIPT | SUPERSEDED | some other string (never honoured) | None."""
++    if rec is None: return None
++    k = rec.get("kind", RECEIPT)
++    return k if k in (RECEIPT, SUPERSEDED) else f"unrecognised: {k!r}"
++
++def receipt(tid):
++    """A PASSING receipt for tid, or None.
++
++    Meaning deliberately unchanged: every caller that asks receipt() is asking
++    "was this verified?", and a superseded record must answer NO to that
++    question, in every consumer, without any of them being updated."""
++    rec = evidence(tid)
++    return rec if evidence_kind(rec) == RECEIPT else None
++
++def superseded(tid):
++    """A superseded record for tid, or None. Never returned by receipt()."""
++    rec = evidence(tid)
++    return rec if evidence_kind(rec) == SUPERSEDED else None
+ 
+ def status(tid):
+-    if receipt(tid): return "resolved"
++    k = evidence_kind(evidence(tid))
++    if k == RECEIPT: return "resolved"
++    if k == SUPERSEDED: return SUPERSEDED
++    if k is not None: return "invalid"      # a terminal record nobody may honour
+     for c in claims().values():
+         if c.get("ticket") == tid: return "in_progress"
+     return "queue"
+@@ -170,9 +232,27 @@ def cmd_claim(tid, note):
+         if c.get("ticket") == tid: return f"{tid} is claimed by another session ({s}) — do not touch it", 1
+     t = ticket(tid)
+     if not t: return f"no ticket {tid} in docs/tickets.json", 1
+-    if receipt(tid): return f"{tid} already has a receipt (resolved)", 1
++    ev, kind = evidence(tid), evidence_kind(evidence(tid))
++    if kind == RECEIPT: return f"{tid} already has a receipt (resolved)", 1
++    if kind == SUPERSEDED:
++        return (f"{tid} is SUPERSEDED — its acceptance was recorded as unreachable in its declared "
++                f"scope, so nothing was ever verified for it: {ev.get('reason', '<no reason recorded>')!r} "
++                f"(decided at {str(ev.get('commit', '?'))[:12]}). Re-opening it is a HUMAN ruling, not a "
++                f"claim: the reason is already in .claude/NEEDS_HUMAN.md, and only a human may remove "
++                f".claude/evidence/{tid}.json. Do not work around it by claiming a different ticket's scope."), 1
++    if kind is not None:
++        return (f"{tid} has a terminal record at .claude/evidence/{tid}.json whose kind this harness does "
++                f"not recognise ({kind}). Refusing to claim over it — it is neither honoured as a receipt "
++                f"nor discarded. Record it in .claude/NEEDS_HUMAN.md and stop."), 1
++    dep_superseded = []
+     for d in t.get("depends_on", []):
+-        if not receipt(d): return f"blocked: dependency {d} has no receipt", 1
++        if receipt(d): continue
++        # A superseded dependency SATISFIES the edge — otherwise one unachievable
++        # ticket deadlocks the whole graph behind it and the pressure to fake a
++        # receipt comes straight back. It does not satisfy it QUIETLY, though:
++        # nothing was verified upstream and the claim message has to say so.
++        if superseded(d): dep_superseded.append(d); continue
++        return f"blocked: dependency {d} has no receipt", 1
+     errs = lint_verify(t["verify"])
+     if errs: return "verify-string lint (fix the plan first):\n  " + "\n  ".join(errs), 1
+     # W1: the ticket-start commit sweeps the whole tree (`git add -A`), and
+@@ -192,24 +272,43 @@ def cmd_claim(tid, note):
+     _git("add", "-A"); _git("commit", "-q", "--allow-empty", "-m", f"ticket-start: {tid}")
+     _write(cpath, {"ticket": tid, "session": sid, "note": note,
+                    "start_commit": _head(), "attempts": 0, "ts": int(time.time())})
+-    return f"claimed {tid} @ {_head(True)} | scope: {t['scope']}", 0
++    warn = ""
++    if dep_superseded:
++        warn = ("\nWARNING: %s satisfied by a SUPERSEDED record, not a receipt — nothing was verified "
++                "for %s and no gate ever ran. Anything you build on top inherits that gap. If %s "
++                "acceptance is load-bearing for this ticket, that is a plan defect: .claude/NEEDS_HUMAN.md, "
++                "then stop." % (", ".join(dep_superseded),
++                                "them" if len(dep_superseded) > 1 else "it",
++                                "their" if len(dep_superseded) > 1 else "its"))
++    return f"claimed {tid} @ {_head(True)} | scope: {t['scope']}" + warn, 0
+ 
+-def cmd_close():
+-    sid = _sid()
++def _own_claim(sid):
++    """Resolve THIS session's own claim record, or a refusal. Returns
++    (claim, None) or (None, (message, rc)).
++
++    Shared verbatim by BOTH terminal verbs (close and supersede) so a
++    supersede can never be an easier door into .claude/evidence/ than a close:
++    the same attribution checks, in the same order, with the same messages."""
+     try:
+         c = session_claim(sid)
+     except Exception as e:
+         # C1: an unparseable claim file used to crash with a raw JSONDecodeError.
+-        return ("claim record for this session is unreadable (%s). It is written only by "
+-                "claim.sh; if it has been corrupted, say so in .claude/NEEDS_HUMAN.md rather "
+-                "than hand-editing it." % e), 1
+-    if not c: return "no claim held by this session", 1
++        return None, ("claim record for this session is unreadable (%s). It is written only by "
++                      "claim.sh; if it has been corrupted, say so in .claude/NEEDS_HUMAN.md rather "
++                      "than hand-editing it." % e, 1)
++    if not c: return None, ("no claim held by this session", 1)
+     missing = [k for k in ("ticket", "start_commit") if not c.get(k)]
+     if missing:
+         # C1: KeyError -> named refusal identifying the offending record.
+-        return ("claim record for this session is missing required field(s) %s — it carries no "
+-                "usable attribution, so no gate may run and no evidence may be written for it."
+-                % ", ".join(missing)), 1
++        return None, ("claim record for this session is missing required field(s) %s — it carries no "
++                      "usable attribution, so no gate may run and no evidence may be written for it."
++                      % ", ".join(missing), 1)
++    return c, None
++
++def cmd_close():
++    sid = _sid()
++    c, err = _own_claim(sid)
++    if err: return err
+     tid, start = c["ticket"], c["start_commit"]; t = ticket(tid)
+     if not t: return f"claim names {tid}, which is not in docs/tickets.json", 1
+     if not (t.get("verify") or "").strip():
+@@ -241,15 +340,106 @@ def cmd_close():
+         return fail(" (cross-ticket regression gate)")
+     _git("add", "-A"); _git("commit", "-q", "--allow-empty", "-m", f"ticket-close: {tid}")
+     fp = fingerprint(t["scope"])
++    # A receipt's shape is DELIBERATELY unchanged by the arrival of the second
++    # terminal kind. Stamping `"kind": RECEIPT` here was tried and reverted: the
++    # absence-means-receipt rule has to exist regardless (every record minted
++    # before the discriminator carries no kind), so the stamp buys no meaning —
++    # while a receipt whose key set drifts is exactly what
++    # test_claim_format.py::test_derived_status_queue_then_in_progress_then_resolved
++    # pins, and that pin is worth more than the redundancy.
+     _write(os.path.join(EVID, f"{tid}.json"),
+            {"ticket": tid, "session": sid, "verify": t["verify"], "commit": _head(),
+             "fingerprint": fp, "attempts": c["attempts"], "ts": int(time.time())})
+     os.remove(os.path.join(CLAIMS, f"{sid}.json"))
++    _regen_tasks()
++    return f"closed {tid} | receipt bound to {_head(True)} fp={fp[:12]}…", 0
++
++def _regen_tasks():
+     try:
+         subprocess.run([sys.executable, os.path.join(ROOT, ".claude/scripts/gen_tasks.py")],
+                        capture_output=True, cwd=ROOT)
+     except Exception: pass
+-    return f"closed {tid} | receipt bound to {_head(True)} fp={fp[:12]}…", 0
++
++def _log_for_human(line):
++    with open(os.path.join(ROOT, ".claude", "NEEDS_HUMAN.md"), "a") as f:
++        f.write(f"- [{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] {line}\n")
++
++MIN_REASON = 20
++
++def cmd_supersede(reason):
++    """The SECOND terminal state: the ticket's acceptance is unreachable in its
++    declared scope, and no honest receipt can be minted for it.
++
++    This is not a soft close and it is not an easier close. Everything a close
++    enforces about ATTRIBUTION and CONTAINMENT still applies — you must hold the
++    claim, its start commit must resolve, every file you touched must be in
++    scope, and the cross-ticket regression gate must still be green. Superseding
++    is not a licence to leave the tree broken or to smuggle out-of-scope edits
++    past the integrity check.
++
++    What it deliberately does NOT do is run the ticket's own verify or pretend
++    anything passed. The record it writes says so in its own kind field, omits
++    every key a receipt reader consults (`verify`, `fingerprint`), carries a
++    mandatory human-readable reason, and is announced in .claude/NEEDS_HUMAN.md
++    so the human rules on it rather than discovering it in a board six tickets
++    later."""
++    sid = _sid()
++    c, err = _own_claim(sid)
++    if err: return err
++    tid, start = c["ticket"], c["start_commit"]; t = ticket(tid)
++    if not t: return f"claim names {tid}, which is not in docs/tickets.json", 1
++    reason = (reason or "").strip()
++    if len(reason) < MIN_REASON:
++        return (f"supersede needs a reason of at least {MIN_REASON} characters saying WHY {tid}'s "
++                f"acceptance is unreachable within its declared scope {t['scope']} — that sentence is "
++                f"the entire evidentiary content of the record, since no gate is run. Got {reason!r}."), 1
++    kind = evidence_kind(evidence(tid))
++    if kind is not None:
++        # Never overwrite an existing terminal record — least of all a receipt.
++        return (f"{tid} already has a terminal record (kind: {kind}) at .claude/evidence/{tid}.json. "
++                f"A supersede may not overwrite one; replacing an attestation is a human action."), 1
++    if _git("rev-parse", "--verify", "--quiet", start + "^{commit}").returncode != 0:
++        return (f"claim's start_commit {start!r} does not resolve to a commit in this repo, so the "
++                f"integrity check cannot be evaluated. A supersede is still bound by it — refusing."), 2
++    try:
++        bad = integrity(tid, start)
++    except IntegrityUnavailable as e:
++        return str(e), 2
++    if bad:
++        return ("INTEGRITY FAIL — files changed outside %s scope/meta:\n  %s\n"
++                "Superseding a ticket does not amnesty out-of-scope changes. Revert them, then "
++                "supersede." % (tid, "\n  ".join(bad))), 2
++    full = load_tickets().get("full_verify")
++    if full and subprocess.run(full, shell=True, cwd=ROOT).returncode != 0:
++        return (f"cross-ticket regression gate is RED — refusing to supersede {tid} on a broken tree. "
++                f"'unreachable acceptance' and 'I broke the suite' are different claims; if you cannot "
++                f"get the tree green, release the claim and write it up in .claude/NEEDS_HUMAN.md."), 2
++    _log_for_human(
++        f"{tid} SUPERSEDED by {sid} — acceptance recorded as UNREACHABLE in scope {t['scope']}; "
++        f"NO verify was run and nothing is certified. Reason: {reason} "
++        f"(record: .claude/evidence/{tid}.json; dependents may now claim on top of an unverified edge). "
++        f"HUMAN RULING NEEDED: accept, re-scope the ticket, or delete the record to re-open it."
++    )
++    _git("add", "-A"); _git("commit", "-q", "--allow-empty", "-m", f"ticket-supersede: {tid}")
++    _write(os.path.join(EVID, f"{tid}.json"), {
++        "ticket": tid,
++        "kind": SUPERSEDED,          # the discriminator: NOT a receipt
++        "verified": False,           # redundant on purpose, for readers that never learned "kind"
++        "reason": reason,
++        "session": sid,
++        "start_commit": start,
++        "commit": _head(),
++        # Under keys a receipt reader never consults, so nothing can mistake these
++        # for a passing gate or a verified fingerprint:
++        "verify_not_run": t.get("verify"),
++        "scope_fingerprint": fingerprint(t["scope"]),
++        "attempts": c.get("attempts", 0),
++        "ts": int(time.time()),
++    })
++    os.remove(os.path.join(CLAIMS, f"{sid}.json"))
++    _regen_tasks()
++    return (f"SUPERSEDED {tid} @ {_head(True)} — recorded as unreachable, NOT verified. No receipt was "
++            f"minted and its verify was not run. Logged for the human in .claude/NEEDS_HUMAN.md."), 0
+ 
+ def cmd_release(reason):
+     sid = _sid(); c = session_claim(sid)
+@@ -282,9 +472,12 @@ def cmd_hook(kind):
+         if not c: return "", 0
+         reason = (f"This session holds an open claim on {c['ticket']} (attempts: {c['attempts']}). Before stopping: "
+                   f"(a) finish it — python3 .claude/scripts/harness_lib.py close; (b) on a behavioral failure, "
+-                  f"git reset --hard {c['start_commit']} and retry; or (c) release it with a reason and put any "
+-                  f"FOR-HANK items in .claude/NEEDS_HUMAN.md, not commit bodies. This applies only to YOUR claim; "
+-                  f"never touch another session's.")
++                  f"git reset --hard {c['start_commit']} and retry; (c) release it with a reason and put any "
++                  f"FOR-HANK items in .claude/NEEDS_HUMAN.md, not commit bodies; or (d) if you have PROVEN this "
++                  f"ticket's acceptance unreachable inside its declared scope, supersede it — harness_lib.py "
++                  f"supersede \"<why>\" — which records exactly that and never claims anything was verified. "
++                  f"Minting a receipt for work whose acceptance you know is unmet is the one option that is not "
++                  f"available. This applies only to YOUR claim; never touch another session's.")
+         return json.dumps({"decision": "block", "reason": reason}), 0
+     if kind == "taskgate":
+         ti = p.get("tool_input") or {}; task = p.get("task") or {}
+@@ -292,8 +485,16 @@ def cmd_hook(kind):
+         newst = ti.get("status") or "completed"
+         m = re.match(r"^(T-\d+)", subj)
+         if not m or newst != "completed": return "", 0
+-        if receipt(m.group(1)): return "", 0
+-        sys.stderr.write(f"no receipt for {m.group(1)}: close it via harness_lib.py close before marking the task completed\n")
++        tid = m.group(1); k = evidence_kind(evidence(tid))
++        if k == RECEIPT: return "", 0
++        if k == SUPERSEDED:
++            # The mirror may close a ticket that reached a REAL terminal state, or the
++            # incentive to fake a receipt just to clear the board comes straight back.
++            # It does not get to do so silently: the board says superseded, not done.
++            sys.stderr.write(f"note: {tid} is SUPERSEDED, not verified — its terminal record certifies "
++                             f"nothing was gated. The task list is a mirror; docs/TASKS.md is the board.\n")
++            return "", 0
++        sys.stderr.write(f"no receipt for {tid}: close it via harness_lib.py close before marking the task completed\n")
+         return "", 2
+     if kind == "heartbeat":
+         d = os.path.join(ROOT, ".claude", "monitor"); os.makedirs(d, exist_ok=True)
+@@ -308,13 +509,14 @@ def main2():
+     if fn == "claim": out, rc = cmd_claim(sys.argv[2], sys.argv[3])
+     elif fn == "close": out, rc = cmd_close()
+     elif fn == "release": out, rc = cmd_release(sys.argv[2])
++    elif fn == "supersede": out, rc = cmd_supersede(sys.argv[2] if len(sys.argv) > 2 else "")
+     elif fn.startswith("hook-"): out, rc = cmd_hook(fn[5:])
+     else: return None
+     if out: print(out)
+     sys.exit(rc)
+ 
+ if __name__ == "__main__":
+-    if sys.argv[1] in ("claim","close","release") or sys.argv[1].startswith("hook-"):
++    if sys.argv[1] in ("claim","close","release","supersede") or sys.argv[1].startswith("hook-"):
+         main2()
+     fn = sys.argv[1]
+     if fn == "status_board":
+@@ -333,7 +535,7 @@ if __name__ == "__main__":
+             rel = os.path.relpath(rp, root)
+             if match_any(rel, META_ALLOW, raw=True): print("allow"); sys.exit(0)
+             if match_any(rel, ABSOLUTE, raw=True):
+-                print("deny:%s is harness-written attestation state (claims and receipts). No ticket scope unlocks it — only the lifecycle scripts write here. If a receipt or claim looks wrong, say so in .claude/NEEDS_HUMAN.md." % rel); sys.exit(0)
++                print("deny:%s is harness-written attestation state (claims, and terminal records of BOTH kinds — receipts and superseded records). No ticket scope unlocks it — only the lifecycle scripts write here. A supersede is reached through 'claim.sh supersede \"<reason>\"', never by writing this file. If a record looks wrong, say so in .claude/NEEDS_HUMAN.md." % rel); sys.exit(0)
+             if match_any(rel, PROTECTED, raw=True):
+                 c0 = session_claim(sid) if os.path.exists(TICKETS) else None
+                 t0 = ticket(c0["ticket"]) if c0 else None
+diff --git a/backend/tests/plan/test_status_field.py b/backend/tests/plan/test_status_field.py
+index 98d0f3f..7779dde 100644
+--- a/backend/tests/plan/test_status_field.py
++++ b/backend/tests/plan/test_status_field.py
+@@ -121,6 +121,21 @@ def test_status_agrees_with_local_evidence_where_evidence_exists() -> None:
+     via the harness's own read-only `status_board` subcommand -- this test
+     never writes to either directory, so it cannot disturb this session's
+     own live T-31 claim.
++
++    KIND-AWARE (supersede terminal state): `.claude/evidence/<id>.json` now
++    carries a `kind` discriminator and holds two kinds of terminal record --
++    `receipt` (verify ran and PASSED) and `superseded` (acceptance proven
++    unreachable, NO gate run, nothing certified). The original assertion
++    ("a file here means resolved") was written when only one kind could
++    exist; it is not wrong about receipts, it is silent about a kind that
++    did not exist yet. NOTHING is loosened here: the receipt branch is the
++    original assertion verbatim, and the superseded branch demands its own
++    exact value rather than accepting anything. Every record on disk is
++    still pinned to exactly one derived status. Deliberately NOT written as
++    "resolved or superseded": that WOULD be a weakening, because it would
++    let a receipt derive `superseded` (or worse, the reverse) unnoticed --
++    which is the precise confusion the kind discriminator exists to prevent.
++    A record whose kind this harness refuses to honour must derive neither.
+     """
+     if not EVIDENCE_DIR.exists():
+         return  # fresh clone / CI: nothing local to check against
+@@ -144,13 +159,31 @@ def test_status_agrees_with_local_evidence_where_evidence_exists() -> None:
+ 
+     for ticket_id in receipted_ids:
+         if ticket_id not in derived:
+-            continue  # receipt for a ticket id no longer in the plan
+-        assert derived[ticket_id] == "resolved", (
+-            f"{ticket_id} has a receipt at .claude/evidence/{ticket_id}.json on "
+-            f"this machine but harness_lib.py status_board derives "
+-            f"{derived[ticket_id]!r}, not 'resolved' -- the v2 lifecycle's "
+-            f"claim/receipt state has gone inconsistent with its own evidence."
+-        )
++            continue  # terminal record for a ticket id no longer in the plan
++        record = json.loads((EVIDENCE_DIR / f"{ticket_id}.json").read_text())
++        kind = record.get("kind", "receipt")  # pre-discriminator records ARE receipts
++        if kind == "receipt":
++            assert derived[ticket_id] == "resolved", (
++                f"{ticket_id} has a receipt at .claude/evidence/{ticket_id}.json on "
++                f"this machine but harness_lib.py status_board derives "
++                f"{derived[ticket_id]!r}, not 'resolved' -- the v2 lifecycle's "
++                f"claim/receipt state has gone inconsistent with its own evidence."
++            )
++        elif kind == "superseded":
++            assert derived[ticket_id] == "superseded", (
++                f"{ticket_id} has a SUPERSEDED record at .claude/evidence/"
++                f"{ticket_id}.json -- its acceptance was recorded as unreachable and "
++                f"no gate was ever run for it -- but status_board derives "
++                f"{derived[ticket_id]!r}. Deriving 'resolved' here would present an "
++                f"unverified ticket as verified, which is the exact confusion the "
++                f"kind discriminator exists to prevent."
++            )
++        else:
++            assert derived[ticket_id] not in ("resolved", "superseded"), (
++                f"{ticket_id} has a terminal record of unrecognised kind {kind!r}; the "
++                f"harness must honour it as neither a pass nor a supersede, but "
++                f"status_board derives {derived[ticket_id]!r}."
++            )
+ 
+ 
+ def test_status_function_source_never_reads_the_tickets_json_field() -> None:
