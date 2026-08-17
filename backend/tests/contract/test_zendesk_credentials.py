@@ -25,6 +25,9 @@ from __future__ import annotations
 
 import base64
 import json
+import time
+from collections.abc import Callable
+from pathlib import Path
 
 import httpx
 import pytest
@@ -429,3 +432,195 @@ def test_no_credential_at_all_is_still_a_config_error() -> None:
     """Distinct from HelpdeskAuthError: nothing was ever supplied."""
     with pytest.raises(HelpdeskConfigError):
         ZendeskCredentials(subdomain=SUBDOMAIN, access_token=None, refresh_token=None)
+
+
+# --------------------------------------------------------------------------
+# Surviving the rotation across instances (ZENDESK_TOKEN_STORE)
+#
+# `test_the_rotated_refresh_token_replaces_the_old_one` above covers rotation
+# within ONE instance. That was never the production failure: on 2026-08-17 the
+# droplet's worker refreshed successfully and then died anyway, because
+# `worker.main.run_ticket` builds a fresh `ZendeskAdapter()` (hence a fresh
+# `ZendeskCredentials.from_env()`) for every job. The rotated token went out of
+# scope with the job that earned it and the next job re-read the spent value
+# from the environment. These tests are about the SECOND instance.
+# --------------------------------------------------------------------------
+
+
+def jwt_healthy_for_an_hour() -> str:
+    """A token that is genuinely fresh against the REAL clock.
+
+    `NOW` is a fixed timestamp in the past, and `from_env()` deliberately does
+    not take a `clock` override — it is production's constructor. So anything
+    that has to look *healthy* to a `from_env`-built instance must be dated off
+    `time.time()`, not off `NOW`.
+    """
+    return jwt_expiring_at(time.time() + 3600)
+
+
+def _env_for(monkeypatch: pytest.MonkeyPatch, **overrides: str | None) -> None:
+    """Set the four OAuth vars plus whatever the test overrides."""
+    base: dict[str, str | None] = {
+        "ZENDESK_OAUTH_TOKEN": jwt_expiring_at(NOW - 1),  # already stale
+        "ZENDESK_OAUTH_REFRESH_TOKEN": "refresh-from-env",
+        "ZENDESK_OAUTH_CLIENT_ID": "cid",
+        "ZENDESK_OAUTH_CLIENT_SECRET": "secret",
+        "ZENDESK_TOKEN_STORE": None,
+    }
+    base.update(overrides)
+    for key, value in base.items():
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
+
+
+def _rotating_responder(
+    spent: list[str],
+) -> Callable[[httpx.Request], httpx.Response]:
+    def responder(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        spent.append(body["refresh_token"])
+        return httpx.Response(
+            200,
+            json={
+                "access_token": jwt_healthy_for_an_hour(),
+                "refresh_token": f"rotated-{len(spent)}",
+            },
+        )
+
+    return responder
+
+
+def _refresh_once_through_from_env(spent: list[str]) -> ZendeskCredentials:
+    """`from_env()`, then one refresh driven through a mock token endpoint."""
+    credentials = ZendeskCredentials.from_env(subdomain=SUBDOMAIN)
+    tokens, _ = token_client(_rotating_responder(spent))
+    # from_env owns its own real httpx.Client; swap it for the mock so no test
+    # ever reaches zendesk.com.
+    credentials._token_client = tokens
+    credentials.refresh()
+    return credentials
+
+
+def test_a_rotation_survives_into_the_next_from_env_when_a_store_is_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """THE production bug, at the level it actually bit.
+
+    Instance one refreshes and Zendesk rotates. Instance two — the next arq job
+    — must spend the ROTATED token. Before ZENDESK_TOKEN_STORE existed it spent
+    `refresh-from-env`, which Zendesk had already invalidated, and every run
+    401'd from then on.
+    """
+    store = tmp_path / "zendesk-tokens.json"
+    _env_for(monkeypatch, ZENDESK_TOKEN_STORE=str(store))
+
+    spent: list[str] = []
+    _refresh_once_through_from_env(spent)
+    assert spent == ["refresh-from-env"]
+    assert store.exists(), "the rotated pair was never written to the store"
+
+    # A brand-new instance, exactly as the next job builds one.
+    second = ZendeskCredentials.from_env(subdomain=SUBDOMAIN)
+    second._token_client = token_client(_rotating_responder(spent))[0]
+    second.refresh()
+
+    assert spent == ["refresh-from-env", "rotated-1"], (
+        "the second from_env() re-sent the spent refresh token — the rotation "
+        "did not survive the instance boundary"
+    )
+
+
+def test_the_stored_pair_wins_over_a_stale_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Preferring `.env` would re-read the dead credential on every job.
+
+    Once a rotation has happened the environment's copy is the spent one, so
+    "environment wins" is precisely the wrong precedence here.
+    """
+    store = tmp_path / "zendesk-tokens.json"
+    store.write_text(
+        json.dumps(
+            {"access_token": jwt_healthy_for_an_hour(), "refresh_token": "stored-refresh"}
+        )
+    )
+    _env_for(monkeypatch, ZENDESK_TOKEN_STORE=str(store))
+
+    credentials = ZendeskCredentials.from_env(subdomain=SUBDOMAIN)
+
+    # The stored access token is healthy, so bearer() must hand it back with no
+    # refresh at all — proving the store, not the stale env value, was read.
+    assert credentials.seconds_remaining() is not None
+    assert credentials.seconds_remaining() > 0  # type: ignore[operator]
+    spent: list[str] = []
+    credentials._token_client = token_client(_rotating_responder(spent))[0]
+    credentials.refresh()
+    assert spent == ["stored-refresh"]
+
+
+def test_without_a_store_the_old_environment_only_behaviour_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The store is opt-in. Unset means byte-for-byte the previous behaviour —
+    including the pre-existing failure, so nothing is silently "fixed" for a
+    deployment that never configured it."""
+    _env_for(monkeypatch)  # ZENDESK_TOKEN_STORE deliberately unset
+
+    spent: list[str] = []
+    _refresh_once_through_from_env(spent)
+
+    second = ZendeskCredentials.from_env(subdomain=SUBDOMAIN)
+    second._token_client = token_client(_rotating_responder(spent))[0]
+    second.refresh()
+
+    assert spent == ["refresh-from-env", "refresh-from-env"], (
+        "with no store configured the rotation cannot persist; if this changed, "
+        "the opt-in contract changed with it"
+    )
+
+
+def test_the_store_holds_a_live_credential_so_it_is_owner_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = tmp_path / "nested" / "zendesk-tokens.json"
+    _env_for(monkeypatch, ZENDESK_TOKEN_STORE=str(store))
+
+    _refresh_once_through_from_env([])
+
+    assert store.exists(), "the parent directory was not created"
+    assert store.stat().st_mode & 0o777 == 0o600, (
+        f"the token store is mode {store.stat().st_mode & 0o777:o}; it holds a "
+        "live Zendesk credential and must not be group/world readable"
+    )
+
+
+def test_a_corrupt_store_falls_back_to_the_environment_instead_of_raising(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A damaged cache file must not take authentication down with it."""
+    store = tmp_path / "zendesk-tokens.json"
+    store.write_text("{not json at all")
+    _env_for(monkeypatch, ZENDESK_TOKEN_STORE=str(store))
+
+    spent: list[str] = []
+    _refresh_once_through_from_env(spent)
+
+    assert spent == ["refresh-from-env"]
+
+
+def test_an_explicitly_passed_access_token_still_wins_over_the_store(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`ZendeskAdapter(oauth_token=...)` is a documented one-shot path."""
+    store = tmp_path / "zendesk-tokens.json"
+    store.write_text(
+        json.dumps({"access_token": "stored-access", "refresh_token": "stored-refresh"})
+    )
+    _env_for(monkeypatch, ZENDESK_TOKEN_STORE=str(store))
+
+    handed = jwt_healthy_for_an_hour()
+    credentials = ZendeskCredentials.from_env(subdomain=SUBDOMAIN, access_token=handed)
+
+    assert credentials.bearer() == handed

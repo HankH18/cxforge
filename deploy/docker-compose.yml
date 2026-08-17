@@ -101,6 +101,29 @@ services:
       ZENDESK_OAUTH_REFRESH_TOKEN: ${ZENDESK_OAUTH_REFRESH_TOKEN:-}
       ZENDESK_OAUTH_CLIENT_ID: ${ZENDESK_OAUTH_CLIENT_ID:-}
       ZENDESK_OAUTH_CLIENT_SECRET: ${ZENDESK_OAUTH_CLIENT_SECRET:-}
+      # Where the ROTATED pair would be persisted (see the
+      # deploy_zendesk_tokens volume). Path, not a secret; it must sit on the
+      # shared volume mounted below. Forwarded on every service running this
+      # image because the application reads the name
+      # (backend/tests/deploy/test_env_forwarding.py requires that), but
+      # deliberately EMPTY — see below.
+      #
+      # NO `:-` DEFAULT VALUE, removed 2026-08-17. It used to default to
+      # /var/lib/cxforge/zendesk-tokens.json, which made the store opt-OUT in
+      # every container regardless of `.env` while its author had reported it as
+      # opt-in. This is the same `:-`-default trap as the tunnel token below,
+      # inverted: there a default hides a MISSING credential, here it silently
+      # enabled a new behaviour. Three reasons it stays off until the owner asks:
+      # it persists a live CREDENTIAL to a volume; it has a known unhandled
+      # multi-writer race (`backend` and `worker` can both refresh — last write
+      # wins); and whether to persist refresh tokens at all is a decision the
+      # owner reserved (docs/BUILD-PLAN.md §10.7a).
+      #
+      # To turn it on, set in .env:
+      #   ZENDESK_TOKEN_STORE=/var/lib/cxforge/zendesk-tokens.json
+      # Unset is byte-for-byte the pre-store behaviour: refresh works once per
+      # process, then needs `scripts/zendesk_oauth.py --serve`.
+      ZENDESK_TOKEN_STORE: ${ZENDESK_TOKEN_STORE:-}
       ZENDESK_AI_USER_ID: ${ZENDESK_AI_USER_ID:-}
       ZENDESK_WEBHOOK_SIGNING_SECRET: ${ZENDESK_WEBHOOK_SIGNING_SECRET:-}
       # The agent graph (backend/src/agent/llm.py's AnthropicLLMClient) is
@@ -153,6 +176,11 @@ services:
       # even through deploy/compose.sh — which is precisely why the safe
       # behaviour had to become the default rather than a documented opt-in.
       SEED_ON_START: ${SEED_ON_START:-true}
+    volumes:
+      # Same volume, same path, on backend and worker: whichever process
+      # refreshes first, the other reads the rotated pair rather than the
+      # spent environment value.
+      - deploy_zendesk_tokens:/var/lib/cxforge
     depends_on:
       db:
         condition: service_healthy
@@ -308,6 +336,13 @@ services:
       ZENDESK_OAUTH_REFRESH_TOKEN: ${ZENDESK_OAUTH_REFRESH_TOKEN:-}
       ZENDESK_OAUTH_CLIENT_ID: ${ZENDESK_OAUTH_CLIENT_ID:-}
       ZENDESK_OAUTH_CLIENT_SECRET: ${ZENDESK_OAUTH_CLIENT_SECRET:-}
+      # ...and this is what WOULD make "renew" survive more than one job:
+      # `run_ticket` builds a fresh ZendeskAdapter per job, so without the store
+      # the rotated refresh token dies with the job that earned it (measured
+      # 2026-08-17). It is forwarded and EMPTY — the `:-` default value was
+      # removed 2026-08-17 so the store is genuinely opt-in. Full reasoning on
+      # `backend` above; the decision is docs/BUILD-PLAN.md §10.7a.
+      ZENDESK_TOKEN_STORE: ${ZENDESK_TOKEN_STORE:-}
       ZENDESK_AI_USER_ID: ${ZENDESK_AI_USER_ID:-}
       ZENDESK_WEBHOOK_SIGNING_SECRET: ${ZENDESK_WEBHOOK_SIGNING_SECRET:-}
       # NOT optional for the worker, unlike for `backend`: this container's
@@ -325,6 +360,10 @@ services:
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+    volumes:
+      # Same volume and path as `backend` — see that service and the
+      # deploy_zendesk_tokens volume definition.
+      - deploy_zendesk_tokens:/var/lib/cxforge
     depends_on:
       db:
         condition: service_healthy
@@ -423,6 +462,27 @@ volumes:
     name: othram-deploy-pgdata
   deploy_redisdata:
     name: othram-deploy-redisdata
+  # Where the rotated Zendesk token pair would live (ZENDESK_TOKEN_STORE).
+  # Shared by `backend` and `worker` and named, so it survives
+  # `up -d --force-recreate`. **Unused as shipped:** ZENDESK_TOKEN_STORE has no
+  # default value, so nothing writes here until the owner sets it. The mount and
+  # the volume stay declared so opting in is a one-line `.env` change.
+  #
+  # Known and unhandled if it IS enabled: both `backend` and `worker` can
+  # refresh, and the store has no locking — last write wins, and the loser has
+  # spent a refresh token Zendesk has already invalidated.
+  #
+  # WHY A VOLUME AND NOT JUST AN ENV VAR. Zendesk rotates the refresh token
+  # every time it is spent and invalidates the previous value. Measured on the
+  # droplet 2026-08-17: the worker refreshed once, and because
+  # `worker.main.run_ticket` builds a fresh `ZendeskAdapter()` per job, the
+  # rotated value went out of scope with that job — the next job re-read the
+  # spent value from the environment and every run 401'd at `fetch_ticket`.
+  # `ZENDESK_OAUTH_REFRESH_TOKEN` on its own is therefore a single-use
+  # credential this stack burns ~30 minutes after boot, recoverable only by a
+  # human at a browser (`scripts/zendesk_oauth.py --serve`).
+  deploy_zendesk_tokens:
+    name: othram-deploy-zendesk-tokens
 
 networks:
   othram-deploy:

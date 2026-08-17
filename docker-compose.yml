@@ -112,6 +112,25 @@ services:
       ZENDESK_OAUTH_REFRESH_TOKEN: ${ZENDESK_OAUTH_REFRESH_TOKEN:-}
       ZENDESK_OAUTH_CLIENT_ID: ${ZENDESK_OAUTH_CLIENT_ID:-}
       ZENDESK_OAUTH_CLIENT_SECRET: ${ZENDESK_OAUTH_CLIENT_SECRET:-}
+      # ...and this is what WOULD make the renewal survive more than one job.
+      # Zendesk rotates the refresh token on every spend, and
+      # `worker.main.run_ticket` builds a fresh ZendeskAdapter per job — so
+      # without a store the rotated value dies with the job that earned it and
+      # the next job spends the invalidated one (measured 2026-08-17).
+      #
+      # NO `:-` DEFAULT VALUE, removed 2026-08-17. It used to default to
+      # /var/lib/cxforge/zendesk-tokens.json, so the store was opt-OUT in every
+      # container while its author had reported it as opt-in (true only for a
+      # host-run process, where the variable really is unset). It is forwarded —
+      # backend/tests/deploy/test_env_forwarding.py requires that, because the
+      # application reads the name — and empty, so the store stays dormant.
+      # Reasons it stays off until the owner asks: it persists a live CREDENTIAL
+      # to a volume; it has a known unhandled multi-writer race (`backend` and
+      # `worker` can both refresh, last write wins); and refresh-token
+      # persistence is a decision the owner reserved (docs/BUILD-PLAN.md §10.7a).
+      # Turn it on with ZENDESK_TOKEN_STORE=/var/lib/cxforge/zendesk-tokens.json
+      # in .env; the volume below is already mounted for it.
+      ZENDESK_TOKEN_STORE: ${ZENDESK_TOKEN_STORE:-}
       ZENDESK_AI_USER_ID: ${ZENDESK_AI_USER_ID:-}
       ZENDESK_WEBHOOK_SIGNING_SECRET: ${ZENDESK_WEBHOOK_SIGNING_SECRET:-}
       PORTAL_TOKEN: ${PORTAL_TOKEN:-dev-portal-token}
@@ -147,6 +166,12 @@ services:
       # (`uv run python -m data.seed`), not as a side effect of starting a
       # worker. `false` still creates the schema if it is missing.
       SEED_ON_START: ${SEED_ON_START:-false}
+    volumes:
+      # Where the ROTATED Zendesk token pair would be persisted
+      # (ZENDESK_TOKEN_STORE above). Mounted unconditionally, but unused until
+      # that variable is set — the mount is cheap and makes opting in a
+      # one-line .env change rather than a compose edit.
+      - zendesk_tokens:/var/lib/cxforge
     depends_on:
       db:
         condition: service_healthy
@@ -156,3 +181,4 @@ services:
 volumes:
   pgdata:
   redisdata:
+  zendesk_tokens:

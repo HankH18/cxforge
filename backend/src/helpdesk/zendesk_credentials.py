@@ -62,9 +62,12 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
+import functools
 import json
 import logging
 import os
+import tempfile
 import time
 from collections.abc import Callable
 
@@ -81,6 +84,30 @@ DEFAULT_LEEWAY_SECONDS = 120.0
 
 # Zendesk's own default, recorded so a surprise is legible in a log line.
 OBSERVED_ACCESS_TOKEN_LIFETIME_SECONDS = 1800
+
+# Path of the rotated-token store. Unset (the default, and what `.env.example`
+# ships) means "no persistence", i.e. exactly the pre-2026-08-17 behaviour.
+#
+# MEASURED IN PRODUCTION, 2026-08-17, and the reason this exists at all.
+# Zendesk ROTATES the refresh token on every spend, and until this store
+# existed the rotated value was held **in the ZendeskCredentials instance
+# only**. `worker.main.run_ticket` builds a fresh `ZendeskAdapter()` — and so a
+# fresh `ZendeskCredentials.from_env()` — for EVERY job, so the rotated token
+# was discarded the moment the job that earned it finished. The next job read
+# the now-spent value back out of the environment and Zendesk answered
+# `invalid_grant`.
+#
+# Net effect: `ZENDESK_OAUTH_REFRESH_TOKEN` was a **single-use** credential
+# that the deployment burned within ~30 minutes of coming up, after which every
+# run failed at `fetch_ticket` with 401 and only a human at a browser
+# (`scripts/zendesk_oauth.py --serve`) could restore it. Observed end to end:
+# the droplet's worker refreshed once, and 20 minutes later both the container
+# AND the repo's `.env` copy were dead.
+#
+# The old code's warning ("this process will keep working") was therefore
+# wrong in the way that mattered — with a per-job adapter there is no "this
+# process" to keep working.
+TOKEN_STORE_ENV_VAR = "ZENDESK_TOKEN_STORE"
 
 
 def access_token_expiry(token: str) -> float | None:
@@ -113,6 +140,97 @@ def access_token_expiry(token: str) -> float | None:
     if isinstance(exp, int | float) and not isinstance(exp, bool):
         return float(exp)
     return None
+
+
+def read_token_store(path: str) -> tuple[str | None, str | None]:
+    """The `(access_token, refresh_token)` last written to `path`.
+
+    `(None, None)` for a missing, empty, unreadable or malformed file — a
+    corrupt cache must degrade to "fall back to the environment", never to an
+    exception on the auth path. Every failure is logged, because a store that
+    silently stops being read is the same invisible-credential-death this
+    module exists to end.
+    """
+    try:
+        with open(path, encoding="utf-8") as handle:
+            stored = json.load(handle)
+    except FileNotFoundError:
+        # The ordinary first-boot case: nothing has rotated yet.
+        return (None, None)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "could not read the Zendesk token store at %s (%r); falling back to "
+            "ZENDESK_OAUTH_TOKEN / ZENDESK_OAUTH_REFRESH_TOKEN",
+            path,
+            exc,
+        )
+        return (None, None)
+    if not isinstance(stored, dict):
+        logger.warning("the Zendesk token store at %s is not a JSON object", path)
+        return (None, None)
+    access = stored.get("access_token")
+    refresh = stored.get("refresh_token")
+    return (
+        access if isinstance(access, str) and access else None,
+        refresh if isinstance(refresh, str) and refresh else None,
+    )
+
+
+def write_token_store(path: str, access_token: str, refresh_token: str | None) -> None:
+    """Persist the rotated pair to `path`, atomically and owner-only.
+
+    `os.replace` onto a same-directory temp file so a concurrent reader sees
+    either the whole old file or the whole new one — never a half-written one.
+    Mode 0600 because this file holds a live credential; it is created before
+    any secret is written to it, not chmod'ed afterwards.
+
+    A failure here is logged at **ERROR**: the rotation already happened, so the
+    value in this process is now the only copy of a credential Zendesk will
+    accept, and losing it costs a human a browser round-trip.
+    """
+    payload = json.dumps(
+        {"access_token": access_token, "refresh_token": refresh_token},
+        indent=2,
+        sort_keys=True,
+    )
+    directory = os.path.dirname(path) or "."
+    try:
+        os.makedirs(directory, exist_ok=True)
+        # mkstemp creates with 0600 already, in the destination directory so
+        # os.replace is a same-filesystem rename.
+        handle_fd, temp_path = tempfile.mkstemp(
+            prefix=".zendesk-tokens-", suffix=".json", dir=directory
+        )
+        try:
+            with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(temp_path)
+            raise
+    except OSError as exc:
+        logger.error(
+            "could not persist the rotated Zendesk refresh token to %s (%r). The "
+            "rotated credential now exists ONLY in this process — a restart will "
+            "need `uv run python scripts/zendesk_oauth.py --serve` "
+            "(docs/OWNER-ACTIONS.md OA-4).",
+            path,
+            exc,
+        )
+        return
+    logger.info("persisted the rotated Zendesk token pair to %s", path)
+
+
+def _persist_to(path: str, access_token: str, refresh_token: str | None) -> None:
+    """`write_token_store` with the path bound first, for `functools.partial`.
+
+    A named module-level function rather than a closure inside `from_env` so the
+    `on_refresh` callback stays picklable and easy to assert on in a test.
+    """
+    write_token_store(path, access_token, refresh_token)
 
 
 class ZendeskCredentials:
@@ -164,13 +282,49 @@ class ZendeskCredentials:
         through a module constant is unresolvable, lands in that module's
         ``KNOWN_DYNAMIC_ENV_READS`` ledger, and is then required by nothing —
         so do not DRY these literals away.
+
+        ``ZENDESK_TOKEN_STORE`` is the rotation seam (see that constant's
+        comment). When it names a path, the pair written there **wins over the
+        environment**, because once a rotation has happened the environment's
+        refresh token is the spent one — preferring `.env` would re-read a dead
+        credential on every job, which is the bug this closes. When it is unset
+        the behaviour is byte-for-byte what it was before: environment only, no
+        persistence, and `refresh()` logs its "not persisted" warning.
+
+        An explicitly-passed ``access_token`` still wins over both, for the
+        one-shot-script case ``ZendeskAdapter(oauth_token=...)`` serves.
         """
+        env_access = os.environ.get("ZENDESK_OAUTH_TOKEN")
+        env_refresh = os.environ.get("ZENDESK_OAUTH_REFRESH_TOKEN")
+        store_path = os.environ.get("ZENDESK_TOKEN_STORE")
+
+        on_refresh: Callable[[str, str | None], None] | None = None
+        stored_access: str | None = None
+        stored_refresh: str | None = None
+        if store_path:
+            stored_access, stored_refresh = read_token_store(store_path)
+            on_refresh = functools.partial(_persist_to, store_path)
+
+        # Taken as a PAIR when the store has a refresh token: the two halves
+        # come from one grant response, and mixing a stored refresh token with
+        # an older environment access token would refresh sooner than needed
+        # (harmless) while mixing the reverse would spend a dead one (not).
+        refresh_token: str | None
+        resolved_access: str | None
+        if stored_refresh:
+            refresh_token = stored_refresh
+            resolved_access = stored_access or env_access
+        else:
+            refresh_token = env_refresh
+            resolved_access = env_access
+
         return cls(
             subdomain=subdomain,
-            access_token=access_token or os.environ.get("ZENDESK_OAUTH_TOKEN"),
-            refresh_token=os.environ.get("ZENDESK_OAUTH_REFRESH_TOKEN"),
+            access_token=access_token or resolved_access,
+            refresh_token=refresh_token,
             client_id=os.environ.get("ZENDESK_OAUTH_CLIENT_ID"),
             client_secret=os.environ.get("ZENDESK_OAUTH_CLIENT_SECRET"),
+            on_refresh=on_refresh,
         )
 
     # -- state ------------------------------------------------------------
@@ -321,13 +475,22 @@ class ZendeskCredentials:
         if self._on_refresh is not None:
             self._on_refresh(access_token, self._refresh_token)
         elif rotated:
-            # In a container there is no `.env` to write back to, so the
-            # rotated value lives only in this process. That is fine while the
-            # worker runs and NOT fine across a restart, so say so once.
+            # The rotated value now lives ONLY in this instance. That is worse
+            # than it sounds and the old wording here ("this process will keep
+            # working") was wrong: `worker.main.run_ticket` builds a fresh
+            # `ZendeskAdapter()` per job, so the next job rebuilds from the
+            # environment, reads the value Zendesk has just invalidated, and
+            # every run 401s from then on. Measured in production 2026-08-17.
+            #
+            # Set ZENDESK_TOKEN_STORE (see that constant) to make the rotation
+            # survive both the instance and the container.
             logger.warning(
-                "the Zendesk refresh token rotated and was not persisted — this "
-                "process will keep working, but a restart falls back to the "
-                "stale ZENDESK_OAUTH_REFRESH_TOKEN in the environment and will "
-                "need `scripts/zendesk_oauth.py --serve`."
+                "the Zendesk refresh token rotated and was NOT persisted: "
+                "ZENDESK_TOKEN_STORE is unset, so the spent value in "
+                "ZENDESK_OAUTH_REFRESH_TOKEN is all any later "
+                "ZendeskCredentials.from_env() will find. The next caller that "
+                "builds its own adapter — worker.main does, once per job — will "
+                "fail with invalid_grant and need "
+                "`uv run python scripts/zendesk_oauth.py --serve`."
             )
         return access_token
