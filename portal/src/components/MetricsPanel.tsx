@@ -10,9 +10,9 @@ interface MetricsPanelProps {
 export default function MetricsPanel({ metrics, error }: MetricsPanelProps) {
   if (error) {
     return (
-      <section className="panel metrics" aria-label="Metrics">
-        <header className="panel__header">
-          <h2 className="panel__title">Metrics</h2>
+      <section className="card metrics" aria-label="Metrics">
+        <header className="card-head">
+          <h2 className="card-title">Metrics</h2>
         </header>
         <p className="alert alert--error" role="alert">
           Could not load metrics: {error}
@@ -23,11 +23,11 @@ export default function MetricsPanel({ metrics, error }: MetricsPanelProps) {
 
   if (!metrics) {
     return (
-      <section className="panel metrics" aria-label="Metrics">
-        <header className="panel__header">
-          <h2 className="panel__title">Metrics</h2>
+      <section className="card metrics" aria-label="Metrics">
+        <header className="card-head">
+          <h2 className="card-title">Metrics</h2>
         </header>
-        <p className="metrics__loading placeholder">Reading the run history…</p>
+        <p className="metrics-loading loading">Reading the run history…</p>
       </section>
     )
   }
@@ -36,27 +36,33 @@ export default function MetricsPanel({ metrics, error }: MetricsPanelProps) {
   const runs = metrics.sample_count
 
   return (
-    <section className="panel metrics" aria-label="Metrics">
-      <header className="panel__header">
-        <h2 className="panel__title">Metrics</h2>
+    <section className="card metrics" aria-label="Metrics">
+      <header className="card-head">
+        <h2 className="card-title">Metrics</h2>
       </header>
 
-      <dl className="metrics__stats">
-        <div className="metrics__stat">
-          <dt className="metrics__label">Human-avoidance rate</dt>
-          <dd className="metrics__value">{formatPercent(metrics.human_avoidance_rate)}</dd>
+      {/* `metrics__stat` / `metrics__value` are retained alongside the design
+          system's `metric-card` names because MetricsPanel.test.tsx pairs a
+          <dt> with its <dd> through those two selectors. The styling hangs off
+          `metric-card`; these two are test hooks and carry no rules. */}
+      <dl className="metrics-stats">
+        <div className="metric-card metrics__stat">
+          <dt className="metric-card-label">Human-avoidance rate</dt>
+          <dd className="metric-card-value metrics__value">
+            {formatPercent(metrics.human_avoidance_rate)}
+          </dd>
         </div>
-        <div className="metrics__stat">
-          <dt className="metrics__label">Latency p50</dt>
-          <dd className="metrics__value">{formatSeconds(metrics.latency_p50_s)}</dd>
+        <div className="metric-card metrics__stat">
+          <dt className="metric-card-label">Latency p50</dt>
+          <dd className="metric-card-value metrics__value">{formatSeconds(metrics.latency_p50_s)}</dd>
         </div>
-        <div className="metrics__stat">
-          <dt className="metrics__label">Latency p95</dt>
-          <dd className="metrics__value">{formatSeconds(metrics.latency_p95_s)}</dd>
+        <div className="metric-card metrics__stat">
+          <dt className="metric-card-label">Latency p95</dt>
+          <dd className="metric-card-value metrics__value">{formatSeconds(metrics.latency_p95_s)}</dd>
         </div>
-        <div className="metrics__stat">
-          <dt className="metrics__label">Runs measured</dt>
-          <dd className="metrics__value metrics__sample-count">{runs}</dd>
+        <div className="metric-card metrics__stat">
+          <dt className="metric-card-label">Runs measured</dt>
+          <dd className="metric-card-value metrics__value metrics-sample-count">{runs}</dd>
         </div>
       </dl>
 
@@ -66,34 +72,34 @@ export default function MetricsPanel({ metrics, error }: MetricsPanelProps) {
           it is. The endpoint used to send 0.0 here, which read as a PASS
           against "p95 < 5 min" on a stack that had never run anything. */}
       {runs === 0 ? (
-        <p className="metrics__empty placeholder">
+        <p className="metrics-note note">
           No autonomous reply has been sent yet, so there is no latency to report. These read
           as &ldquo;&mdash;&rdquo; rather than 0 seconds &mdash; an unmeasured p95 is not a fast
           one.
         </p>
       ) : (
-        <p className="note">
+        <p className="metrics-note note">
           p50 and p95 are computed over the {runs} autonomously sent {runs === 1 ? 'reply' : 'replies'},
           from webhook receipt to public reply. Gated and escalated runs are excluded.
         </p>
       )}
 
-      <h3 className="metrics__subtitle">Escalations by reason</h3>
+      <h3 className="metrics-subtitle card-subtitle">Escalations by reason</h3>
       {reasonEntries.length === 0 ? (
-        <p className="metrics__empty placeholder">
+        <p className="metrics-note note">
           No escalations yet — every run so far resolved without handing the ticket to a human.
         </p>
       ) : (
         <>
-          <ul className="metrics__reasons">
+          <ul className="metrics-reasons">
             {reasonEntries.map(([reason, count]) => (
-              <li className="metrics__reason" key={reason}>
-                <span className="metrics__reason-name">{reason}</span>
-                <span className="metrics__reason-count">{count}</span>
+              <li className="metrics-reason" key={reason}>
+                <span className="metrics-reason-name">{reason}</span>
+                <span className="metrics-reason-count">{count}</span>
               </li>
             ))}
           </ul>
-          <p className="note">
+          <p className="metrics-note note">
             A run escalated for more than one reason is counted under every reason it triggered,
             so these counts can add up to more than the number of escalated runs — they are not a
             breakdown that sums to a total.

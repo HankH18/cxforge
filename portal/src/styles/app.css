@@ -1,0 +1,1039 @@
+/* Othram Support Review Portal — the visual layer.
+ * Implements STYLE_GUIDE.md §§1–7. Supersedes the Track D wireframe
+ * stylesheet (ADR-012, "small and easy to throw away").
+ *
+ * Rules this file obeys, and that reviewers should hold it to:
+ *   1. No raw color values. Every color is var(--…) from tokens.css.
+ *      The single exception is `transparent` in the gate switch knob
+ *      gradient, which means "do not paint" rather than naming a color.
+ *   2. No animation on feed rows. The feed re-renders every 5s; a row that
+ *      moves or fades under a reviewer mid-read is a correctness bug, not a
+ *      style choice. Only :hover/[aria-current] backgrounds change, and they
+ *      change instantly.
+ *   3. Class vocabulary is the style guide's (.app-bar, .app-grid, .feed-table,
+ *      .pill--<status>, .drawer, .editor, .metric-card, .gate).
+ *      src/styles.contract.test.ts pins every status class this file must
+ *      define, in both directions.
+ */
+
+@import './tokens.css';
+
+/* ─────────────────────────── reset ─────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p,
+dl,
+dd,
+dt,
+pre,
+figure {
+  margin: 0;
+}
+
+ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+p {
+  text-wrap: pretty;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+::selection {
+  background: var(--accent-ring);
+}
+
+/* Focus is never suppressed. §4: every interactive element, same ring. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ─────────────────────────── shell (§5) ─────────────────────────── */
+
+.app {
+  /* Layout constant, not a color (so tokens.css stays §2-verbatim): the height
+     the sticky drawer reserves for the app bar above it.
+     The guide's bar is 56px. This portal's bar carries two sentences the
+     guide's mock does not — the page tagline and the gate's state explanation,
+     both strings we are not allowed to drop — so it settles at ~60px on a wide
+     screen and taller when it wraps. This value is deliberately a little
+     larger than the bar: too large leaves a few px of gap under the bar, too
+     small hides the drawer's top edge behind it. */
+  --bar-h: 64px;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-5);
+  min-height: 56px;
+  padding: var(--sp-2) var(--sp-5);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+/* The <h1> is the brand mark, not a page title (§6). */
+.app-bar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.app-bar-brand::before {
+  content: '';
+  display: block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.app-bar-tagline {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.app-bar > .alert {
+  flex: 1 0 100%;
+}
+
+.app-grid {
+  display: grid;
+  /* The guide specifies `minmax(0,1fr) 400px`. The second track is `auto` and
+     the width lives on .drawer instead, because DraftDetail is unmounted when
+     nothing is selected and a hard 400px track would leave a 400px hole. */
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.app-main {
+  display: grid;
+  gap: var(--sp-4);
+  min-width: 0;
+  padding: 20px;
+}
+
+/* --text-muted, not --text-faint: this is a real sentence, and faint measures
+   3.4:1 on --bg — under the 4.5:1 the guide's §7 requires of body text.
+   --text-faint is left to disabled controls and the transient "…" gate flag,
+   where WCAG does not apply. */
+.app-footer {
+  padding: var(--sp-3) var(--sp-5) var(--sp-6);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* ─────────────────────────── cards ─────────────────────────── */
+
+/* §5: cards use borders, not shadows. --shadow-drawer is the only shadow
+   above the 1px card shadow. */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* title role (§3): 20px / 600 / -0.015em / 1.25 */
+.card-title {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+}
+
+/* subtitle role (§3): 16px / 600 */
+.card-subtitle {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+/* label role (§3): 11px / 500 / mono / 0.14em / uppercase.
+   Declared once for every element the guide assigns it — <dt>s, column
+   headers and metric captions — rather than as an unused utility class. */
+.metric-card-label,
+.drawer-meta-label,
+.gate-title,
+.feed-table thead th {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  line-height: 1.5;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* mono role (§3): 13px / 500 / mono / tabular-nums */
+.mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─────────────────────────── buttons (§4) ─────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  padding: 0 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-control);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+/* Neutral — Close, View, Review. */
+.btn--neutral:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+/* Primary — Approve only. The one solid fill on screen, because it is the one
+   action that puts text in front of a customer. */
+.btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-inverse);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+/* Danger — Reject. Outlined until hover; never a solid red. */
+.btn--danger {
+  border-color: var(--danger-border);
+  color: var(--danger-ink);
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: var(--status-rejected-soft);
+}
+
+.btn:disabled {
+  background: var(--surface-sunken);
+  border-color: var(--border);
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+
+/* In-row variant (§4: 26–28px inside table rows). */
+.btn--row {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+/* Approve sits at 36px in the drawer's action row. */
+.btn--tall {
+  height: 36px;
+  padding: 0 18px;
+}
+
+/* ─────────────────────────── status pills (§4) ─────────────────────────── */
+
+/* Soft background + colored ink + 6px dot. The dot is a pseudo-element so the
+   markup stays exactly what the components already render.
+   Never color alone: every pill carries its label as text. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-radius: var(--r-pill);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.pill::before {
+  content: '';
+  display: block;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: currentcolor;
+}
+
+/* The status → color map. One rule per class that the app can emit, so
+   styles.contract.test.ts can check both directions: nothing emitted is
+   unstyled, and nothing styled here is unemittable.
+ *
+ * The pair that matters most: `approved` / `gated-sent` (a human read the
+ * reply and released it) must never look like `auto-sent` (nobody did).
+ * Those took the same grey once, which inverted the whole point of the gate.
+ * Green = a person signed it off. Blue = the machine sent it alone. */
+
+/* pending review — a draft is waiting on a human */
+.pill--pending {
+  background: var(--status-pending-soft);
+  color: var(--status-pending-ink);
+}
+
+.pill--pending::before {
+  background: var(--status-pending);
+}
+
+/* approved (draft) / gated-sent (run) — sent after a human approved it */
+.pill--approved,
+.pill--gated-sent {
+  background: var(--status-sent-soft);
+  color: var(--status-sent-ink);
+}
+
+.pill--approved::before,
+.pill--gated-sent::before {
+  background: var(--status-sent);
+}
+
+/* auto-sent — sent with no human in the loop */
+.pill--auto-sent {
+  background: var(--status-auto-soft);
+  color: var(--status-auto-ink);
+}
+
+.pill--auto-sent::before {
+  background: var(--status-auto);
+}
+
+/* rejected — a human stopped it; nothing was sent */
+.pill--rejected {
+  background: var(--status-rejected-soft);
+  color: var(--status-rejected-ink);
+}
+
+.pill--rejected::before {
+  background: var(--status-rejected);
+}
+
+/* escalated / awaiting review — a human still owns the ticket */
+.pill--escalated,
+.pill--awaiting {
+  background: var(--status-pending-soft);
+  color: var(--status-pending-ink);
+}
+
+.pill--escalated::before,
+.pill--awaiting::before {
+  background: var(--status-pending);
+}
+
+/* no draft / off-topic — nothing to review */
+.pill--none,
+.pill--off-topic {
+  background: var(--status-none-soft);
+  color: var(--text-muted);
+}
+
+.pill--none::before,
+.pill--off-topic::before {
+  background: var(--status-none);
+}
+
+/* ─────────────────────────── gate (§4, §5) ─────────────────────────── */
+
+/* Lives in the app bar. `display: contents` on the component's <header> lets
+   the title, switch, flag and explanation lay out as one row without touching
+   the component's DOM. */
+.gate {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  margin-left: auto;
+}
+
+.gate-head {
+  display: contents;
+}
+
+.gate-title {
+  order: 1;
+}
+
+.gate-control {
+  order: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+/* CSS-only switch on the real input[type=checkbox][role=switch]: 40×22 track,
+   16px knob. The knob is a background layer rather than a pseudo-element —
+   Firefox does not render ::before on form controls. `transparent` here is the
+   absence of paint outside the knob, not a color choice. */
+.gate-switch {
+  appearance: none;
+  flex: none;
+  width: 40px;
+  height: 22px;
+  margin: 0;
+  border: none;
+  border-radius: var(--r-pill);
+  background-color: var(--border-strong);
+  background-image: radial-gradient(circle 8px at 11px 11px, var(--surface) 98%, transparent 100%);
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    background-position var(--dur-fast) var(--ease);
+}
+
+/* On is accent. Off is neutral — never red. */
+.gate-switch:checked {
+  background-color: var(--accent);
+  background-position: 18px 0;
+}
+
+.gate-switch:disabled {
+  background-color: var(--border);
+  cursor: not-allowed;
+}
+
+.gate-control-label {
+  color: var(--text);
+}
+
+/* The ON / OFF flag: a machine value, so mono. */
+.gate-flag {
+  order: 3;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.06em;
+}
+
+.gate-flag--on {
+  color: var(--accent-ink);
+}
+
+.gate-flag--off {
+  color: var(--text-muted);
+}
+
+.gate-flag--unknown {
+  color: var(--text-faint);
+}
+
+/* Explanation sits below the switch, small, muted (§4). */
+.gate-state {
+  order: 4;
+  flex: 1 0 100%;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: right;
+  color: var(--text-muted);
+}
+
+.gate .alert {
+  order: 5;
+  flex: 1 0 100%;
+}
+
+/* ─────────────────────────── metrics (§4) ─────────────────────────── */
+
+.metrics-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--sp-3);
+  padding: 18px 18px var(--sp-3);
+}
+
+/* The guide's mock sits these tiles straight on the page background. Here they
+   sit inside the MetricsPanel's own <section>, which is a --surface card, so
+   they take --surface-sunken instead — white-on-white would leave them
+   readable only by their border. */
+.metric-card {
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--surface-sunken);
+}
+
+.metric-card-value {
+  margin-top: var(--sp-2);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The panel's prose and reason list are direct children of the card — the
+   component gained classNames only, no wrapper — so each one carries the
+   card's horizontal padding itself. */
+.metrics-note {
+  padding: 0 18px;
+  margin-bottom: var(--sp-4);
+}
+
+.metrics-subtitle {
+  padding: 0 18px;
+  margin-bottom: var(--sp-2);
+}
+
+.metrics-reasons {
+  display: grid;
+  padding: 0 18px;
+  margin-bottom: var(--sp-4);
+}
+
+.metrics-reason {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 14px;
+}
+
+.metrics-reason:last-child {
+  border-bottom: none;
+}
+
+.metrics-reason-count {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* ─────────────────────────── feed (§4) ─────────────────────────── */
+
+.feed {
+  /* Clips the table against the card's rounded bottom corners. */
+  overflow: hidden;
+}
+
+.feed-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.feed-filter-select {
+  height: 30px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-control);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+
+/* The table is its own scroll region. That is deliberate and load-bearing:
+   a sticky <thead> resolves against its nearest scrolling ancestor, so this
+   is what makes the header actually pin at every viewport width, and it also
+   keeps nine columns from being clipped on a narrow window instead of
+   scrolled. 50 rows scroll here without moving anything else on the page. */
+.table-scroll {
+  overflow: auto;
+  max-height: calc(100vh - 280px);
+}
+
+.feed-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.feed-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 10px 18px;
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.feed-table thead th:nth-child(3) {
+  text-align: right;
+}
+
+.feed-cell {
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: middle;
+}
+
+.feed-table tbody tr:last-child .feed-cell {
+  border-bottom: none;
+}
+
+/* Row states. No transition and no animation anywhere in this block: the feed
+   re-renders on a 5s poll and rows must not move under a reviewer mid-read. */
+.feed-row:hover {
+  background: var(--surface-hover);
+}
+
+.feed-row--pending {
+  box-shadow: inset 2px 0 0 var(--status-pending);
+}
+
+.feed-row--selected,
+.feed-table tbody tr[aria-current='true'] {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* :hover on its own outranks the class, so the selected row would go grey
+   under the pointer and read as deselected. It keeps its tint. */
+.feed-row--selected:hover,
+.feed-table tbody tr[aria-current='true']:hover {
+  background: var(--accent-soft);
+}
+
+/* Machine values are monospaced and tabular (§1.4). */
+.feed-cell--ticket,
+.feed-cell--confidence,
+.feed-cell--received {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.feed-cell--confidence {
+  text-align: right;
+}
+
+.feed-cell--received {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Route and escalation reason truncate; the full value is in the cell title. */
+.feed-cell--route,
+.feed-cell--reason {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-cell--reason {
+  color: var(--text-muted);
+}
+
+.feed-cell--outcome,
+.feed-cell--draft,
+.feed-cell--trace,
+.feed-cell--actions {
+  white-space: nowrap;
+}
+
+.feed-cell--actions {
+  text-align: right;
+}
+
+.feed-trace-link {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.feed-trace-link::after {
+  content: '\2197';
+  margin-left: 3px;
+}
+
+.feed-empty,
+.feed-loading {
+  margin: 18px;
+}
+
+/* ─────────────────────────── drawer (§4, §5) ─────────────────────────── */
+
+.drawer {
+  position: sticky;
+  top: var(--bar-h);
+  align-self: start;
+  width: 400px;
+  max-height: calc(100vh - var(--bar-h));
+  overflow-y: auto;
+  background: var(--surface);
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: var(--shadow-drawer);
+  animation: drawer-in var(--dur-panel) var(--ease);
+}
+
+@keyframes drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes drawer-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.drawer .card-head {
+  align-items: flex-start;
+  border-bottom: none;
+  padding: 20px 20px 0;
+}
+
+.drawer-close {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+/* The <dl> as a two-column `auto 1fr` grid. `display: contents` on the
+   component's per-item <div> wrappers lets dt/dd be grid items directly. */
+.drawer-meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--sp-2) var(--sp-4);
+  margin: 20px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.drawer-meta-item {
+  display: contents;
+}
+
+.drawer-meta-value {
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* ── the draft itself: the largest type on screen, the most room (§1.1) ── */
+
+.editor {
+  display: grid;
+  gap: var(--sp-2);
+  padding: 0 20px 20px;
+}
+
+.editor-label {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.editor-input {
+  width: 100%;
+  /* 9 rows at the editor's own type scale (§4). */
+  min-height: calc(9 * 1.65 * 15px + 2 * 14px);
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.65;
+  resize: vertical;
+}
+
+.editor-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.editor-input:disabled {
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+
+.editor-dirty {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--status-pending-ink);
+}
+
+.editor-dirty::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--status-pending);
+  transform: translateY(-2px);
+}
+
+.editor-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: var(--sp-1);
+}
+
+.drawer-sent {
+  display: grid;
+  gap: var(--sp-2);
+  padding: 0 20px 20px;
+}
+
+.drawer-body {
+  margin: 0;
+  padding: 16px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.drawer-empty {
+  margin: 0 20px 20px;
+}
+
+/* ─────────────────────────── feedback states (§4) ─────────────────────── */
+
+.alert {
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.alert--error {
+  background: var(--status-rejected-soft);
+  border: 1px solid var(--danger-border);
+  color: var(--status-rejected-ink);
+  font-weight: 500;
+}
+
+.card > .alert,
+.card > .loading {
+  margin: 0 18px 18px;
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.loading::before {
+  content: '';
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--status-none);
+}
+
+.empty {
+  padding: 36px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.empty-title {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.empty-detail {
+  max-width: 66ch;
+  margin: var(--sp-1) auto 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.note {
+  max-width: 66ch;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* ─────────────────────────── responsive (§5) ─────────────────────────── */
+
+/* Below 1080px the drawer becomes a full-width panel under the feed. */
+@media (max-width: 1080px) {
+  .app-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .drawer {
+    position: static;
+    width: auto;
+    max-height: none;
+    margin: 0 20px 20px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-card);
+    box-shadow: var(--shadow-card);
+  }
+}
+
+@media (max-width: 1400px) {
+  .feed-table thead th,
+  .feed-cell {
+    padding-left: var(--sp-3);
+    padding-right: var(--sp-3);
+  }
+}
+
+/* Below 720px the feed drops Route (2) and Received (7) so the remaining
+   columns fit without sideways scrolling. Column numbers are the <th> order in
+   Feed.tsx: Ticket, Route, Confidence, Outcome, Draft, Escalation reason,
+   Received, Trace, Actions.
+   .table-scroll keeps its overflow here rather than switching to `visible`:
+   at phone widths seven columns can still exceed the viewport, and a scrollbar
+   is strictly better than silently clipping a reviewer's data. */
+@media (max-width: 720px) {
+  .feed-table thead th:nth-child(2),
+  .feed-table thead th:nth-child(7),
+  .feed-table tbody td:nth-child(2),
+  .feed-table tbody td:nth-child(7) {
+    display: none;
+  }
+
+  .app-main {
+    padding: var(--sp-3);
+  }
+}
+
+/* ─────────────────────────── reduced motion (§7) ─────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  /* The drawer enters on opacity alone — no transform. */
+  .drawer {
+    animation-name: drawer-fade;
+  }
+
+  .btn,
+  .gate-switch {
+    transition: none;
+  }
+}

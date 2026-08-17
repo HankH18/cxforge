@@ -41,6 +41,22 @@ export function outcomeSlug(outcome: RunOutcome | null | undefined): string {
   return outcome === null || outcome === undefined ? 'awaiting' : outcome.replace(/_/g, '-')
 }
 
+// One lookup object, keyed on `draft_status` itself — never derived from the
+// display label and never from `outcome` (STYLE_GUIDE.md §4). The label and
+// the class have to be able to drift apart without either following the
+// other: the shipped defect this guards was a class built out of a label.
+const DRAFT_PILL_SLUGS: Readonly<Record<DraftStatus, string>> = {
+  pending: 'pending',
+  approved: 'approved',
+  rejected: 'rejected',
+  auto_sent: 'auto-sent',
+}
+
+/** Class-hook suffix for a draft status — never rendered as text. */
+export function draftStatusSlug(status: DraftStatus | null | undefined): string {
+  return status === null || status === undefined ? 'none' : DRAFT_PILL_SLUGS[status]
+}
+
 export function formatDraftStatus(status: DraftStatus | null | undefined): string {
   return status === null || status === undefined ? 'no draft' : DRAFT_LABELS[status]
 }

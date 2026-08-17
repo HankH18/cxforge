@@ -1,6 +1,7 @@
 import type { DraftStatus, FeedItem } from '../api'
 import {
   DRAFT_STATUS_LABELS,
+  draftStatusSlug,
   formatDraftStatus,
   formatOutcome,
   formatPercent,
@@ -36,13 +37,13 @@ export default function Feed({
   onSelect,
 }: FeedProps) {
   return (
-    <section className="panel feed" aria-label="Feed">
-      <header className="panel__header">
-        <h2 className="panel__title">Run feed</h2>
-        <label className="feed__filter">
-          <span className="feed__filter-label">Filter by draft status</span>{' '}
+    <section className="card feed" aria-label="Feed">
+      <header className="card-head">
+        <h2 className="card-title">Run feed</h2>
+        <label className="feed-filter">
+          <span className="feed-filter-label">Filter by draft status</span>{' '}
           <select
-            className="feed__filter-select"
+            className="feed-filter-select"
             value={statusFilter}
             onChange={(event) => onStatusFilterChange(event.target.value as DraftStatus | '')}
           >
@@ -63,11 +64,11 @@ export default function Feed({
 
       {runs.length === 0 && !error ? (
         loading ? (
-          <p className="feed__loading placeholder">Loading the run feed…</p>
+          <p className="feed-loading loading">Loading the run feed…</p>
         ) : (
-          <div className="feed__empty placeholder">
-            <p className="placeholder__headline">No runs yet.</p>
-            <p className="placeholder__detail">
+          <div className="feed-empty empty">
+            <p className="empty-title">No runs yet.</p>
+            <p className="empty-detail">
               Every ticket the agent handles lands here within seconds of arriving — route,
               confidence, what it decided, and the reply it wrote.
             </p>
@@ -75,7 +76,7 @@ export default function Feed({
         )
       ) : (
         <div className="table-scroll">
-          <table className="feed__table">
+          <table className="feed-table">
             <thead>
               <tr>
                 <th scope="col">Ticket</th>
@@ -98,34 +99,41 @@ export default function Feed({
                 return (
                   <tr
                     key={item.run_id}
-                    className={`feed__row${isSelected ? ' feed__row--selected' : ''}${
-                      isPending ? ' feed__row--pending' : ''
+                    className={`feed-row${isSelected ? ' feed-row--selected' : ''}${
+                      isPending ? ' feed-row--pending' : ''
                     }`}
                     aria-current={isSelected ? 'true' : undefined}
                   >
-                    <td className="feed__cell feed__cell--ticket">{item.ticket_id}</td>
-                    <td className="feed__cell feed__cell--route">{item.route ?? '—'}</td>
-                    <td className="feed__cell feed__cell--confidence">
+                    <td className="feed-cell feed-cell--ticket">{item.ticket_id}</td>
+                    <td className="feed-cell feed-cell--route" title={item.route ?? undefined}>
+                      {item.route ?? '—'}
+                    </td>
+                    <td className="feed-cell feed-cell--confidence">
                       {formatPercent(item.confidence)}
                     </td>
-                    <td className="feed__cell feed__cell--outcome">
-                      <span className={`badge badge--outcome-${outcomeSlug(item.outcome)}`}>
+                    <td className="feed-cell feed-cell--outcome">
+                      <span className={`pill pill--${outcomeSlug(item.outcome)}`}>
                         {formatOutcome(item.outcome)}
                       </span>
                     </td>
-                    <td className="feed__cell feed__cell--draft">
-                      <span className={`badge badge--draft-${item.draft_status ?? 'none'}`}>
+                    <td className="feed-cell feed-cell--draft">
+                      <span className={`pill pill--${draftStatusSlug(item.draft_status)}`}>
                         {formatDraftStatus(item.draft_status)}
                       </span>
                     </td>
-                    <td className="feed__cell feed__cell--reason">{item.escalation_reason ?? '—'}</td>
-                    <td className="feed__cell feed__cell--received">
+                    <td
+                      className="feed-cell feed-cell--reason"
+                      title={item.escalation_reason ?? undefined}
+                    >
+                      {item.escalation_reason ?? '—'}
+                    </td>
+                    <td className="feed-cell feed-cell--received">
                       {formatTimestamp(item.received_at)}
                     </td>
-                    <td className="feed__cell feed__cell--trace">
+                    <td className="feed-cell feed-cell--trace">
                       {item.trace_url ? (
                         <a
-                          className="feed__trace-link"
+                          className="feed-trace-link"
                           href={item.trace_url}
                           target="_blank"
                           rel="noreferrer"
@@ -136,11 +144,11 @@ export default function Feed({
                         '—'
                       )}
                     </td>
-                    <td className="feed__cell feed__cell--actions">
+                    <td className="feed-cell feed-cell--actions">
                       {item.draft_id !== null && (
                         <button
                           type="button"
-                          className={`button ${isPending ? 'button--primary' : 'button--ghost'}`}
+                          className="btn btn--neutral btn--row"
                           onClick={() => onSelect(item)}
                         >
                           {isPending ? 'Review' : 'View'}

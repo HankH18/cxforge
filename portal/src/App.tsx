@@ -112,46 +112,46 @@ export default function App() {
     loadMetrics()
   }
 
+  // Shell per STYLE_GUIDE.md §5/§6: a 56px sticky app bar (the <h1> is the
+  // brand mark, the gate rides on the right), then a two-column grid whose
+  // right column is the draft drawer. Every string, role and aria-label is
+  // exactly what it was — the wrappers and classNames are the whole change.
   return (
     <div className="app">
-      <header className="app__header">
-        <h1 className="app__title">Othram Support — Review Portal</h1>
-        <p className="app__subtitle">
+      <header className="app-bar">
+        <h1 className="app-bar-brand">Othram Support — Review Portal</h1>
+        <p className="app-bar-tagline">
           Every agent run, the reply it drafted, and who decided to send it.
         </p>
+
+        <GateToggle
+          enabled={gate}
+          onChanged={(enabled) => {
+            setGate(enabled)
+            setGateError(null)
+          }}
+        />
+        {gateError && (
+          <p className="alert alert--error" role="alert">
+            Could not load gate setting: {gateError}
+          </p>
+        )}
       </header>
 
-      <main className="app__main">
-        <div className="app__columns">
-          <div className="app__column app__column--gate">
-            <GateToggle
-              enabled={gate}
-              onChanged={(enabled) => {
-                setGate(enabled)
-                setGateError(null)
-              }}
-            />
-            {gateError && (
-              <p className="alert alert--error" role="alert">
-                Could not load gate setting: {gateError}
-              </p>
-            )}
-          </div>
+      <div className="app-grid">
+        <main className="app-main">
+          <MetricsPanel metrics={metrics} error={metricsError} />
 
-          <div className="app__column app__column--metrics">
-            <MetricsPanel metrics={metrics} error={metricsError} />
-          </div>
-        </div>
-
-        <Feed
-          runs={runs}
-          error={feedError}
-          loading={!feedLoaded}
-          statusFilter={statusFilter}
-          onStatusFilterChange={setStatusFilter}
-          selectedDraftId={selectedDraftId}
-          onSelect={(item) => setSelectedDraftId(item.draft_id)}
-        />
+          <Feed
+            runs={runs}
+            error={feedError}
+            loading={!feedLoaded}
+            statusFilter={statusFilter}
+            onStatusFilterChange={setStatusFilter}
+            selectedDraftId={selectedDraftId}
+            onSelect={(item) => setSelectedDraftId(item.draft_id)}
+          />
+        </main>
 
         {selectedItem && (
           <DraftDetail
@@ -160,9 +160,9 @@ export default function App() {
             onChanged={handleDraftChanged}
           />
         )}
-      </main>
+      </div>
 
-      <footer className="app__footer">
+      <footer className="app-footer">
         <p>Feed and metrics refresh every {POLL_INTERVAL_MS / 1000} seconds.</p>
       </footer>
     </div>

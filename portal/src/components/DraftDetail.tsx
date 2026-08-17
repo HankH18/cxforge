@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { approveDraft, editDraft, rejectDraft, type DraftResponse, type FeedItem } from '../api'
 import {
   describeError,
+  draftStatusSlug,
   formatDraftStatus,
   formatOutcome,
   formatPercent,
@@ -70,39 +71,39 @@ export default function DraftDetail({ item, onClose, onChanged }: DraftDetailPro
   }
 
   return (
-    <section className="panel draft" aria-label="Draft detail">
-      <header className="panel__header">
-        <h2 className="panel__title">Ticket {item.ticket_id}</h2>
-        <button type="button" className="button button--ghost draft__close" onClick={onClose}>
+    <section className="card drawer" aria-label="Draft detail">
+      <header className="card-head">
+        <h2 className="card-title">Ticket {item.ticket_id}</h2>
+        <button type="button" className="btn btn--neutral drawer-close" onClick={onClose}>
           Close
         </button>
       </header>
 
-      <dl className="draft__meta">
-        <div className="draft__meta-item">
-          <dt className="draft__meta-label">Route</dt>
-          <dd className="draft__meta-value">{item.route ?? '—'}</dd>
+      <dl className="drawer-meta">
+        <div className="drawer-meta-item">
+          <dt className="drawer-meta-label">Route</dt>
+          <dd className="drawer-meta-value">{item.route ?? '—'}</dd>
         </div>
-        <div className="draft__meta-item">
-          <dt className="draft__meta-label">Confidence</dt>
-          <dd className="draft__meta-value">{formatPercent(item.confidence)}</dd>
+        <div className="drawer-meta-item">
+          <dt className="drawer-meta-label">Confidence</dt>
+          <dd className="drawer-meta-value mono">{formatPercent(item.confidence)}</dd>
         </div>
-        <div className="draft__meta-item">
-          <dt className="draft__meta-label">Run outcome</dt>
-          <dd className="draft__meta-value">
-            <span className={`badge badge--outcome-${outcomeSlug(item.outcome)}`}>
+        <div className="drawer-meta-item">
+          <dt className="drawer-meta-label">Run outcome</dt>
+          <dd className="drawer-meta-value">
+            <span className={`pill pill--${outcomeSlug(item.outcome)}`}>
               {formatOutcome(item.outcome)}
             </span>
           </dd>
         </div>
-        <div className="draft__meta-item">
-          <dt className="draft__meta-label">Escalation reason</dt>
-          <dd className="draft__meta-value">{item.escalation_reason ?? '—'}</dd>
+        <div className="drawer-meta-item">
+          <dt className="drawer-meta-label">Escalation reason</dt>
+          <dd className="drawer-meta-value">{item.escalation_reason ?? '—'}</dd>
         </div>
-        <div className="draft__meta-item">
-          <dt className="draft__meta-label">Draft status</dt>
-          <dd className="draft__meta-value">
-            <span className={`badge badge--draft-${item.draft_status ?? 'none'}`}>
+        <div className="drawer-meta-item">
+          <dt className="drawer-meta-label">Draft status</dt>
+          <dd className="drawer-meta-value">
+            <span className={`pill pill--${draftStatusSlug(item.draft_status)}`}>
               {formatDraftStatus(item.draft_status)}
             </span>
           </dd>
@@ -110,9 +111,9 @@ export default function DraftDetail({ item, onClose, onChanged }: DraftDetailPro
       </dl>
 
       {item.draft_id === null && (
-        <div className="draft__empty placeholder">
-          <p className="placeholder__headline">No draft exists for this run.</p>
-          <p className="placeholder__detail">
+        <div className="drawer-empty empty">
+          <p className="empty-title">No draft exists for this run.</p>
+          <p className="empty-detail">
             The agent reached an outcome without writing a reply for review — the run row
             above is the whole record.
           </p>
@@ -120,12 +121,12 @@ export default function DraftDetail({ item, onClose, onChanged }: DraftDetailPro
       )}
 
       {item.draft_id !== null && isPending && (
-        <div className="draft__editor">
-          <label className="draft__editor-label" htmlFor="draft-body">
+        <div className="editor">
+          <label className="editor-label" htmlFor="draft-body">
             Reply body — this exact text is what gets sent when you approve
           </label>
           <textarea
-            className="draft__textarea"
+            className="editor-input"
             id="draft-body"
             value={editedText}
             onChange={(event) => setEditedText(event.target.value)}
@@ -133,14 +134,14 @@ export default function DraftDetail({ item, onClose, onChanged }: DraftDetailPro
             rows={8}
           />
           {isDirty && (
-            <p className="draft__dirty note">
+            <p className="editor-dirty">
               Edited from the original draft — the text above will be sent, not the original.
             </p>
           )}
-          <div className="draft__actions">
+          <div className="editor-actions">
             <button
               type="button"
-              className="button button--primary"
+              className="btn btn--primary btn--tall"
               onClick={handleApprove}
               disabled={busy}
             >
@@ -148,23 +149,23 @@ export default function DraftDetail({ item, onClose, onChanged }: DraftDetailPro
             </button>
             <button
               type="button"
-              className="button button--danger"
+              className="btn btn--danger btn--tall"
               onClick={handleReject}
               disabled={busy}
             >
               Reject
             </button>
           </div>
-          {busy && <p className="draft__busy note">Working…</p>}
+          {busy && <p className="editor-busy note">Working…</p>}
         </div>
       )}
 
       {item.draft_id !== null && !isPending && (
-        <div className="draft__sent">
-          <h3 className="draft__sent-title">
+        <div className="drawer-sent">
+          <h3 className="drawer-sent-title card-subtitle">
             {item.draft_status === 'rejected' ? 'Rejected — nothing was sent' : 'Sent'}
           </h3>
-          <pre className="draft__body">{item.sent_body ?? item.draft_body ?? '(no body)'}</pre>
+          <pre className="drawer-body">{item.sent_body ?? item.draft_body ?? '(no body)'}</pre>
         </div>
       )}
 

@@ -1,0 +1,113 @@
+/* Design tokens — STYLE_GUIDE.md §2, reproduced verbatim.
+ *
+ * This is the ONLY file in portal/ allowed to declare a raw color value
+ * (STYLE_GUIDE.md §7). Everything in app.css references these through
+ * var(--…), which is what makes the dark block below a complete re-theme
+ * rather than a second stylesheet.
+ *
+ * Light ships by default. Dark is opt-in via data-theme="dark" on <html>;
+ * there is deliberately no switcher UI in scope.
+ */
+
+:root {
+  /* surfaces — cool neutral */
+  --bg:              oklch(0.975 0.004 240);
+  --surface:         #ffffff;
+  --surface-sunken:  oklch(0.962 0.005 240);
+  --surface-hover:   oklch(0.968 0.005 240);
+  --border:          oklch(0.905 0.008 240);
+  --border-strong:   oklch(0.860 0.010 240);
+  --border-subtle:   oklch(0.940 0.006 240);
+
+  /* ink */
+  --text:            oklch(0.24 0.015 250);
+  --text-muted:      oklch(0.50 0.012 250);
+  --text-faint:      oklch(0.62 0.012 250);
+  --text-inverse:    oklch(0.98 0.003 240);
+
+  /* accent — signal green, hue 152 */
+  --accent:          oklch(0.48 0.10 152);
+  --accent-hover:    oklch(0.42 0.10 152);
+  --accent-ink:      oklch(0.40 0.09 152);
+  --accent-soft:     oklch(0.955 0.028 152);
+  --accent-ring:     oklch(0.48 0.10 152 / 0.16);
+
+  /* status */
+  --status-pending:       oklch(0.62 0.13 75);
+  --status-pending-ink:   oklch(0.44 0.10 75);
+  --status-pending-soft:  oklch(0.965 0.035 85);
+  --status-sent:          oklch(0.48 0.10 152);
+  --status-sent-ink:      oklch(0.40 0.09 152);
+  --status-sent-soft:     oklch(0.955 0.028 152);
+  --status-auto:          oklch(0.52 0.10 245);
+  --status-auto-ink:      oklch(0.44 0.09 245);
+  --status-auto-soft:     oklch(0.960 0.025 245);
+  --status-rejected:      oklch(0.54 0.16 25);
+  --status-rejected-ink:  oklch(0.46 0.14 25);
+  --status-rejected-soft: oklch(0.960 0.028 25);
+  --status-none:          oklch(0.72 0.010 250);
+  --status-none-soft:     oklch(0.955 0.005 240);
+  --danger-border:        oklch(0.88 0.05 25);
+  --danger-ink:           oklch(0.50 0.16 25);
+
+  /* type */
+  --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+
+  /* space / shape / motion */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 24px; --sp-6: 32px; --sp-7: 48px; --sp-8: 64px;
+  --r-control: 6px;
+  --r-card: 10px;
+  --r-pill: 999px;
+  --shadow-card: 0 1px 2px oklch(0.24 0.015 250 / 0.04);
+  --shadow-drawer: -16px 0 48px oklch(0.24 0.015 250 / 0.05);
+  --dur-fast: 120ms;
+  --dur-panel: 180ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+[data-theme='dark'] {
+  --bg:             oklch(0.18 0.014 250);
+  --surface:        oklch(0.22 0.016 250);
+  --surface-sunken: oklch(0.25 0.018 250);
+  --surface-hover:  oklch(0.27 0.018 250);
+  --border:         oklch(0.32 0.020 250);
+  --border-strong:  oklch(0.40 0.022 250);
+  --border-subtle:  oklch(0.28 0.018 250);
+  --text:           oklch(0.96 0.004 240);
+  --text-muted:     oklch(0.74 0.012 240);
+  --text-faint:     oklch(0.62 0.014 240);
+  --text-inverse:   oklch(0.18 0.020 152);
+  --accent:         oklch(0.62 0.12 152);
+  --accent-hover:   oklch(0.68 0.12 152);
+  --accent-ink:     oklch(0.86 0.08 152);
+  --accent-soft:    oklch(0.30 0.05 152);
+  --accent-ring:    oklch(0.62 0.12 152 / 0.24);
+  --status-pending-ink:   oklch(0.88 0.09 85);
+  --status-pending-soft:  oklch(0.32 0.06 75);
+  --status-sent-ink:      oklch(0.86 0.08 152);
+  --status-sent-soft:     oklch(0.30 0.05 152);
+  --status-auto-ink:      oklch(0.86 0.06 245);
+  --status-auto-soft:     oklch(0.30 0.05 245);
+  --status-rejected-ink:  oklch(0.86 0.08 25);
+  --status-rejected-soft: oklch(0.30 0.06 25);
+
+  /* The ONE deviation from STYLE_GUIDE.md §2's verbatim token set, and the reason
+     is §7 of the same document. §2's dark block remaps every status family except
+     `none` — so in dark mode the "no draft" and "off-topic" pills kept their LIGHT
+     background (a near-white oklch(0.955 0.005 240) = rgb(237,241,243)) under dark
+     --text-muted ink. Measured in a real browser via canvas-resolved sRGB:
+     2.03:1, against §7's "Contrast >= 4.5:1 for pill ink on their own backgrounds."
+     Every other dark pill measures 8.79-9.01:1, which is what made these two
+     obvious once anything actually rendered them.
+     §2 is an input; §7 is an acceptance criterion the guide sets for itself, so the
+     criterion wins. These two lines follow §2's own idiom and change nothing in
+     light mode. Dark is opt-in via data-theme and has no switcher UI, so nothing
+     shipped broken — but a token sheet with a known 2.03:1 pair in it would. */
+  --status-none:          oklch(0.55 0.012 250);
+  --status-none-soft:     oklch(0.30 0.010 250);
+
+  --danger-border:  oklch(0.42 0.08 25);
+  --danger-ink:     oklch(0.80 0.11 25);
+}
