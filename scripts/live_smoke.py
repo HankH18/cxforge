@@ -24,8 +24,24 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 REQUIRED_ENV_VARS = ("ZENDESK_SUBDOMAIN", "ZENDESK_OAUTH_TOKEN")
+
+# W1-F4. `docs/STATE.md §6.14` names this script's own output — "live_smoke:
+# Zendesk credentials absent" — as the visible symptom of the fact that
+# nothing in the app or scripts ever called `load_dotenv()`. The credentials
+# were sitting in `.env` the whole time; the documented command in this
+# module's usage line simply could not see them, so the script reported a
+# missing trial that existed and exited 0.
+#
+# `override=False`, matching `backend/src/main.py`: an operator who exported
+# something deliberately still wins. Repo root is derived from this file's
+# location, not the working directory, so `uv run python scripts/live_smoke.py`
+# behaves the same from anywhere. A missing `.env` is not an error.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 
 def _missing_env_vars() -> list[str]:

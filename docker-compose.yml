@@ -1,3 +1,22 @@
+# Dev stack. The production stack is deploy/docker-compose.yml.
+#
+# `db` is what the test suite points at and is unchanged. `redis` + `worker`
+# were added by W1-F1 (ADR-002) so the ingress -> queue -> agent loop can be
+# exercised locally, not only on the droplet.
+#
+# NOTE ON THE DOCUMENTED DEV COMMAND. README.md says `docker compose up -d db`
+# — it names the service, so it still starts Postgres alone and nothing here
+# changes that. A bare `docker compose up -d` now also builds the backend
+# image and starts redis + worker. That is deliberate (the loop should be
+# runnable locally), but it is a behaviour change worth knowing about.
+#
+# ENV: every `${VAR}` below comes from the shell `docker compose` runs in.
+# `.env` is NOT auto-read for these — run
+#     set -a; source .env; set +a
+# first, or each `${VAR}` silently falls back to its `:-` default here.
+# (docs/deploy.md:151 says the same thing about the production stack; this is
+# the same trap in the dev one.)
+
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -18,5 +37,76 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  # Broker for the arq job queue (ADR-002). Deliberately used for nothing
+  # else: Postgres stays the system of record. The host port is published so
+  # a host-run uvicorn/arq (the normal dev shape) can reach it.
+  redis:
+    image: redis:7-alpine
+    container_name: othram-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+    volumes:
+      - redisdata:/data
+
+  # Same image as the production backend, different command (ADR-002).
+  # The image's ENTRYPOINT (deploy/backend/entrypoint.sh) runs the DB
+  # bootstrap and then execs this command — kept here, unlike in the
+  # production stack, because the dev stack has no backend container to
+  # create the schema first.
+  worker:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.backend
+    container_name: othram-worker
+    command: ["arq", "worker.main.WorkerSettings"]
+    environment:
+      # Built from the POSTGRES_* parts against the `db` service, NOT from
+      # the host's DATABASE_URL: that one points at localhost:5432 for a
+      # host-run process, which inside this container is the container's own
+      # loopback. Same reasoning as deploy/docker-compose.yml.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-othram}:${POSTGRES_PASSWORD:-othram}@db:5432/${POSTGRES_DB:-othram}
+      # Likewise pinned to the compose service name `redis`, NOT
+      # `${REDIS_URL}`: the host's REDIS_URL is localhost-shaped (for a
+      # host-run process) and would resolve to this container's own
+      # loopback. backend/tests/deploy/test_env_forwarding.py allows a
+      # literal here precisely because it names a service in this file.
+      REDIS_URL: redis://redis:6379/0
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ZENDESK_SUBDOMAIN: ${ZENDESK_SUBDOMAIN:-}
+      ZENDESK_OAUTH_TOKEN: ${ZENDESK_OAUTH_TOKEN:-}
+      ZENDESK_AI_USER_ID: ${ZENDESK_AI_USER_ID:-}
+      ZENDESK_WEBHOOK_SIGNING_SECRET: ${ZENDESK_WEBHOOK_SIGNING_SECRET:-}
+      PORTAL_TOKEN: ${PORTAL_TOKEN:-dev-portal-token}
+      # ADR-008 / W2-B1: resolved by the voyageai SDK, so no os.environ
+      # read names it anywhere in backend/src. Forwarded ahead of B1 and
+      # required by test_env_forwarding.py's SDK_RESOLVED_VARIABLES.
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+      # Defaults to FALSE here, unlike the production stack, and the asymmetry
+      # is deliberate — backend/tests/deploy/test_compose_topology.py pins both
+      # halves so neither drifts by accident. This `db` is `othram-db`, the
+      # container the whole test suite runs against, and its `public` schema
+      # holds whatever the developer seeded by hand. A bare
+      # `docker compose up -d` has no business rewriting that; the suite is
+      # insulated by per-process OTHRAM_TEST_SCHEMA schemas, but the
+      # developer's own data is not. Seed the dev database deliberately
+      # (`uv run python -m data.seed`), not as a side effect of starting a
+      # worker. `false` still creates the schema if it is missing.
+      SEED_ON_START: ${SEED_ON_START:-false}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   pgdata:
+  redisdata:

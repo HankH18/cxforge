@@ -1,5 +1,16 @@
 # Production stack for the Othram AI Support Agent (T-11).
 #
+# W1-F1/F2 (2026-08-16) added three services to the original db/backend/portal
+# set: `redis` (arq broker, ADR-002), `worker` (the same backend image with an
+# arq command, ADR-002) and `cloudflared` (named tunnel, ADR-005). The
+# cloudflared service has NEVER been run — see its own comment block and
+# docs/OWNER-ACTIONS.md OA-3.
+#
+# Every env var the application reads must be forwarded to every container
+# running the application image. That is not a convention here, it is
+# asserted by backend/tests/deploy/test_env_forwarding.py, which derives the
+# variable list from the source rather than from a list anyone maintains.
+#
 # Self-contained under deploy/ per SPEC#constraints: the root
 # docker-compose.yml (T-0) is dev-only — a bare Postgres container the
 # test suite points at — and out of this ticket's edit scope. This file
@@ -95,13 +106,31 @@ services:
       # longer reads that name at all, so forwarding it deployed a stack
       # that could not reach the model.)
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # ADR-008 / W2-B1: resolved by the voyageai SDK, so no os.environ
+      # read names it anywhere in backend/src. Forwarded ahead of B1 and
+      # required by test_env_forwarding.py's SDK_RESOLVED_VARIABLES.
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
-      # deploy/backend/bootstrap.py — see that file's docstring.
+      # Broker for the arq queue (ADR-002). Pinned to the compose service
+      # name `redis`, NOT `${REDIS_URL}`: the host's REDIS_URL in .env is
+      # localhost-shaped, for a host-run dev process, and inside a container
+      # localhost is the container itself. Same reasoning as DATABASE_URL
+      # above. backend/tests/deploy/test_env_forwarding.py permits a literal
+      # here only because it names a service defined in this file.
+      REDIS_URL: redis://redis:6379/0
+      # deploy/backend/bootstrap.py — see that file's docstring. The default
+      # is `true`, which since 2026-08-16 means "seed only into an empty
+      # database", NOT "truncate and reload on every restart". `.env` has no
+      # SEED_ON_START line, so this default is what a droplet actually gets
+      # even through deploy/compose.sh — which is precisely why the safe
+      # behaviour had to become the default rather than a documented opt-in.
       SEED_ON_START: ${SEED_ON_START:-true}
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     ports:
       - "${BACKEND_PORT:-8000}:8000"
@@ -117,6 +146,152 @@ services:
       timeout: 3s
       retries: 20
       start_period: 10s
+    restart: unless-stopped
+    networks:
+      - othram-deploy
+
+  # --- Job queue broker (W1-F1, ADR-002) ---------------------------------
+  # Deliberately used for nothing but the arq queue `cxforge:jobs`. Postgres
+  # stays the system of record; nothing in this stack reads application state
+  # from Redis. No `ports:` — it is reachable only from `backend` and
+  # `worker` on the internal network, exactly like `db`.
+  #
+  # The named volume exists so a container restart does not silently drop a
+  # queued job on the floor (a dropped job means a customer comment that is
+  # never answered AND whose `tickets_seen` row is still present, so a retry
+  # of the same webhook is treated as a duplicate). That is durability for
+  # in-flight work, not a second system of record.
+  redis:
+    image: redis:7-alpine
+    container_name: othram-deploy-redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+    volumes:
+      - deploy_redisdata:/data
+    restart: unless-stopped
+    networks:
+      - othram-deploy
+
+  # --- arq worker (W1-F1, ADR-002) ---------------------------------------
+  # The SAME image as `backend`, with a different command. It consumes
+  # `cxforge:jobs` and runs the agent; the frozen contract (docs/DESIGN.md
+  # §1.1) is the arq task name `run_ticket` and the queue name
+  # `cxforge:jobs`, both of which live in backend/src/worker/ (W1-A), not
+  # here. The command string below is pinned by the owner and is identical
+  # to the one W1-A was given.
+  #
+  # `entrypoint: []` resets the image's ENTRYPOINT (deploy/backend/
+  # entrypoint.sh) so this container does NOT run the DB bootstrap. Exactly
+  # one process owns schema creation and fixture seeding; `backend` does, and
+  # `depends_on: backend: service_healthy` means the worker only starts after
+  # that bootstrap has finished and uvicorn is answering /health. This is also
+  # why `SEED_ON_START` is absent from this service and present on `backend` —
+  # backend/tests/deploy/test_env_forwarding.py derives that distinction from
+  # this `entrypoint:` key rather than from a hand-written list.
+  #
+  # THIS ALONE DOES NOT MAKE SEEDING SAFE, and an earlier revision of this
+  # comment implied it did. It removes the second seeder. It does not stop the
+  # first one: `backend` carries `restart: unless-stopped`, and a `depends_on`
+  # condition orders `up` only — not a restart, not the daemon restoring
+  # containers after a reboot. Any backend restart re-runs the bootstrap while
+  # this worker is already consuming jobs. What actually closes that is
+  # deploy/backend/bootstrap.py, which since 2026-08-16 seeds only into an
+  # empty database unless SEED_ON_START=force; see its docstring and
+  # backend/tests/deploy/test_bootstrap_seeding.py.
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    container_name: othram-deploy-worker
+    entrypoint: []
+    command: ["arq", "worker.main.WorkerSettings"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-othram}:${POSTGRES_PASSWORD:-othram}@db:5432/${POSTGRES_DB:-othram}
+      REDIS_URL: redis://redis:6379/0
+      PORTAL_TOKEN: ${PORTAL_TOKEN:-dev-portal-token}
+      ZENDESK_SUBDOMAIN: ${ZENDESK_SUBDOMAIN:-}
+      ZENDESK_OAUTH_TOKEN: ${ZENDESK_OAUTH_TOKEN:-}
+      ZENDESK_AI_USER_ID: ${ZENDESK_AI_USER_ID:-}
+      ZENDESK_WEBHOOK_SIGNING_SECRET: ${ZENDESK_WEBHOOK_SIGNING_SECRET:-}
+      # NOT optional for the worker, unlike for `backend`: this container's
+      # entire job is to call the model. An empty value here is a worker
+      # that accepts jobs and fails every one of them.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # ADR-008 / W2-B1: resolved by the voyageai SDK, so no os.environ
+      # read names it anywhere in backend/src. Forwarded ahead of B1 and
+      # required by test_env_forwarding.py's SDK_RESOLVED_VARIABLES.
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - othram-deploy
+
+  # --- Cloudflare named tunnel (W1-F2, ADR-005) --------------------------
+  # UNVERIFIED AGAINST A LIVE TUNNEL — still true, but for a narrower reason
+  # than when this was written. OA-3 has since been completed: the token is in
+  # .env and PUBLIC_BASE_URL=https://cxforge.hankholcomb.com. Measured
+  # 2026-08-16 from outside the droplet:
+  #     GET https://cxforge.hankholcomb.com/health -> HTTP/2 502, server: cloudflare
+  # DNS resolves to Cloudflare anycast and the edge terminates TLS, so the
+  # hostname is real. The 502 is the edge failing to reach an origin, which is
+  # correct — this service has never been started. Nothing here has carried a
+  # request to `backend:8000`, and only W3-G3 can establish that.
+  #
+  # Transport: the tunnel dials OUT to Cloudflare, so the droplet opens no
+  # inbound port. The public hostname terminates at `backend:8000` — the
+  # compose service name, resolved on this network — which is why `backend`'s
+  # published `${BACKEND_PORT}` is not what the internet reaches.
+  #
+  # Where the ingress rule lives: this is a *token*-managed (dashboard-
+  # managed) named tunnel, so the hostname -> `http://backend:8000` mapping
+  # is configured in the Cloudflare dashboard and delivered with the token.
+  # cloudflared ignores a local `ingress:` block in that mode, so committing
+  # one here would be a file that looks like configuration and configures
+  # nothing. The committed artifact is deploy/cloudflared/README.md, which
+  # records the exact rule to set and is asserted by
+  # backend/tests/deploy/test_compose_topology.py so it cannot drift.
+  #
+  # Why `${CLOUDFLARE_TUNNEL_TOKEN}` with NO `:-` default: `:-` would render
+  # an empty string and start a cloudflared that serves nothing while looking
+  # up. With no default, `docker compose` prints a "variable is not set"
+  # warning and cloudflared exits non-zero at startup. Once OA-3 lands and the
+  # token is a hard requirement, changing `${CLOUDFLARE_TUNNEL_TOKEN}` to
+  # `${CLOUDFLARE_TUNNEL_TOKEN:?set it — see docs/OWNER-ACTIONS.md OA-3}`
+  # upgrades that warning to a hard parse failure. It is deliberately NOT
+  # written that way today: `:?` fails interpolation for the WHOLE file, for
+  # every service, including `scripts/verify_deploy.sh --local`, which would
+  # make an owner action nobody has taken yet block work that does not need
+  # it.
+  cloudflared:
+    image: cloudflare/cloudflared:2026.8.2
+    container_name: othram-deploy-cloudflared
+    command: ["tunnel", "--no-autoupdate", "--metrics", "0.0.0.0:2000", "run"]
+    environment:
+      # cloudflared reads the token from TUNNEL_TOKEN natively, so it never
+      # appears in the process's argv (where `docker inspect`/`ps` would
+      # print it).
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      backend:
+        condition: service_healthy
+    # No healthcheck: the image ships no shell and no wget/curl, so a
+    # container-local probe is not expressible. cloudflared serves
+    # http://<container>:2000/ready on the metrics port above — W3-G3 must
+    # read that back (or fetch ${PUBLIC_BASE_URL}/health from outside the
+    # droplet) rather than trust that this container is "running".
     restart: unless-stopped
     networks:
       - othram-deploy
@@ -149,6 +324,8 @@ services:
 volumes:
   deploy_pgdata:
     name: othram-deploy-pgdata
+  deploy_redisdata:
+    name: othram-deploy-redisdata
 
 networks:
   othram-deploy:

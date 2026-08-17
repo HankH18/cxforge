@@ -148,9 +148,26 @@ Fill in on the droplet's copy (values you already have locally, per
 On the droplet, from the repo root:
 
 ```bash
+deploy/compose.sh up -d --build --wait
+```
+
+`deploy/compose.sh` is `docker compose -f deploy/docker-compose.yml` with the source step
+already built in. The long form still works and is exactly equivalent:
+
+```bash
 set -a; source .env; set +a
 docker compose -f deploy/docker-compose.yml up -d --build --wait
 ```
+
+**Do not run the second command without the first line.** `docker compose` reads `.env`
+from the directory holding the compose file — here `deploy/`, which has no `.env`.
+Measured 2026-08-16: plain `docker compose -f deploy/docker-compose.yml config` renders
+`ANTHROPIC_API_KEY`, all four `ZENDESK_*` and both `LANGFUSE_*` keys as the **empty
+string**, and `PORTAL_TOKEN` as the literal `dev-portal-token` — from a repo whose `.env`
+has every one of them populated. Nothing fails. It deploys a stack that cannot answer a
+ticket. (The *root* `docker-compose.yml` does pick `.env` up automatically, because its
+project directory is the repo root — so the trap applies to exactly the stack that matters
+and not to the one you test with.)
 
 This is exactly what `scripts/verify_deploy.sh` does in local mode, minus
 the teardown at the end — the whole point of a real deploy is to leave it
@@ -199,10 +216,15 @@ page source, no auth required to fetch it). That's an acceptable tradeoff
 for a token guarding anything beyond this project's single-shared-secret
 portal. Two consequences worth knowing before you deploy:
 
-- If you rotate `PORTAL_TOKEN`, you must **rebuild the portal image**
-  (`docker compose -f deploy/docker-compose.yml up -d --build portal`) —
-  changing the backend's env var alone does not change what's already
-  baked into the shipped JS.
+- If you rotate `PORTAL_TOKEN`, you must **rebuild the portal image** — changing the
+  backend's env var alone does not change what is already baked into the shipped JS:
+  ```bash
+  deploy/compose.sh up -d --build portal
+  ```
+  Use the wrapper, or `set -a; source .env; set +a` first. Running
+  `docker compose -f deploy/docker-compose.yml up -d --build portal` on its own bakes
+  **`VITE_PORTAL_TOKEN=dev-portal-token`** into the bundle — so the rotation silently
+  produces a portal authenticating with the default token.
 - Don't put a droplet running this portal anywhere the demo audience
   isn't fully trusted with API access — the "auth" is discoverable by
   design.
