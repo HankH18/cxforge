@@ -360,8 +360,8 @@ Status as of **2026-08-16**, each verified by reading the effect back — not by
 | Voyage AI API key | W2-B1 | ✅ **DONE** — key present and verified live 2026-08-16 (`voyage-4-lite`, `output_dimension=1024` → exactly 1024 dims). **But the account has no payment method**, so it is on the free tier's 3 RPM / 10k TPM — see §10.3 |
 | Voyage billing + `KB_EMBEDDER=voyage` in the deploy env | the Voyage reseed being what production actually uses | ❌ **OUTSTANDING** — see §10.3 |
 | Langfuse `cxforge` project + correct `pk-lf-` / `sk-lf-` pair | W2-C1 | ✅ **DONE** — keys resolve to project `cxforge`; prefixes differ |
-| Cloudflare domain + named tunnel token | W1-F2, W3-G3, W4 | ✅ **DONE** — token in `.env` (184 chars); `PUBLIC_BASE_URL=https://cxforge.hankholcomb.com`; DNS resolves to Cloudflare anycast (`172.67.136.113`, `104.21.7.150`); the edge returns **502**, which is correct — it found the tunnel and the origin is not deployed yet (W3-G3) |
-| Zendesk OAuth re-auth (browser PKCE consent) | W4 entirely | ✅ **DONE** — `/api/v2/users/me.json` returns 200. Webhook still needs re-pointing once OA-3 lands |
+| Cloudflare domain + named tunnel token | W1-F2, W3-G3, W4 | ⚠️ **ONE FIELD WRONG** — token and hostname are fine and the connector is up with 4 ready connections, but the dashboard ingress rule says `https://backend:8000` against a plaintext origin, so the edge still returns **502** after the redeploy. 30-second dashboard fix; see §10.5(c) and OA-3 |
+| Zendesk OAuth re-auth (browser PKCE consent) | **W3-G3, W3-G2's ability to pass, W4 entirely** | ❌ **REOPENED, and now understood** — the token is a **JWT that lives ~25 minutes** (`exp` is its only claim). 200 at 05:38, expired 06:03:13, 401 in the droplet's worker at 06:05:36 on 2026-08-17. A re-auth buys a 25-minute window, so it cannot carry ADR-015's 20–30-ticket run or a demo take. The client **would** honour a `refresh_token` grant the flow never requests. See §10.5(b) and OA-4 |
 | Record the demo video | W5-J4 | Last |
 
 ### 10.1 ✅ RESOLVED — the retired harness no longer constrains new work
@@ -519,6 +519,129 @@ the live e2e run: **query-time** embedding also costs one request per `search_kb
 3 RPM is a hard ceiling on agent throughput, and W4's 20–30-ticket scenario run would be
 throttled by it. Adding a payment method lifts the limits within minutes and the free token
 grant still applies.
+
+### 10.4 W3-G2 measured findings — the deep check works, and it found a live blocker
+
+**2026-08-17, W3-G2.** `scripts/verify_deploy.sh --deep` + `scripts/verify_core_loop.py`.
+
+**(a) The check does what it was built to do.** Against the droplet, assertions 1–4 pass and
+the deep check **fails**: `no new runs row for ticket cxforge-verify-W3G2 after 240.9s`,
+exit 1. Against a stack assembled on this machine with a real Redis, a real `arq` worker,
+real Anthropic calls and the real Postgres, it **passes** in 8.2s with a `runs` row whose
+`replied_at - received_at` is **7.576s** — against the 22µs the pre-ADR-004 code produced.
+The Redis hop `docs/STATE.md §1` names as "the largest remaining unknown" has now been
+crossed by a real connection: the `cxforge:jobs` list held a pickled `run_ticket` job
+carrying `ticket_id`, `comment_id` and `received_at`, exactly as §1.1 froze it.
+
+**(b) Blocker — `ZENDESK_OAUTH_TOKEN` is dead again (401 `invalid_token`), so no deployment
+can produce a `runs` row at all.** `ingest` calls `fetch_ticket` first; a 401 there fails the
+run, releases the dedup row (ADR-003) and writes nothing. **This gates W3-G3 as much as
+W4**: a redeploy with a connected loop and this token gives a stack that is healthy in
+`docker compose ps`, green on `verify_deploy.sh` 4/4, and unable to answer a single ticket —
+with arq booking every failed run as `success = True`. Re-auth is OA-4, two minutes, needs a
+browser. **Do it before G3, not after.**
+
+**(c) Consequence for G2's own verification, stated plainly.** With the trial unreachable,
+the passing demonstration was obtained by stubbing **only** the Zendesk vendor — a local
+HTTPS server reached through `ZENDESK_SUBDOMAIN`, with everything else (HTTP ingress, Redis,
+the arq worker, `run_agent`, Anthropic, Postgres, the portal API) real and unmodified. So
+what is proven is every hop except the live Zendesk API, which `backend/tests/helpdesk`'s
+contract suite covers over mocked HTTP and `scripts/live_smoke.py` covers by hand. What is
+**not** proven is a green `--deep` against a real deployment; that needs OA-4, then G3.
+
+**(d) The deep check is opt-in, and a run without it now says so.** Every `PASS` prints a
+`SCOPE:` line on the next line stating what it does not cover, because an unqualified PASS
+from four liveness assertions is precisely what carried "the deploy works" for weeks
+(`docs/STATE.md §6.2`).
+
+### 10.5 W3-G3 measured findings — the droplet now runs the real loop, and two things gate it
+
+**2026-08-17, W3-G3.** The droplet at **`161.35.2.250`** (DigitalOcean id `592687747`, name
+`cxforge`; the other two droplets on the account were not touched) was redeployed by rsync +
+`scp .env` + `deploy/compose.sh up -d --build --wait`. Six services, all reporting healthy,
+`--wait` exit 0. Everything below was read back from the running system.
+
+**(a) The Redis hop is crossed on the real deployment.** `docs/STATE.md §1` called it "the
+largest remaining unknown" and noted no code in this repo had ever opened a real Redis
+connection. It has now. A correctly HMAC-signed synthetic webhook at
+`http://161.35.2.250:8080/webhooks/zendesk` returned `202 {"status":"accepted","duplicate":false}`,
+and the droplet's arq worker picked the job up in **0.11 s**:
+
+```
+0.11s → 2427dbf78d2b4377aa515dfad509a292:run_ticket({'ticket_id': '3', 'comment_id': 'cxforge-ve…
+"message": "agent run started", "ticket_id": "3", "comment_id": "cxforge-verify-8e7540b6…"
+```
+
+`run_agent` then entered LangGraph and reached `ingest`. So ingress → `tickets_seen` →
+real Redis → real arq worker → `run_agent` → `nodes.ingest` all work **on the droplet**.
+
+**(b) `scripts/verify_deploy.sh --deep` still FAILS, and for a reason that is not the
+deploy.** `ingest`'s `fetch_ticket` got **401 `invalid_token`** from Zendesk, ADR-003
+released the dedup row, the ERROR was logged with a full traceback, and no `runs` row was
+written — precisely the sequence §10.4(b) predicted. What is new is *why*, and it is worse
+than "the token is dead": **the token is a JWT whose only claim is `exp`, and it lives about
+25 minutes.** It answered 200 at 05:38, its `exp` was `2026-08-17T06:03:13Z`, the worker used
+it at 06:05:36 and got 401, and the same token 401'd from the developer's laptop at 06:07 —
+byte-identical (sha256 `9d39383bf53efa5e…`) in `.env`, on the droplet, and inside both
+containers. Nothing revoked it; it expired. See `docs/OWNER-ACTIONS.md` OA-4, which now
+carries the timeline, the consequence for ADR-015's 20–30-ticket run, and the measured
+evidence that the client **would** honour a `refresh_token` grant that
+`scripts/zendesk_oauth.py` never asks for.
+
+**(c) The public hostname is still 502, and it is one dashboard dropdown.** `cloudflared`
+runs with `readyConnections: 4`, but the ingress rule Cloudflare pushes down says
+`"service":"https://backend:8000"` while uvicorn serves plain HTTP (`http://backend:8000/health`
+→ 200; `https://` → `SSL routines::wrong version number`). `deploy/cloudflared/README.md`
+and OA-3 step 3 both record the rule as Service type **HTTP**. Full evidence, the two
+failed workarounds, and the fix are in OA-3's banner. **This blocks the Zendesk webhook**
+(already re-pointed at `${PUBLIC_BASE_URL}/webhooks/zendesk`), not `verify_deploy.sh`.
+
+**(d) Defect found and fixed in this package: the worker's healthcheck could never pass.**
+A container inherits the image's `HEALTHCHECK` unless the service overrides it, and
+`deploy/Dockerfile.backend`'s is an HTTP GET to `127.0.0.1:8000/health`. The `worker`
+service overrode nothing, so it ran `arq`, served no HTTP, and sat at `Up (unhealthy)` with
+FailingStreak 25 while consuming jobs normally — and `deploy/compose.sh up -d --build --wait`
+exited **1** with "container othram-deploy-worker is unhealthy" on an otherwise successful
+deploy. Both compose files now declare a probe for the health-check key arq writes into
+Redis, assembled from `worker.settings.QUEUE_NAME` + `arq.constants.health_check_key_suffix`
+so no literal is duplicated. `arq --check` was tried first and rejected on measurement: it
+imports the whole agent stack and takes **16.5 s** on this 2-vCPU droplet versus **1.8 s**
+for the key probe. Pinned by
+`backend/tests/deploy/test_compose_topology.py::test_the_worker_overrides_the_images_http_healthcheck`,
+which was confirmed red with the override removed and red again with an HTTP-8000 probe
+substituted.
+
+**(e) Everything a successful run needs, proved separately from inside the deployed
+containers** — because the run itself never got past `ingest`:
+
+| Hop | Read back from the droplet |
+|---|---|
+| Anthropic | `messages.create` → `model: claude-opus-5`, `stop_reason: end_turn`, text `deployed`, 17 in / 5 out |
+| Langfuse | `GET /api/public/projects` with the deployed keys → **200**, `name: "cxforge"`, org `hank-personal`, host `https://us.cloud.langfuse.com` |
+| Retrieval | `KB_EMBEDDER=hashing`, `HashingEmbedder`, `search_kb` → 3 hits, top `pipeline-stages-overview` @ 0.289 |
+| Seeding | bootstrap logged *"NOT seeding — 30 cases and 44 kb chunks are already present"*; both counts unchanged after the redeploy |
+
+**(f) Production still retrieves lexically, deliberately.** `KB_EMBEDDER=hashing` was pinned
+explicitly in the droplet's `.env` rather than left to the compose default. Flipping to
+Voyage needs the reseed in the same window (§10.3) and is a separate operation.
+
+**(g) Not proven, and it needs to be said plainly.** Nothing downstream of `ingest` has run
+on the droplet: no `classify`/`compose`/`verify`/`act`, **no `runs` row has ever existed
+there** (the table is still empty), no draft, no Langfuse trace *from a droplet run*, and no
+public reply posted by the deployed agent. The tunnel has carried no request to the origin.
+And separately from OA-3: the Zendesk account has **zero active triggers with a
+`notification_webhook` action**, so even with the tunnel fixed, a real customer comment
+would not reach the droplet — only the synthetic POST `--deep` sends. That is a Wave 4
+prerequisite nobody has written down yet.
+
+**(h) Residue.** The pre-existing `tickets_seen` row from §10.4 was deleted
+(`DELETE 1`, table now 0 rows). `--deep`'s own row was already gone — ADR-003 released it on
+the failed run — so its cleanup reported `tickets_seen=0`. `cases`/`kb_chunks` are 30/44,
+`runs`/`drafts` are 0/0. One `arq:result:*` key remains in Redis with arq's default TTL;
+that is arq's own bookkeeping, not application state. Zendesk **ticket 3**
+("W3-G3 deploy verification — case status question", requester `w.park@example.com`, tag
+`cxforge-verify`) was created as the disposable `CXFORGE_VERIFY_TICKET_ID` and left in place
+deliberately — the check is designed to reuse one ticket, and the retry after OA-4 needs it.
 
 ---
 

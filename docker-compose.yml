@@ -65,6 +65,30 @@ services:
       dockerfile: deploy/Dockerfile.backend
     container_name: othram-worker
     command: ["arq", "worker.main.WorkerSettings"]
+    # Same override, and for the same reason, as the production stack's worker
+    # — see deploy/docker-compose.yml for the full note. Short version: this
+    # container inherits deploy/Dockerfile.backend's HEALTHCHECK, an HTTP GET
+    # to 127.0.0.1:8000/health that an `arq` process can never answer, so
+    # without this override the worker reports `unhealthy` forever and
+    # `docker compose up --wait` exits non-zero on a working stack. The probe
+    # checks for the health-check key arq writes into Redis — liveness of the
+    # broker link, nothing about whether runs succeed (`run_ticket` swallows
+    # failures; see its docstring) and nothing timely about a hang (arq's
+    # default `health_check_interval` is 3600s). It carries no string
+    # literals: the key is assembled from `worker.settings.QUEUE_NAME` and
+    # `arq.constants.health_check_key_suffix`.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import sys;from arq.constants import health_check_key_suffix as s;from worker.settings import QUEUE_NAME,redis_url;from redis import Redis;sys.exit(0 if Redis.from_url(redis_url()).exists(QUEUE_NAME+s) else 1)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     environment:
       # Built from the POSTGRES_* parts against the `db` service, NOT from
       # the host's DATABASE_URL: that one points at localhost:5432 for a

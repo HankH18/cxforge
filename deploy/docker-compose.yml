@@ -227,6 +227,65 @@ services:
     container_name: othram-deploy-worker
     entrypoint: []
     command: ["arq", "worker.main.WorkerSettings"]
+    # W3-G3, 2026-08-17. A container inherits the IMAGE's HEALTHCHECK unless
+    # the service overrides it, and deploy/Dockerfile.backend's is an HTTP GET
+    # to 127.0.0.1:8000/health. This container runs `arq`, serves no HTTP, and
+    # therefore can NEVER pass it. Measured on the droplet during the redeploy:
+    # `othram-deploy-worker` sat at `Up (unhealthy)`, FailingStreak 25,
+    # `ConnectionRefusedError: [Errno 111]` on every probe — while it was in
+    # fact connected to Redis and consuming `cxforge:jobs` — and
+    # `deploy/compose.sh up -d --build --wait` exited **1** with "container
+    # othram-deploy-worker is unhealthy" on an otherwise successful deploy. So
+    # `--wait` could never succeed on this stack, and `docker compose ps`
+    # reported a working service as broken. A permanently-red probe on a
+    # healthy service is the same class of defect as a permanently-green one on
+    # a broken service (docs/STATE.md §6.2): it makes the signal worthless.
+    #
+    # What replaces it: a probe for the health-check key `arq` writes into
+    # Redis. It exits 0 only when that key is present, so it covers the
+    # process having recorded health AND the broker link being usable
+    # (measured on the droplet: key present -> 0; key deleted -> 1; REDIS_URL
+    # pointed at a dead port -> ConnectionError, 1).
+    #
+    # NOT `arq --check`, which is the obvious choice and was tried first:
+    # it imports `worker.main`, which pulls in langgraph/langchain/anthropic,
+    # and took **16.5s** on this 2-vCPU droplet — over any sane healthcheck
+    # timeout, and 16s of CPU every interval competing with the agent runs
+    # this box exists to serve. The probe below imports only `redis` and
+    # `worker.settings` and takes **1.8s**.
+    #
+    # It contains no string literals: the queue name comes from
+    # `worker.settings.QUEUE_NAME` (the frozen contract, DESIGN §1.1) and the
+    # suffix from `arq.constants.health_check_key_suffix`, so neither this file
+    # nor arq's internal naming can drift away from the other. A hand-written
+    # "cxforge:jobs:health-check" here would be a third copy of a string whose
+    # whole point is that there is one.
+    #
+    # TWO THINGS IT DOES NOT PROVE, stated because both are easy to over-read.
+    # (1) That runs SUCCEED. `backend/src/worker/main.py`'s `run_ticket`
+    # swallows the exception after releasing the dedup row (ADR-003), so arq
+    # books a failed run as `success = True`; this check stays green while
+    # every run fails. Only `scripts/verify_deploy.sh --deep` fails when the
+    # loop is severed. (2) That the worker is responsive *right now*. arq's
+    # `health_check_interval` defaults to 3600s and it sets the key with a
+    # TTL of interval+1, so a worker that hangs without exiting keeps a valid
+    # key for up to an hour. A process that *exits* is caught immediately —
+    # arq is this container's command, so it takes the container down with it.
+    # Closing the hang window means setting `health_check_interval` on
+    # `WorkerSettings` in `backend/src/worker/main.py`, which is W1-A's file in
+    # the ownership matrix; flagged for the owner rather than taken here.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import sys;from arq.constants import health_check_key_suffix as s;from worker.settings import QUEUE_NAME,redis_url;from redis import Redis;sys.exit(0 if Redis.from_url(redis_url()).exists(QUEUE_NAME+s) else 1)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-othram}:${POSTGRES_PASSWORD:-othram}@db:5432/${POSTGRES_DB:-othram}
       REDIS_URL: redis://redis:6379/0

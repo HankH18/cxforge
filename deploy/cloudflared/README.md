@@ -3,6 +3,50 @@
 **Status: UNVERIFIED AGAINST A LIVE TUNNEL.** Written 2026-08-16 for work
 package W1-F2 (ADR-005).
 
+> ### W3-G3, 2026-08-17: the checks below HAVE now been run. Check 3 returns 502.
+>
+> The marker above stays, because it means exactly what it says and is still
+> true: **no request from outside the droplet has reached the app.** What has
+> changed is that this is no longer untested — it is tested and failing, with
+> the cause identified, and the cause is not in this repo.
+>
+> | Check | Result |
+> |---|---|
+> | 1. `cloudflared` connects | **Yes.** 4 QUIC connections registered (`ewr01/08/11/12`), all connectivity pre-checks PASS, `GET http://cloudflared:2000/ready` → `{"status":200,"readyConnections":4,...}` |
+> | 2. Connector registered with Cloudflare | **Yes** — implied by 4 registered connections and by Cloudflare pushing configuration down to it |
+> | 3. `curl $PUBLIC_BASE_URL/health` from outside | **502** |
+>
+> **Why 3 fails.** The configuration Cloudflare delivers with the token names
+> the origin as **`https://backend:8000`**, from the connector's own log:
+>
+> ```
+> INF Updated to new configuration config="{\"ingress\":[
+>       {\"hostname\":\"cxforge.hankholcomb.com\",\"service\":\"https://backend:8000\"},
+>       {\"service\":\"http_status:404\"}],\"warp-routing\":{\"enabled\":false}}" version=1
+> ```
+>
+> The table further down this page — and OA-3 step 3, which the owner followed
+> — say Service type **`HTTP`**. `backend` is uvicorn with no TLS, so the
+> connector's handshake fails. Measured from inside the compose network:
+>
+> ```
+> curl    http://backend:8000/health  ->  200
+> curl -k https://backend:8000/health ->  000   curl: (35) TLS connect error:
+>                                                error:0A00010B:SSL routines::wrong version number
+> ```
+>
+> **Fix: change the dashboard's Service type from `HTTPS` to `HTTP`** on the
+> `cxforge.hankholcomb.com` public hostname. No redeploy needed — the connector
+> reloads remote configuration in seconds. `docs/OWNER-ACTIONS.md` OA-3 carries it.
+>
+> **Do not try to fix it from this directory.** Two attempts are recorded so
+> they are not repeated: there is no Cloudflare **API** token on the build
+> machine (only `CLOUDFLARE_TUNNEL_TOKEN`, which is not one), and a connector
+> started with `run --url http://backend:8000` logs its `--url` setting and then
+> immediately overrides it with the remote `https://backend:8000` — remote
+> configuration wins for a token-managed tunnel, exactly as the section below
+> says it does.
+
 **OA-3 has since been completed by the owner**, so the earlier version of this
 paragraph ("no tunnel exists, the token is absent") is out of date. What is
 true as of 2026-08-16, measured rather than assumed:
@@ -142,4 +186,10 @@ curl -sS -o /dev/null -w '%{http_code}\n' "$PUBLIC_BASE_URL/health"     # expect
 
 Check 3 passing means the hostname resolves, Cloudflare terminates TLS, the
 tunnel is connected, and `backend:8000` answered. Nothing less than that
-should be written down as "the tunnel is up", and none of it has been run.
+should be written down as "the tunnel is up".
+
+**Run 2026-08-17 (W3-G3): checks 1 and 2 pass, check 3 returns 502** — see the
+banner at the top of this file for the connector log, the origin-scheme
+mismatch that causes it, and the one-field dashboard fix. The distinction this
+section draws is exactly the one that mattered: 1 and 2 were both green while
+the only check that counts was red.

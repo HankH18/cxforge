@@ -1,5 +1,34 @@
 # Deploying to DigitalOcean (T-11)
 
+> ## Status after W3-G3's redeploy — 2026-08-17
+>
+> The droplet at **`161.35.2.250`** (DO id `592687747`, name `cxforge`) now runs
+> the **six**-service stack, not the original three: `db`, `backend`, `portal`,
+> plus `redis` + `worker` (ADR-002) and `cloudflared` (ADR-005). Deployed by
+> rsync (§3 Option B) + `scp .env` (§4) + `deploy/compose.sh up -d --build
+> --wait`, which now exits **0** with all six containers up and five reporting
+> `healthy` (`cloudflared` declares no healthcheck — probe its
+> `:2000/ready` instead).
+>
+> **What works, read back:** liveness 4/4 in REMOTE mode; the core loop as far
+> as `nodes.ingest` (signed webhook → 202 → real Redis → arq worker in 0.11s →
+> `run_agent`); Anthropic `claude-opus-5` from inside the worker container;
+> Langfuse keys resolving to project `cxforge`; `search_kb` returning graded
+> hits from the seeded KB.
+>
+> **Two things still block it, neither of them in this repo:**
+> 1. **`ZENDESK_OAUTH_TOKEN` is a JWT that lives ~25 minutes.** Every run dies
+>    at `ingest`'s `fetch_ticket` with 401, so **`runs` is still empty on the
+>    droplet** and `--deep` still fails. OA-4.
+> 2. **`https://cxforge.hankholcomb.com` is still 502** — the tunnel's dashboard
+>    ingress rule says `https://backend:8000` against a plaintext origin. OA-3.
+>
+> `docs/BUILD-PLAN.md §10.5` has the full evidence. §7 below has the corrected
+> `--deep` procedure, including how to reach the droplet's Postgres.
+>
+> This page still describes the original three-service deploy in places. A full
+> rewrite for the worker/queue/tunnel topology is **W5-J2**, not done here.
+
 **Status as of this writing: this project's droplet exists at
 `161.35.2.250`, and `DEPLOY_HOST` in `.env` is set to it.** The stack is
 live there and passes `scripts/verify_deploy.sh` in REMOTE mode, 4/4.
@@ -221,10 +250,29 @@ On first boot, `deploy/backend/entrypoint.sh` runs
 schema and (by default, `SEED_ON_START=true`) loads the fixture
 cases/KB content, so the portal feed and KB grounding have real content
 immediately — confirmed locally: a fresh local run seeded 30 cases and 44
-KB chunks. Set `SEED_ON_START=false` on a restart of an already-live,
-already-in-use deploy to skip re-seeding `cases`/`kb_chunks` (it never
-touches `runs`/`drafts`/`settings`, so this is about avoiding unnecessary
-work on restart, not data safety).
+KB chunks.
+
+**`SEED_ON_START`'s semantics changed on 2026-08-16 and the sentence that used
+to follow here was stale.** It said to set `SEED_ON_START=false` on a restart of
+an already-live deploy. That is no longer necessary, and the reason matters:
+`true` (the default, and what a droplet actually gets, since `.env` has no
+`SEED_ON_START` line) now means *create the schema, then seed `cases`/`kb_chunks`
+**only if both tables are empty***. `false` is schema-only. **`force`** is the
+old unconditional behaviour, and it `TRUNCATE`s both tables — only do that with
+no worker running, or a retrieval in flight sees an empty knowledge base. No
+mode ever touches `runs`/`drafts`/`settings`, and an unrecognised value means
+`true`, so a typo cannot truncate anything. See
+`deploy/backend/bootstrap.py`'s docstring and
+`backend/tests/deploy/test_bootstrap_seeding.py`.
+
+Read the decision back rather than assuming it; the bootstrap says which branch
+it took. From the W3-G3 redeploy of an already-seeded droplet:
+
+```
+[bootstrap] schema ready; NOT seeding — 30 cases and 44 kb chunks are already present.
+            seed_all() TRUNCATEs both tables, and the worker may be mid-run against them.
+            Set SEED_ON_START=force to reload the fixtures anyway.
+```
 
 ### The `VITE_PORTAL_TOKEN` build-time caveat
 

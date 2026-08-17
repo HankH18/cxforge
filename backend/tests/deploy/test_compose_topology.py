@@ -132,6 +132,71 @@ def test_the_worker_waits_for_its_dependencies(compose_path: Path) -> None:
         assert depends[name].get("condition") == "service_healthy", depends[name]
 
 
+@pytest.mark.parametrize("compose_path", COMPOSE_FILES, ids=COMPOSE_IDS)
+def test_the_worker_overrides_the_images_http_healthcheck(compose_path: Path) -> None:
+    """W3-G3: the worker must not inherit the image's HTTP probe.
+
+    A container inherits the IMAGE's ``HEALTHCHECK`` unless the service
+    overrides it, and ``deploy/Dockerfile.backend``'s is an HTTP GET to
+    ``127.0.0.1:8000/health``. The worker runs ``arq`` and serves no HTTP, so
+    it can never pass that probe. Measured on the droplet 2026-08-17 before
+    this override existed: ``othram-deploy-worker`` was ``Up (unhealthy)`` with
+    a FailingStreak of 25 and ``ConnectionRefusedError: [Errno 111]`` on every
+    attempt, while it was in fact consuming ``cxforge:jobs``; and
+    ``deploy/compose.sh up -d --build --wait`` exited **1** with "container
+    othram-deploy-worker is unhealthy" on an otherwise successful deploy.
+
+    So this asserts three separate things, and each one is a defect this
+    package actually hit: that the service declares its OWN healthcheck at all
+    (otherwise the image's is inherited); that the declared one does not probe
+    the backend's HTTP port; and that it derives arq's health-check key from
+    the source of truth instead of hard-coding the queue name a third time.
+    """
+    worker = _services(compose_path)["worker"]
+    healthcheck = worker.get("healthcheck")
+    assert isinstance(healthcheck, dict), (
+        f"{compose_path.relative_to(REPO_ROOT)}'s worker declares no "
+        "`healthcheck:`, so it INHERITS deploy/Dockerfile.backend's HTTP probe "
+        "against 127.0.0.1:8000/health — which an arq process serves nothing "
+        "on. The container then reports `unhealthy` forever and "
+        "`docker compose up --wait` exits non-zero on a working stack."
+    )
+    test = healthcheck.get("test")
+    assert test, f"{compose_path.relative_to(REPO_ROOT)}'s worker healthcheck has no `test`"
+    rendered = " ".join(test) if isinstance(test, list) else str(test)
+    assert "8000" not in rendered, (
+        f"{compose_path.relative_to(REPO_ROOT)}'s worker healthcheck probes port "
+        f"8000 ({rendered!r}). That is the backend's uvicorn port; this container "
+        "runs `arq` and serves no HTTP, so the probe can only ever fail."
+    )
+    assert "health_check_key_suffix" in rendered and "QUEUE_NAME" in rendered, (
+        f"{compose_path.relative_to(REPO_ROOT)}'s worker healthcheck is "
+        f"{rendered!r}; expected it to assemble arq's health-check key from "
+        "`worker.settings.QUEUE_NAME` + `arq.constants.health_check_key_suffix`, "
+        "so the probe proves the broker link and cannot drift from either name."
+    )
+    # Imported here, not at module scope: this module is otherwise pure
+    # YAML/text parsing, and the point is to compare the compose file against
+    # the value the application actually uses.
+    from worker.settings import QUEUE_NAME
+
+    assert QUEUE_NAME not in rendered, (
+        f"{compose_path.relative_to(REPO_ROOT)}'s worker healthcheck hard-codes "
+        f"the queue name {QUEUE_NAME!r}. That string is a frozen contract living "
+        "in backend/src/worker/settings.py precisely so it exists once; a copy "
+        "here is a third place for it to go stale. Import it in the probe."
+    )
+    # `arq --check` is the obvious probe and is deliberately NOT used: it
+    # imports worker.main (langgraph/langchain/anthropic) and measured 16.5s on
+    # the 2-vCPU droplet, versus 1.8s for the key probe.
+    assert "--check" not in rendered, (
+        f"{compose_path.relative_to(REPO_ROOT)}'s worker healthcheck uses "
+        f"`arq --check` ({rendered!r}). Measured on the droplet 2026-08-17 it "
+        "takes 16.5s because it imports the whole agent stack, which exceeds any "
+        "reasonable healthcheck timeout and burns a core every interval."
+    )
+
+
 def test_the_seed_on_start_defaults_are_the_deliberate_asymmetric_pair() -> None:
     """The two stacks default differently, and that has to be a decision.
 

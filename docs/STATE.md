@@ -248,10 +248,25 @@ These are load-bearing and should not be disturbed:
    `FakeLLMClient`, and every canonical-scenario test **hands the route in** via a canned
    `Classification`. Route-classification accuracy — the thing R2–R5 all hinge on — is
    measured by nothing.
-2. **Every deploy check is a liveness check.** Nothing in `verify_deploy.sh`,
+2. ~~**Every deploy check is a liveness check.**~~ **PARTLY FIXED by W3-G2, 2026-08-17 —
+   read the nuance.** *Original finding, preserved:* Nothing in `verify_deploy.sh`,
    `backend/tests/deploy/**`, or CI makes a model call, writes a row, or touches the
    agent path. That is precisely why the stack passed 4/4 for weeks with **no
    `ANTHROPIC_API_KEY` at all**, and passes 4/4 today with a dead core loop.
+   **Now:** `bash scripts/verify_deploy.sh --deep` POSTs a correctly HMAC-signed
+   synthetic webhook at the real endpoint and waits for a **new** `runs` row, read back
+   through the deployed portal API — ingress → real Redis → real `arq` worker →
+   `run_agent`. Demonstrated to fail against `161.35.2.250` (assertions 1–4 green, deep
+   check `no new runs row … after 240.9s`, exit 1) and to pass in 8.2s against a stack
+   with a real Redis and a real worker, with `replied_at - received_at = 7.576s`. It
+   rules out the stale-row false pass with a baseline snapshot of run ids — verified
+   against a live stack by killing the worker while a matching `runs` row sat in the
+   table; the check still failed. **The nuance, three parts:** (i) it is **opt-in**, so a
+   bare run is still liveness-only — which every `PASS` line now says out loud on the
+   next line; (ii) **CI still runs none of it**, by design (SPEC §Constraints); and
+   (iii) it has **never passed against a real deployment**, because `ZENDESK_OAUTH_TOKEN`
+   is 401 again (OA-4) and `ingest`'s `fetch_ticket` is the first thing every run does —
+   see `docs/BUILD-PLAN.md §10.4`.
 3. ~~**Langfuse is installed and imported nowhere.**~~ **FIXED by W2-C1 (ADR-006),
    2026-08-16.** *Original finding, preserved:* Zero `import langfuse` repo-wide.
    `nodes.py:592` mints `trace_id = uuid.uuid4().hex` and reports it to no one; the

@@ -90,7 +90,59 @@ project **"jarvis"** under org **"hank-personal"**.
 
 ---
 
-## OA-3 — Cloudflare domain and named tunnel ✅ **DONE — verified 2026-08-16**
+## OA-3 — Cloudflare domain and named tunnel ⚠️ **ONE FIELD WRONG — 30-second dashboard fix, 2026-08-17**
+
+> ### The tunnel is up. The ingress rule says `https://backend:8000` and the origin is plain HTTP.
+>
+> **Measured during W3-G3, after the redeploy.** `cloudflared` is running on the droplet
+> and connected — but `https://cxforge.hankholcomb.com/health` is **still 502**, and the
+> cause is one dropdown in the Cloudflare dashboard, not anything in this repo.
+>
+> The configuration Cloudflare pushes down to the connector is in its own log:
+>
+> ```
+> INF Updated to new configuration config="{\"ingress\":[
+>       {\"hostname\":\"cxforge.hankholcomb.com\",\"service\":\"https://backend:8000\"},
+>       {\"service\":\"http_status:404\"}],\"warp-routing\":{\"enabled\":false}}" version=1
+> ```
+>
+> `https://`. Step 3 of the original instructions below says Service **`HTTP`** →
+> `backend:8000`, and `deploy/cloudflared/README.md` records the same. The dashboard has it
+> as HTTPS. `backend` is uvicorn with no TLS, so the connector's handshake fails and
+> Cloudflare returns 502. Proven from inside the compose network, both schemes, same origin:
+>
+> ```
+> curl http://backend:8000/health   ->  200
+> curl -k https://backend:8000/health -> 000  curl: (35) TLS connect error:
+>                                              error:0A00010B:SSL routines::wrong version number
+> ```
+>
+> And the connector itself is healthy — this is not a tunnel that failed to come up:
+>
+> ```
+> GET http://cloudflared:2000/ready
+>   ->  {"status":200,"readyConnections":4,"connectorId":"32e954ff-1f92-4f8f-90c2-e8e094a18e1d"}
+> ```
+>
+> **Fix (owner, dashboard, ~30 seconds).** Zero Trust → Networks → Tunnels → `cxforge` →
+> Public Hostnames → `cxforge.hankholcomb.com` → change **Service type** from `HTTPS` to
+> **`HTTP`** (URL stays `backend:8000`). Save. No redeploy is needed: the connector picks up
+> the new configuration within seconds and logs another `Updated to new configuration`.
+>
+> **Why it was not fixed here.** The rule lives in the Cloudflare dashboard, not in this
+> repo — this is a *token*-managed tunnel, so `cloudflared` ignores local ingress config.
+> Two things were tried and are recorded so nobody repeats them: there is **no Cloudflare
+> API token** anywhere on this machine (no `~/.cloudflared`, nothing in the keychain, only
+> `CLOUDFLARE_TUNNEL_TOKEN` in `.env`, which is not an API credential); and a connector
+> started with **`run --url http://backend:8000`** logs `Settings: map[... url:http://backend:8000]`
+> and then immediately `Updated to new configuration ... "service":"https://backend:8000"`,
+> and the endpoint stays 502. Remote configuration wins, as documented.
+>
+> **What this blocks:** the public hostname, and therefore the Zendesk webhook — which is
+> already re-pointed at `https://cxforge.hankholcomb.com/webhooks/zendesk` (read back from
+> the API, status `active`). Until this dropdown changes, no Zendesk event can reach the
+> droplet. It does **not** block `scripts/verify_deploy.sh`, which targets
+> `http://161.35.2.250:8080` directly.
 
 **Gates:** Wave 1 F2, Wave 3 redeploy, and all of Wave 4. **UNBLOCKED.**
 
@@ -106,6 +158,14 @@ the hostname, found the tunnel configuration, and could not reach the origin —
 `cloudflared` exists only as committed config in the working tree and nothing is deployed.
 It becomes 200 when W3-G3 redeploys the droplet. Getting a 502 rather than a 1033/530 is
 positive evidence the tunnel and hostname are wired correctly.
+
+> **Corrected 2026-08-17 by W3-G3.** The sentence "it becomes 200 when W3-G3 redeploys the
+> droplet" was wrong, and wrong in an instructive way: it predicted an effect instead of
+> reading one back. The droplet has now been redeployed, `cloudflared` is running with 4
+> ready connections, and the endpoint is **still 502** — for a completely different reason
+> than the one this section describes (the ingress rule's scheme; see the banner above).
+> A 502 is consistent with at least three distinct causes, which is exactly why it could not
+> carry the claim "the tunnel and hostname are wired correctly" on its own.
 
 `CLOUDFLARE_TUNNEL_TOKEN` (184 chars) and `PUBLIC_BASE_URL=https://cxforge.hankholcomb.com`
 are both in `.env`.
@@ -141,18 +201,98 @@ would mean re-pasting the endpoint into Zendesk Admin Center before every take.
 
 ---
 
-## OA-4 — Zendesk re-authorization ✅ **DONE — verified 2026-08-16**
+## OA-4 — Zendesk re-authorization ❌ **REOPENED — the token is dead again, 2026-08-17**
 
-**Gates:** all of Wave 4 (live e2e) and demo shots 1–5. **UNBLOCKED** (Wave 4 still needs OA-3).
+**Gates:** all of Wave 4 (live e2e), demo shots 1–5, **W3-G3's redeploy being worth
+anything**, and W3-G2's deep check ever passing against a real deployment.
 
-Verified by calling the API with the token in `.env`:
+Measured 2026-08-17 while building W3-G2, twice, from the token in `.env`:
 
 ```
-GET https://$ZENDESK_SUBDOMAIN.zendesk.com/api/v2/users/me.json  →  200
+GET https://hank-43016.zendesk.com/api/v2/users/me.json
+  →  HTTP/2 401
+     error: invalid_token
+     error_description: The access token provided is expired, revoked, malformed
+                        or invalid for other reasons.
+GET /api/v2/tickets.json?per_page=3                        →  401
 ```
 
-It was 401 all day and is now 200, so the re-auth flow below worked. The trial still lapses
-around **2026-08-27** — that deadline is unchanged and now the binding one.
+The subdomain is alive (Zendesk sets session cookies and answers with its own
+`www-authenticate: Bearer realm=Zendesk::OAuth`), so this is the token, not the account.
+
+**Why this is more urgent than "Wave 4 needs it".** `agent.nodes.ingest`'s first statement
+is `deps.port.fetch_ticket(ticket_id)`. With a dead token that call is a 401
+`HelpdeskAPIError`, `worker.main.run_ticket` catches it, releases the dedup row (ADR-003)
+and returns — so **every** run fails and **no `runs` row is ever written**, on the droplet
+or anywhere else. A redeploy (W3-G3) with a connected core loop and this token will look
+healthy in `docker compose ps`, answer `verify_deploy.sh` 4/4, and answer no tickets. The
+only signal is the worker's ERROR log, because arq books a swallowed failure as
+`success = True` (`worker/main.py`'s docstring).
+
+**Fix:** step 2 of the collapsed section below (`uv run python scripts/zendesk_oauth.py
+--serve`), then step 3 to verify. Two minutes, needs a browser login.
+
+### ⚠️ The reason this keeps reopening: the token lives ~25 minutes
+
+**Measured 2026-08-17 during W3-G3, and this is the finding that changes what OA-4 *is*.**
+`ZENDESK_OAUTH_TOKEN` is not an opaque, long-lived Zendesk token. It is a **JWT**
+(`alg: EdDSA`) whose payload carries exactly one claim:
+
+```
+payload keys : ['exp']
+exp          = 1786946593  ->  2026-08-17T06:03:13Z
+```
+
+Observed timeline on one afternoon, all three points read back from the API rather than
+inferred:
+
+| Time (UTC) | Event |
+|---|---|
+| 05:38 | `GET /api/v2/users/me.json` → **200**, Hank Holcomb / admin |
+| **06:03:13** | **the `exp` claim in the token** |
+| 06:05:36 | the droplet's arq worker calls `fetch_ticket` → **401 `invalid_token`** |
+| 06:07 | the same token from the developer's laptop → **401** |
+
+So the token is not being revoked by anything; it simply expires, on the order of
+**25 minutes** from issue. That is why the ✅ on this page has now flipped to ❌ three
+times with "nothing announcing the change".
+
+**Consequences that matter more than the re-auth itself:**
+
+- **A re-auth buys a ~25-minute window.** `scripts/verify_deploy.sh --deep` can take up to
+  4 minutes, so it must be run *immediately* after the re-auth, not after a build.
+- **Wave 4 is not runnable on a single token.** ADR-015's 20–30-ticket scenario run, and
+  every demo take, will cross an expiry boundary. Filming a 5-shot demo on a 25-minute
+  credential is a losing proposition.
+- **Nothing in the app refreshes it.** The token is read from the environment at request
+  time and never renewed, so a container that is running when the token expires keeps
+  401ing until someone re-authorizes and restarts (or re-copies `.env`).
+
+**The permanent fix, and evidence that it is available.** Zendesk's `refresh_token` grant
+**is authorized for this OAuth client** — measured, with a control that proves the two
+errors are distinguishable:
+
+```bash
+# grant_type=refresh_token, deliberately invalid refresh_token
+POST /oauth/tokens  →  400 invalid_grant        # grant type accepted, token rejected
+# control: grant_type=client_credentials, real client_id + secret
+POST /oauth/tokens  →  400 unauthorized_client  # that grant type is NOT authorized
+```
+
+`invalid_grant` rather than `unsupported_grant_type`/`unauthorized_client` means the client
+will honour a refresh. But `scripts/zendesk_oauth.py` requests `SCOPE = "read write"` and
+never `offline_access`, so **no refresh token is ever issued or stored** — the flow throws
+away the one thing that would end this. Making that change (request `offline_access`, keep
+`ZENDESK_OAUTH_REFRESH_TOKEN`, refresh on 401 in `helpdesk/zendesk_adapter.py`) touches
+`scripts/**` and `backend/src/helpdesk/**`, which are not W3-G3's rows in the ownership
+matrix, so it is written down here as the owner's call rather than taken.
+
+The trial lapses around **2026-08-27**, unchanged.
+
+> Worth noticing about the previous status line, which read "✅ DONE — verified
+> 2026-08-16": it was true when written and false a day later, and nothing would have said
+> so. The `Quick status check` at the bottom of this file is the only thing here that
+> re-measures rather than remembers — run it before trusting any ✅ on this page.
 
 **Still to do here after OA-3 lands:** re-point the webhook in Admin Center → Apps and
 integrations → Webhooks to `https://cxforge.<your-domain>/webhooks/zendesk`.
