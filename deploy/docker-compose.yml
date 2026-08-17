@@ -2,9 +2,9 @@
 #
 # W1-F1/F2 (2026-08-16) added three services to the original db/backend/portal
 # set: `redis` (arq broker, ADR-002), `worker` (the same backend image with an
-# arq command, ADR-002) and `cloudflared` (named tunnel, ADR-005). The
-# cloudflared service has NEVER been run — see its own comment block and
-# docs/OWNER-ACTIONS.md OA-3.
+# arq command, ADR-002) and `cloudflared` (named tunnel, ADR-005). All six
+# services have run on the droplet since 2026-08-17, cloudflared included —
+# OA-3 is complete and the tunnel is verified live; see its own comment block.
 #
 # Every env var the application reads must be forwarded to every container
 # running the application image. That is not a convention here, it is
@@ -302,14 +302,24 @@ services:
     # swallows the exception after releasing the dedup row (ADR-003), so arq
     # books a failed run as `success = True`; this check stays green while
     # every run fails. Only `scripts/verify_deploy.sh --deep` fails when the
-    # loop is severed. (2) That the worker is responsive *right now*. arq's
-    # `health_check_interval` defaults to 3600s and it sets the key with a
-    # TTL of interval+1, so a worker that hangs without exiting keeps a valid
-    # key for up to an hour. A process that *exits* is caught immediately —
-    # arq is this container's command, so it takes the container down with it.
-    # Closing the hang window means setting `health_check_interval` on
-    # `WorkerSettings` in `backend/src/worker/main.py`, which is W1-A's file in
-    # the ownership matrix; flagged for the owner rather than taken here.
+    # loop is severed. (2) That the worker is responsive *right now* — but this
+    # is now bounded rather than open-ended. arq's `health_check_interval`
+    # defaults to 3600s and it sets the key with a TTL of interval+1, so at the
+    # default a worker that hung without exiting kept a VALID key for up to an
+    # hour and this probe could only catch a process that exits (which the
+    # container catches anyway — arq is its command). Since 2026-08-17
+    # `WorkerSettings.health_check_interval` is **30s**, matched to this
+    # `interval:` so a stale key cannot outlive one probe window: worst case is
+    # ~31s of TTL plus 3 x 30s of retries, ~2 minutes, measured back off real
+    # Redis as PTTL 30662ms vs 3600818ms at the default. Read the comment on
+    # `HEALTH_CHECK_INTERVAL_SECONDS` in `backend/src/worker/main.py` before
+    # changing either number — they are one decision in two files, bound by
+    # `backend/tests/deploy/test_worker_health_interval.py`.
+    #
+    # Still true, and the reason (1) above is not redundant: `record_health`
+    # runs on the event loop while `run_agent` runs in a thread, so a hung
+    # ANTHROPIC call keeps this key fresh. What the 30s catches promptly is a
+    # blocked/dead loop and a lost Redis link. `docs/BUILD-PLAN.md §10.7f`.
     healthcheck:
       test:
         [
@@ -376,23 +386,29 @@ services:
       - othram-deploy
 
   # --- Cloudflare named tunnel (W1-F2, ADR-005) --------------------------
-  # UNVERIFIED AGAINST A LIVE TUNNEL — still true, but for a narrower reason
-  # than when this was written. OA-3 has since been completed: the token is in
-  # .env and PUBLIC_BASE_URL=https://cxforge.hankholcomb.com. Measured
-  # 2026-08-16 from outside the droplet:
-  #     GET https://cxforge.hankholcomb.com/health -> HTTP/2 502, server: cloudflare
-  # DNS resolves to Cloudflare anycast and the edge terminates TLS, so the
-  # hostname is real. The 502 is the edge failing to reach an origin, which is
-  # correct — this service has never been started. Nothing here has carried a
-  # request to `backend:8000`, and only W3-G3 can establish that.
+  # VERIFIED AGAINST A LIVE TUNNEL, 2026-08-17. This service was brought up
+  # under W3-G3 and read back from OUTSIDE the droplet: `GET /` 200 serving the
+  # portal SPA, `GET /health` 200, `/api/*` 401 without a token,
+  # `POST /webhooks/zendesk` 401 unsigned, every response carrying
+  # `server: cloudflare`. A signed Zendesk webhook then arrived through this
+  # tunnel and drove a complete agent run (docs/BUILD-PLAN.md §10.6a).
+  # The earlier 502 was measured 2026-08-16 against a dashboard rule pointing
+  # at `https://backend:8000` — TLS against a plaintext origin — and while this
+  # service had never been started; see deploy/cloudflared/README.md's history
+  # section. `backend/tests/deploy/test_compose_topology.py` asserts that the
+  # README states the verification WITH a date and no longer carries the
+  # UNVERIFIED marker, so restoring that caveat has to be a deliberate act.
   #
   # Transport: the tunnel dials OUT to Cloudflare, so the droplet opens no
-  # inbound port. The public hostname terminates at `backend:8000` — the
-  # compose service name, resolved on this network — which is why `backend`'s
-  # published `${BACKEND_PORT}` is not what the internet reaches.
+  # inbound port. The public hostname terminates at `portal:80` — the compose
+  # service name, resolved on this network — whose nginx serves the SPA and
+  # proxies `/api/`, `/webhooks/` and `/health` to `backend:8000`. One hostname
+  # therefore fronts UI, API and webhook, and neither `portal`'s published
+  # `${PORTAL_PORT}` nor `backend`'s `${BACKEND_PORT}` is what the internet
+  # reaches.
   #
   # Where the ingress rule lives: this is a *token*-managed (dashboard-
-  # managed) named tunnel, so the hostname -> `http://backend:8000` mapping
+  # managed) named tunnel, so the hostname -> `http://portal:80` mapping
   # is configured in the Cloudflare dashboard and delivered with the token.
   # cloudflared ignores a local `ingress:` block in that mode, so committing
   # one here would be a file that looks like configuration and configures
@@ -403,14 +419,13 @@ services:
   # Why `${CLOUDFLARE_TUNNEL_TOKEN}` with NO `:-` default: `:-` would render
   # an empty string and start a cloudflared that serves nothing while looking
   # up. With no default, `docker compose` prints a "variable is not set"
-  # warning and cloudflared exits non-zero at startup. Once OA-3 lands and the
-  # token is a hard requirement, changing `${CLOUDFLARE_TUNNEL_TOKEN}` to
+  # warning and cloudflared exits non-zero at startup. OA-3 has since landed and
+  # the token is now a hard requirement, so changing `${CLOUDFLARE_TUNNEL_TOKEN}` to
   # `${CLOUDFLARE_TUNNEL_TOKEN:?set it — see docs/OWNER-ACTIONS.md OA-3}`
-  # upgrades that warning to a hard parse failure. It is deliberately NOT
+  # would upgrade that warning to a hard parse failure. It is deliberately NOT
   # written that way today: `:?` fails interpolation for the WHOLE file, for
-  # every service, including `scripts/verify_deploy.sh --local`, which would
-  # make an owner action nobody has taken yet block work that does not need
-  # it.
+  # every service, including `scripts/verify_deploy.sh --local`, so a machine
+  # with no tunnel token in its .env could not run the local stack at all.
   cloudflared:
     image: cloudflare/cloudflared:2026.8.2
     container_name: othram-deploy-cloudflared
@@ -424,10 +439,30 @@ services:
       backend:
         condition: service_healthy
     # No healthcheck: the image ships no shell and no wget/curl, so a
-    # container-local probe is not expressible. cloudflared serves
-    # http://<container>:2000/ready on the metrics port above — W3-G3 must
-    # read that back (or fetch ${PUBLIC_BASE_URL}/health from outside the
-    # droplet) rather than trust that this container is "running".
+    # container-local probe is not expressible.
+    #
+    # DO NOT SUBSTITUTE `/ready`. cloudflared serves
+    # http://<container>:2000/ready on the metrics port above, and this comment
+    # used to point at it. It is a FALSE GREEN, measured 2026-08-17: it reported
+    # `readyConnections: 4` — four registered connections, config v3 loaded,
+    # every precheck PASS — through 7.5 continuous minutes in which EVERY
+    # request 502'd and `cloudflared_tunnel_total_requests` stayed at 0. It
+    # reports this connector's view of its own connections; the 502s were
+    # Cloudflare's edge routing to a PRIOR connector's dead connections and
+    # never reached this process at all (docs/BUILD-PLAN.md §10.6g).
+    #
+    # The only evidence this tunnel is serving is an end-to-end read-back
+    # through the public URL: ${PUBLIC_BASE_URL}/health returning 200 from
+    # OUTSIDE the droplet. Nothing container-local can stand in for it.
+    #
+    # OPERATIONAL RISK, unfixed on purpose: `restart: unless-stopped` plus no
+    # healthcheck means a restart can leave this tunnel non-serving for minutes
+    # while `docker compose ps`, the logs, `/ready` AND the Cloudflare dashboard
+    # all report healthy. `up -d --force-recreate` recovers it in ~3s. Practical
+    # rule: do not restart cloudflared near an ADR-015 scenario run, and verify
+    # publicly after any deploy. A real healthcheck is not expressible in this
+    # image; a sidecar or an external monitor is an owner decision, not a
+    # tidy-up to make here.
     restart: unless-stopped
     networks:
       - othram-deploy

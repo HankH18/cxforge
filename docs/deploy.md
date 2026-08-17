@@ -7,8 +7,12 @@
 > plus `redis` + `worker` (ADR-002) and `cloudflared` (ADR-005). Deployed by
 > rsync (§3 Option B) + `scp .env` (§4) + `deploy/compose.sh up -d --build
 > --wait`, which now exits **0** with all six containers up and five reporting
-> `healthy` (`cloudflared` declares no healthcheck — probe its
-> `:2000/ready` instead).
+> `healthy` (`cloudflared` declares no healthcheck; this line used to say "probe
+> its `:2000/ready` instead" and that advice was **wrong** — `/ready` reported
+> `readyConnections: 4` through a 7.5-minute total outage. The only evidence the
+> tunnel serves is `${PUBLIC_BASE_URL}/health` returning 200 from outside the
+> droplet: `curl -sS -o /dev/null -w '%{http_code}\n' "$PUBLIC_BASE_URL/health"`.
+> See `docs/BUILD-PLAN.md §10.6g`).
 >
 > **What works, read back:** liveness 4/4 in REMOTE mode; the core loop as far
 > as `nodes.ingest` (signed webhook → 202 → real Redis → arq worker in 0.11s →
@@ -16,15 +20,29 @@
 > Langfuse keys resolving to project `cxforge`; `search_kb` returning graded
 > hits from the seeded KB.
 >
-> **Two things still block it, neither of them in this repo:**
-> 1. **`ZENDESK_OAUTH_TOKEN` is a JWT that lives ~25 minutes.** Every run dies
->    at `ingest`'s `fetch_ticket` with 401, so **`runs` is still empty on the
->    droplet** and `--deep` still fails. OA-4.
-> 2. **`https://cxforge.hankholcomb.com` is still 502** — the tunnel's dashboard
->    ingress rule says `https://backend:8000` against a plaintext origin. OA-3.
+> **Two things blocked it at the time of that redeploy, neither of them in this
+> repo. Both have since been cleared — this list is kept because the procedure
+> below still refers to it:**
+> 1. **`ZENDESK_OAUTH_TOKEN` is a JWT that lives ~25 minutes**, so every run
+>    died at `ingest`'s `fetch_ticket` with 401 and `runs` was empty on the
+>    droplet. **Superseded:** `scripts/zendesk_oauth.py --refresh` now rotates it
+>    without a browser and a full run has completed on the droplet —
+>    `docs/BUILD-PLAN.md §10.6(a)` and `§10.6(d)`, standing procedure in OA-4.
+>    The remaining caveat is that a rotation does not survive a container
+>    restart (`§10.7a`, undecided).
+> 2. ~~**`https://cxforge.hankholcomb.com` is still 502**~~ — **FIXED
+>    2026-08-17, OA-3 completed.** The dashboard ingress rule pointed at
+>    `https://backend:8000`, i.e. TLS against a plaintext origin; it now points
+>    at **`portal:80`**, whose nginx serves the SPA and proxies `/api/`,
+>    `/webhooks/` and `/health` to `backend:8000`. Read back from outside the
+>    droplet: **`GET /` 200** serving the portal UI, **`GET /health` 200**.
+>    Evidence and the rest of the surface in `deploy/cloudflared/README.md`
+>    ("VERIFIED AGAINST A LIVE TUNNEL, 2026-08-17") and
+>    `docs/BUILD-PLAN.md §10.6(c)`.
 >
-> `docs/BUILD-PLAN.md §10.5` has the full evidence. §7 below has the corrected
-> `--deep` procedure, including how to reach the droplet's Postgres.
+> `docs/BUILD-PLAN.md §10.5` has the full evidence for the redeploy and §10.6 for
+> the end-to-end run that followed it. §7 below has the corrected `--deep`
+> procedure, including how to reach the droplet's Postgres.
 >
 > This page still describes the original three-service deploy in places. A full
 > rewrite for the worker/queue/tunnel topology is **W5-J2**, not done here.
@@ -389,6 +407,78 @@ passed** — its `PASS` line reads `(REMOTE: verified droplet at
 here: the local one (`--local`, `DEPLOY_HOST` empty) and the remote one
 against the live droplet.
 
+### The public path: the address Zendesk actually uses
+
+**Every assertion described above — and `--deep` below — targets
+`${DEPLOY_SCHEME}://${DEPLOY_HOST}:${DEPLOY_PORT}`, the droplet's own
+published port. Zendesk cannot reach that address.** It reaches this app only
+through `PUBLIC_BASE_URL` (`https://cxforge.hankholcomb.com`), and a request
+to the droplet port bypasses Cloudflare entirely. On 2026-08-17 the public
+path returned **502 for ~64% of real Zendesk deliveries** — Cloudflare's edge
+routing to a prior connector's dead connections, the requests never reaching
+the droplet at all — and throughout that outage this script would have
+reported 4/4 and `--deep` would have passed (`docs/BUILD-PLAN.md §10.6g`).
+
+The **public-path stage** closes that. It runs **by default in remote mode**
+whenever `PUBLIC_BASE_URL` is set — no flag, because a check that only fires
+when somebody remembers a flag would have been absent for exactly the
+incident that motivated it:
+
+```bash
+bash scripts/verify_deploy.sh              # includes the public path
+bash scripts/verify_deploy.sh --public     # …and REQUIRES it (see below)
+CXFORGE_PUBLIC_SAMPLES=40 bash scripts/verify_deploy.sh   # more samples
+```
+
+What it does, and why each part:
+
+- **It samples** — 20 times per probe by default, one `curl` process each so
+  no two samples share a TCP connection or a Cloudflare edge connection. The
+  failure it exists to catch is probabilistic and varies by colo: at the
+  measured 64% failure rate, a single request misses the outage 36% of the
+  time and 20 requests miss it 1.3e-9 of the time. It reports the **rate**,
+  e.g. `GET /health -> 7/20 = 35.0% [502 x13, 200 x7]`, and any sample
+  missing its expected status fails the run.
+- **It probes the Zendesk endpoint, not just `/health`.** `POST
+  /webhooks/zendesk` with an **unsigned** body must answer **401**. That is a
+  pure read — ingress verifies the HMAC before it touches the body, the
+  database or the queue — and a 401 is positive proof the request reached the
+  application, where a `502`/`530`/`000` proves it did not. Checking only
+  `/health` would leave a per-path Cloudflare rule or a mis-pointed public
+  hostname invisible.
+- **An unset `PUBLIC_BASE_URL` skips loudly** and says so again on the
+  `SCOPE:` line — never a silent pass. `--public` turns that skip into a hard
+  failure before any request goes out, the way `--deep` treats a missing
+  signing secret. `--public` also forces the stage in `--local` mode, where it
+  is otherwise skipped (the public hostname fronts the droplet, not your
+  laptop).
+- **`CXFORGE_PUBLIC_SAMPLES` has an enforced floor of 4**, and a
+  loopback `PUBLIC_BASE_URL` is labelled `SIMULATED` on both the pass line and
+  the `SCOPE:` line. Both exist because the two ways to neuter this stage back
+  into a false green are sampling once and pointing it at something local that
+  always answers.
+
+`PUBLIC_BASE_URL` follows the same precedence rule as `DEPLOY_HOST`: an
+export from your shell wins over `.env`, so `.env`'s empty
+`PUBLIC_BASE_URL=` line cannot clobber it and silently turn the stage into a
+skip.
+
+**Measured, both directions, 2026-08-17.** Against a local server returning
+502 for 64% of requests the run went red with
+`GET /health 9/20 = 45.0% [502 x11, 200 x9]`; against the real hostname it
+passed `20/20 = 100.0%` on both probes. A check that has never been seen to
+fail is the thing this whole section is about.
+
+To drive the core loop **through the public hostname** in one run — the
+strongest check available, since the public origin serves the portal, `/api/*`
+and `/webhooks/*` (measured 2026-08-17):
+
+```bash
+DEPLOY_SCHEME=https DEPLOY_HOST=cxforge.hankholcomb.com DEPLOY_PORT=443 \
+  CXFORGE_VERIFY_TICKET_ID=<disposable-ticket-id> \
+  bash scripts/verify_deploy.sh --deep
+```
+
 ### `--deep`: the only assertion that can fail when the product is broken
 
 Read this before quoting a `PASS` from the four assertions above. **Every
@@ -399,6 +489,23 @@ reports 4/4 against the droplet today, whose webhook accepts events and
 never starts a run (`docs/STATE.md §6.2`). A pass without `--deep` now
 prints a `SCOPE:` line saying exactly that, on the line after the `PASS`,
 so the scope travels with the claim.
+
+Every `PASS` is followed by a three-line `SCOPE:` block, because a pass can
+be shallow in two unrelated directions and one line could only say one of
+them:
+
+```
+SCOPE: liveness only. The core loop … was NOT exercised. …        ← WHAT ran
+SCOPE: PATH ASSERTED — http://161.35.2.250:8080. Zendesk cannot
+       reach that address; it bypasses Cloudflare.                ← WHERE it ran
+SCOPE: PUBLIC PATH (https://cxforge.hankholcomb.com, the only
+       route Zendesk has) — CHECKED, all green — …
+       GET /health 20/20 = 100.0% … POST /webhooks/zendesk 20/20 … ← the real route
+```
+
+A green core loop on the droplet port with a 64%-broken public path is a
+state this deployment has actually been in, so the two questions are answered
+separately and neither answer can be quoted as the other.
 
 `--deep` (W3-G2) POSTs a correctly HMAC-signed synthetic webhook at the
 real endpoint and then waits for the **effect**: a NEW `runs` row, read

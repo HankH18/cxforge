@@ -241,6 +241,40 @@ async def run_ticket(ctx: dict[str, Any], payload: dict[str, Any]) -> None:
 # cancellation here is a released dedup row plus a thread still running.
 JOB_TIMEOUT_SECONDS = 900
 
+# arq's default is 3600s, and that default is what made both compose files'
+# worker healthcheck nearly meaningless. `arq.worker.Worker.record_health`
+# writes the health key with `psetex((health_check_interval + 1) * 1000)`, so at
+# the default a worker whose main loop stops keeps a VALID key for up to an
+# hour: the probe (`interval: 30s`, `retries: 3`) can only catch a process that
+# actually exits — which it would catch anyway, because `arq` is the
+# container's command and its exit takes the container down.
+#
+# 30s, chosen against the numbers rather than picked round:
+#   * It equals the docker healthcheck interval, so a stale key can never
+#     outlive one probe window. Worst-case detection is now ~31s of key TTL
+#     plus 3 x 30s of retries, ~2 minutes, against up to 3601s + 90s before.
+#   * It is comfortably longer than a whole agent run (~11.5s measured), so a
+#     worker doing normal work is never near the boundary, and it is far below
+#     `job_timeout` (900s) so a legitimately long job does not depend on it.
+#   * It is not pushed lower on purpose. arq refreshes the key exactly one
+#     second before it expires (TTL is interval + 1), so the margin is 1s at
+#     ANY interval — shortening it only multiplies the chances that a
+#     momentarily busy loop misses a refresh and produces a false unhealthy,
+#     while buying nothing: the docker probe's own 30s x 3 cadence dominates
+#     the detection latency either way.
+#
+# WHAT THIS DOES NOT FIX, stated because the temptation is to read it as a
+# closed hole. `record_health` runs on the event loop
+# (`Worker._poll_iteration` -> `heart_beat`), and `run_ticket` hands
+# `run_agent` to `asyncio.to_thread`. So the loop keeps ticking — and the key
+# keeps refreshing — through a hung Anthropic call, which is the most likely
+# hang in this system (see the `CancelledError` handler above). What the
+# shorter interval does catch promptly is a blocked/dead event loop and a lost
+# Redis link (the `psetex` stops landing and the key expires). A hung *run* is
+# still visible only in the ERROR log and to
+# `scripts/verify_deploy.sh --deep`. `docs/BUILD-PLAN.md §10.7f`.
+HEALTH_CHECK_INTERVAL_SECONDS = 30
+
 _ON_STARTUP: StartupShutdown = startup
 
 
@@ -261,6 +295,11 @@ class WorkerSettings(WorkerSettingsBase):
     functions = [func(run_ticket, name=RUN_TICKET_TASK, max_tries=1)]
     queue_name = QUEUE_NAME
     job_timeout = JOB_TIMEOUT_SECONDS
+    # Must live in THIS class body to have any effect: `arq.worker.get_kwargs`
+    # reads `settings_cls.__dict__`, so a value inherited from a base class is
+    # not passed to `Worker(...)` at all and the 3600s default would silently
+    # stand. Bound by `backend/tests/deploy/test_worker_health_interval.py`.
+    health_check_interval = HEALTH_CHECK_INTERVAL_SECONDS
     # W2-C2 — see `startup`'s docstring for why logging is configured from
     # this hook and not at import time. Routed through a module-level name
     # annotated as `arq`'s own `StartupShutdown` so it reads as a callable

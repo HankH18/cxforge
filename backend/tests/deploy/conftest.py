@@ -51,6 +51,15 @@ _SCRUBBED_ENV_VARS = (
     "BACKEND_PORT",
     "DEPLOY_PORT",
     "DEPLOY_SCHEME",
+    # The public-path stage's two inputs. Scrubbed for the usual reason —
+    # every test must state what the child sees — and for one specific to
+    # them: a developer who ran `set -a; source .env; set +a` in the shell
+    # that launched pytest would otherwise hand these tests the REAL
+    # Cloudflare hostname, and the public stage would fire against
+    # production through the fake curl. The tests would then pass or fail
+    # depending on whose shell ran them.
+    "PUBLIC_BASE_URL",
+    "CXFORGE_PUBLIC_SAMPLES",
 )
 
 FAKE_CURL = """#!/usr/bin/env bash
@@ -59,6 +68,29 @@ FAKE_CURL = """#!/usr/bin/env bash
 # positional argument scripts/verify_deploy.sh's curl invocations always
 # pass) and prints back the canned status/body assert_status /
 # assert_body_contains expect from a real deploy.
+#
+# FAULT INJECTION (added with the public-path stage). Three env vars, all
+# optional, let a test make a chosen host answer badly for a chosen fraction
+# of requests:
+#   FAKE_CURL_FLAKY_MATCH    substring of the URL to afflict (e.g. the public
+#                            hostname). Requests that do not match it are
+#                            answered normally — which is what lets a test
+#                            reproduce the real defect's exact shape: the
+#                            droplet port healthy, the public path broken.
+#   FAKE_CURL_FLAKY_PATTERN  cycled string of 1 (serve) / 0 (answer 502).
+#   FAKE_CURL_FLAKY_STATE    file holding the request counter, so the pattern
+#                            is deterministic ACROSS PROCESSES. It has to be:
+#                            the stage under test spawns one curl per sample
+#                            precisely so samples cannot share a connection,
+#                            so no in-process counter could work.
+#
+# REQUEST JOURNAL. When FAKE_CURL_JOURNAL is set, every invocation appends
+# "METHOD URL" to that file. Asserting on the journal is how a test binds
+# WHICH endpoint was called, which asserting on the script's own output
+# cannot do: the stage prints a label it composes itself, so a stage that
+# printed "POST /webhooks/zendesk" while actually requesting /health twice
+# was invisible to every output assertion. (Found by sabotage, not by
+# reading — the substitution passed all nine tests.)
 set -euo pipefail
 
 args=("$@")
@@ -67,12 +99,24 @@ url="${args[$((n - 1))]}"
 
 has_write_out=0
 has_token_header=0
+method=GET
+want_method=0
 for a in "${args[@]}"; do
+  if [ "$want_method" -eq 1 ]; then
+    method="$a"
+    want_method=0
+    continue
+  fi
   case "$a" in
+    -X) want_method=1 ;;
     *'%{http_code}'*) has_write_out=1 ;;
     *'X-Portal-Token:'*) has_token_header=1 ;;
   esac
 done
+
+if [ -n "${FAKE_CURL_JOURNAL:-}" ]; then
+  printf '%s %s\n' "$method" "$url" >> "$FAKE_CURL_JOURNAL"
+fi
 
 case "$url" in
   */health)
@@ -88,12 +132,36 @@ case "$url" in
       code=401
     fi
     ;;
+  */webhooks/zendesk)
+    # What the real ingress answers an UNSIGNED body: 401, before it parses
+    # the body, writes tickets_seen or enqueues anything.
+    body='{"detail":"signature verification failed"}'
+    code=401
+    ;;
   *)
     # Portal index page — vite react-ts template root mount point.
     body='<html><body><div id="root"></div></body></html>'
     code=200
     ;;
 esac
+
+if [ -n "${FAKE_CURL_FLAKY_MATCH:-}" ] && [ -n "${FAKE_CURL_FLAKY_STATE:-}" ]; then
+  case "$url" in
+    *"$FAKE_CURL_FLAKY_MATCH"*)
+      seen=0
+      if [ -f "$FAKE_CURL_FLAKY_STATE" ]; then
+        seen="$(cat "$FAKE_CURL_FLAKY_STATE")"
+      fi
+      printf '%s' "$((seen + 1))" > "$FAKE_CURL_FLAKY_STATE"
+      pattern="${FAKE_CURL_FLAKY_PATTERN:-10}"
+      slot="${pattern:$((seen % ${#pattern})):1}"
+      if [ "$slot" = "0" ]; then
+        code=502
+        body='<html><title>502 Bad Gateway</title></html>'
+      fi
+      ;;
+  esac
+fi
 
 if [ "$has_write_out" -eq 1 ]; then
   printf '%s' "$code"

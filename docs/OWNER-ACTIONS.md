@@ -155,6 +155,12 @@ project **"jarvis"** under org **"hank-personal"**.
 >   ->  {"status":200,"readyConnections":4,"connectorId":"32e954ff-1f92-4f8f-90c2-e8e094a18e1d"}
 > ```
 >
+> **Correction, later on 2026-08-17: that inference does not hold.** `/ready` reporting
+> `readyConnections: 4` is *not* evidence the tunnel is serving — it reported exactly this
+> through a separate 7.5-minute total outage in which
+> `cloudflared_tunnel_total_requests` stayed at **0**. It happens to have been true here,
+> but the reasoning was invalid. `docs/BUILD-PLAN.md §10.6g`.
+>
 > **Fix (owner, dashboard, ~30 seconds).** Zero Trust → Networks → Tunnels → `cxforge` →
 > Public Hostnames → `cxforge.hankholcomb.com` → change **Service type** from `HTTPS` to
 > **`HTTP`** (URL stays `backend:8000`). Save. No redeploy is needed: the connector picks up
@@ -172,8 +178,25 @@ project **"jarvis"** under org **"hank-personal"**.
 > **What this blocks:** the public hostname, and therefore the Zendesk webhook — which is
 > already re-pointed at `https://cxforge.hankholcomb.com/webhooks/zendesk` (read back from
 > the API, status `active`). Until this dropdown changes, no Zendesk event can reach the
-> droplet. It does **not** block `scripts/verify_deploy.sh`, which targets
-> `http://161.35.2.250:8080` directly.
+> droplet. ~~It does **not** block `scripts/verify_deploy.sh`, which targets
+> `http://161.35.2.250:8080` directly.~~
+>
+> **Corrected 2026-08-17.** That last sentence was written as reassurance and it
+> described a blind spot. `verify_deploy.sh` targeting the droplet port *directly* is
+> not a reason the outage was survivable — it is the reason the outage was **invisible
+> to the gate**. Zendesk reaches this app only through `PUBLIC_BASE_URL`; a check that
+> talks to `161.35.2.250:8080` cannot fail when that route is down, which is exactly
+> what happened next: the public path returned **502 for ~64% of real deliveries**
+> while the droplet port answered every request (§10.6g). "It does not block the
+> verify script" was true and worthless.
+>
+> `scripts/verify_deploy.sh` now runs a **public-path stage** by default in remote
+> mode: it samples `PUBLIC_BASE_URL` 20 times per probe (`GET /health` → 200 and an
+> unsigned `POST /webhooks/zendesk` → 401, the endpoint Zendesk actually uses),
+> reports the success **rate** rather than a boolean, fails the run on any miss, and
+> skips loudly — never silently — when `PUBLIC_BASE_URL` is unset. `--public` makes it
+> mandatory. So a repeat of this defect now turns the gate red. See
+> `docs/deploy.md §7` and `docs/BUILD-PLAN.md §10.7e`.
 
 **Gates:** Wave 1 F2, Wave 3 redeploy, and all of Wave 4. **UNBLOCKED.**
 

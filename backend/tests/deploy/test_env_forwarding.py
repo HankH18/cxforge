@@ -453,6 +453,18 @@ def test_the_derivation_actually_found_something() -> None:
     to check.
     """
     app = app_env_vars()
+    # 6 against 17 actual, which reads loose — and it is, as a measure of
+    # breadth. It is not loose for the job it does, and the numbers are
+    # measured (2026-08-17), not estimated: if `_app_paths()` stops matching
+    # anything at all, `app_env_vars()` returns exactly the 4 entries of
+    # SDK_RESOLVED_VARIABLES, so this floor does catch the empty scan it was
+    # written for, with two to spare. What it cannot notice is a whole area of
+    # `backend/src` going unscanned while the rest still answers — the two scan
+    # mechanisms are near-redundant (either alone still yields 17), so nothing
+    # else here would notice either. That case is bound by
+    # `test_every_env_reading_subpackage_still_contributes` below, which names
+    # the package that went dark instead of asserting a bigger magic number
+    # (`docs/BUILD-PLAN.md §10.7g`).
     assert len(app) >= 6, app
     # The three that would have caught the historical defects, by the three
     # different mechanisms this module uses to find them.
@@ -461,6 +473,59 @@ def test_the_derivation_actually_found_something() -> None:
     assert "ANTHROPIC_API_KEY" in app  # read by the SDK; found only by text
     # And the one that must never be forwarded: a membership probe, not a read.
     assert "PYTEST_VERSION" not in app
+
+
+# Every subpackage of `backend/src` that performs a literal `os.environ` /
+# `os.getenv` read, with the distinct names each contributed when this was
+# measured (2026-08-17):
+#
+#   agent     2   LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY
+#   data      3   DATABASE_URL, KB_EMBEDDER, VOYAGE_API_KEY
+#   helpdesk  7   ZENDESK_AI_USER_ID, ZENDESK_OAUTH_{CLIENT_ID,CLIENT_SECRET,
+#                 REFRESH_TOKEN,TOKEN}, ZENDESK_SUBDOMAIN, ZENDESK_TOKEN_STORE
+#   ingress   2   ZENDESK_AI_USER_ID, ZENDESK_WEBHOOK_SIGNING_SECRET
+#   portal    2   LANGFUSE_HOST, PORTAL_TOKEN
+#   worker    1   REDIS_URL
+#
+# `escalation` and the two top-level modules read nothing and are deliberately
+# absent — a required-set that included them would go red on a true statement.
+ENV_READING_SUBPACKAGES = ("agent", "data", "helpdesk", "ingress", "portal", "worker")
+
+
+def test_every_env_reading_subpackage_still_contributes() -> None:
+    """The breadth guard the raw count floor above cannot be.
+
+    `helpdesk` alone contributes 7 of the 17 names. If it moved out of
+    `backend/src`, or the glob stopped reaching into it, the derived set would
+    lose seven credentials — every Zendesk one — and `len(app) >= 6` would
+    still pass, as would every other assertion in this module, because each of
+    them only checks variables the derivation *found*. A silently narrowed
+    scan is the same failure as an empty one, one directory at a time.
+
+    Asserted per subpackage rather than as a tighter total, on purpose: a
+    number goes red on any legitimate shrinkage and tells you nothing about
+    why, while this names the package that went dark. If one of these
+    genuinely stops reading the environment, delete it from the tuple in the
+    same commit that removes the reads — that is a one-line, deliberate edit
+    with a diff a reviewer can see, which a moved floor is not.
+    """
+    dark = []
+    for name in ENV_READING_SUBPACKAGES:
+        package = APP_SOURCE_ROOT / name
+        assert package.is_dir(), (
+            f"backend/src/{name}/ does not exist — if it moved, every variable it "
+            "read has silently stopped being required in any container"
+        )
+        literals, _ = _scan(sorted(package.rglob("*.py")))
+        if not literals:
+            dark.append(name)
+    assert not dark, (
+        f"these subpackages of backend/src no longer perform any environment read: "
+        f"{dark}. Either the reads moved out of backend/src (in which case the "
+        f"credentials they name are no longer required in any container — the "
+        f"docs/STATE.md §6.2 defect), or they were genuinely removed, in which case "
+        f"delete them from ENV_READING_SUBPACKAGES here."
+    )
 
 
 def test_the_exemption_ledger_can_never_silence_a_real_requirement() -> None:

@@ -73,8 +73,13 @@ services:
     # `docker compose up --wait` exits non-zero on a working stack. The probe
     # checks for the health-check key arq writes into Redis — liveness of the
     # broker link, nothing about whether runs succeed (`run_ticket` swallows
-    # failures; see its docstring) and nothing timely about a hang (arq's
-    # default `health_check_interval` is 3600s). It carries no string
+    # failures; see its docstring) and nothing about a hung model call, which
+    # keeps the key fresh because `record_health` runs on the event loop while
+    # `run_agent` runs in a thread. It IS timely about a stopped loop or a lost
+    # Redis link: `WorkerSettings.health_check_interval` is 30s (was arq's
+    # 3600s default until 2026-08-17), matched to the `interval:` below so a
+    # stale key cannot outlive one probe window — `docs/BUILD-PLAN.md §10.7f`
+    # and the comment on `HEALTH_CHECK_INTERVAL_SECONDS`. It carries no string
     # literals: the key is assembled from `worker.settings.QUEUE_NAME` and
     # `arq.constants.health_check_key_suffix`.
     healthcheck:

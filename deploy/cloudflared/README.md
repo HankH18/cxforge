@@ -5,8 +5,8 @@ work package W1-F2 (ADR-005); brought up and read back under W3-G3. The tunnel
 carries real traffic, including a Zendesk webhook that drove a complete agent
 run.
 
-The check that counts — a request from **outside** the droplet that reaches the
-app (last section, check 3). Every response below came back through the
+The check that counts — a request from OUTSIDE the droplet that reaches the
+app (last section). Every response below came back through the
 Cloudflare edge (`server: cloudflare`, `cf-ray` present):
 
 | Request | Result |
@@ -19,8 +19,12 @@ Cloudflare edge (`server: cloudflare`, `cf-ray` present):
 The supporting facts, also measured rather than assumed: `.env` holds a
 184-character `CLOUDFLARE_TUNNEL_TOKEN`; `PUBLIC_BASE_URL=https://cxforge.hankholcomb.com`
 resolves to Cloudflare anycast; the connector registers 4 QUIC connections
-(`ewr01/08/11/12`) and `GET http://cloudflared:2000/ready` returns
-`{"status":200,"readyConnections":4,...}`.
+(`ewr01/08/11/12`).
+
+`GET http://cloudflared:2000/ready` used to be listed here as a fourth
+supporting fact. It has been removed, because it is **not evidence of anything**
+— it returned `{"status":200,"readyConnections":4}` throughout a later 7.5-minute
+total outage. See "`/ready` and the dashboard are false greens" below.
 
 ---
 
@@ -113,7 +117,7 @@ populated in the real, gitignored `.env`):
 | Variable | Read by | Default |
 |---|---|---|
 | `CLOUDFLARE_TUNNEL_TOKEN` | `deploy/docker-compose.yml`, passed to the container as `TUNNEL_TOKEN` | **none** |
-| `PUBLIC_BASE_URL` | nothing yet — it is where the hostname is written down | **none** |
+| `PUBLIC_BASE_URL` | `scripts/verify_deploy.sh`'s public-path stage (from the operator's machine, never inside a container) | **none** |
 
 `CLOUDFLARE_TUNNEL_TOKEN` has **no `:-` default** deliberately. A `:-` default
 renders an empty string, and an empty token starts a `cloudflared` that serves
@@ -148,6 +152,14 @@ deliberately, not a tidy-up.
 reads it. It is the single place the public origin is recorded, and the
 Zendesk webhook endpoint is `${PUBLIC_BASE_URL}/webhooks/zendesk`.
 
+What **does** read it is `scripts/verify_deploy.sh`, on the operator's machine:
+since 2026-08-17 its public-path stage samples this hostname (20x `GET /health`
+→ 200 and 20x unsigned `POST /webhooks/zendesk` → 401) and fails the run with a
+rate when the transport is only partly serving. That is the automated form of
+the read-back described below — before it existed, every assertion in that
+script went to the droplet's own port and none of them could fail while this
+tunnel was down.
+
 ## Bringing it up
 
 ```bash
@@ -163,30 +175,47 @@ deploy/compose.sh up -d --build --wait
 
 ## Reading the effect back — the only thing that counts as "it works"
 
-`docker compose ps` showing `running` proves the process started, not that the
-tunnel carries traffic. `restart: unless-stopped` will happily restart a
-container that is failing. Three checks, in increasing order of what they
-prove:
+There is exactly one check that is evidence: **a request from OUTSIDE the
+droplet that reaches the app.**
 
 ```bash
-# 1. cloudflared's own readiness endpoint (metrics port, container-internal).
-#    Run from the droplet; the image ships no shell, so probe it from outside
-#    the container.
-docker compose -f deploy/docker-compose.yml logs cloudflared | tail -30
-
-# 2. The tunnel is registered: the Cloudflare dashboard shows the connector
-#    HEALTHY with active connections.
-
-# 3. The only one that is real: a request from OUTSIDE the droplet that
-#    reaches the app.
 curl -sS -o /dev/null -w '%{http_code}\n' "$PUBLIC_BASE_URL/health"     # expect 200
 ```
 
-Check 3 passing means the hostname resolves, Cloudflare terminates TLS, the
-tunnel is connected, and `portal:80` answered. Nothing less than that should be
-written down as "the tunnel is up".
+A 200 there means the hostname resolves, Cloudflare terminates TLS, the tunnel
+is connected, **the edge is routing to a connection that is actually alive**, and
+`portal:80` answered. Nothing less than that should be written down as "the
+tunnel is up".
 
-**Run 2026-08-17 (W3-G3): all three pass** — the responses are at the top of
-this file. The distinction this section draws is exactly the one that mattered:
-for several hours 1 and 2 were both green while the only check that counts
-returned 502, and only check 3 could tell the difference.
+Everything else is a diagnostic, not evidence. `docker compose ps` showing
+`running` proves the process started; `restart: unless-stopped` will happily
+restart a container that is failing. The logs
+(`docker compose -f deploy/docker-compose.yml logs cloudflared | tail -30`) are
+worth reading *after* the public check has already failed.
+
+### `/ready` and the dashboard are false greens
+
+`GET http://cloudflared:2000/ready` returning `{"status":200,"readyConnections":4}`
+and a HEALTHY connector in the Cloudflare dashboard are both fully compatible
+with a **total** outage, and were measured that way on 2026-08-17: four
+registered connections, config v3 loaded, every precheck PASS — while every
+request returned 502 for 7.5 straight minutes and
+`cloudflared_tunnel_total_requests` stayed at **0**. The 502s never reached this
+connector; Cloudflare's edge was still routing to a *previous* connector's dead
+connections, because each `cloudflared` start mints a new connector ID. Full
+diagnosis and the three independent proofs: `docs/BUILD-PLAN.md §10.6g`.
+
+The operational consequence, which is live for Wave 4: this service has
+`restart: unless-stopped` and **no healthcheck** (the image ships no shell or
+curl, so a container-local probe is not expressible), so a restart can leave the
+tunnel non-serving for minutes with every instrument reporting healthy. A clean
+`up -d --force-recreate` recovers it in ~3 seconds. The practical rule is
+therefore: **do not restart `cloudflared` near an ADR-015 scenario run, and
+verify publicly after any deploy.** A sidecar probe or an external monitor is an
+owner decision, not something to add in passing.
+
+**Run 2026-08-17 (W3-G3): the public check passed** — the responses are at the
+top of this file. The distinction this section draws is the one that has now
+mattered twice. Both times the cheap checks were green while the public URL
+returned 502: first the dashboard ingress rule's scheme (history section above),
+then the dead-connection routing described here.

@@ -47,6 +47,44 @@ def test_deploy_doc_documents_the_local_opt_in_flag_the_script_actually_parses()
     )
 
 
+def test_deploy_doc_documents_the_public_path_stage_and_its_flag() -> None:
+    """The public-path stage is worth nothing if a reader does not know the
+    droplet-port assertions never touch Zendesk's route.
+
+    Both halves are read out of the script rather than hardcoded, so renaming
+    the flag or the variable fails this test instead of leaving the doc
+    describing an invocation that no longer works — the same reason the
+    ``--local`` test above is written this way.
+    """
+    script = VERIFY_SCRIPT.read_text()
+    assert "--public)" in script, "expected verify_deploy.sh to parse a --public flag"
+    assert "PUBLIC_BASE_URL" in script, (
+        "verify_deploy.sh no longer reads PUBLIC_BASE_URL — if the public-path "
+        "stage was removed, the gate is blind to the only route Zendesk has "
+        "(docs/BUILD-PLAN.md §10.6g)"
+    )
+
+    doc = DEPLOY_DOC.read_text()
+    assert re.search(r"--public\b", doc), (
+        "docs/deploy.md does not mention the --public flag verify_deploy.sh parses"
+    )
+    assert "PUBLIC_BASE_URL" in doc, (
+        "docs/deploy.md does not mention PUBLIC_BASE_URL, so nothing tells a "
+        "reader that DEPLOY_HOST-based checks bypass Cloudflare entirely"
+    )
+
+
+def test_env_example_still_declares_the_public_hostname_the_gate_reads() -> None:
+    """``.env.example`` is where the public hostname is written down, and the
+    public-path stage skips (loudly) when it is empty — so a run that has it
+    undeclared cannot check Zendesk's route at all. Declared-and-empty is the
+    correct shipped state; missing entirely is not."""
+    declared = [
+        ln for ln in ENV_EXAMPLE.read_text().splitlines() if ln.startswith("PUBLIC_BASE_URL=")
+    ]
+    assert len(declared) == 1, declared
+
+
 def test_deploy_doc_states_that_an_exported_deploy_host_wins_over_dotenv() -> None:
     """The precedence rule is the whole point of T-17; the doc must say so.
 
