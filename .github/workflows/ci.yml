@@ -50,8 +50,19 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen
 
+      # Two invocations, because `extend-exclude` in pyproject.toml is
+      # gitignore-style: the bare entry `"portal"` matches ANY directory named
+      # portal at any depth, so it silently swallows backend/src/portal/ and
+      # backend/tests/portal/ — Python, not the Vite app. `ruff check .` reports
+      # 124 files and none of those 19, which had therefore never been linted
+      # here. The second line is what `.claude/rules/build-protocol.md` rule 2
+      # has always required of a local commit; this step just stopped being the
+      # weaker gate. backend/tests/test_ci_workflow.py checks the coverage by
+      # measurement rather than trusting either pattern.
       - name: Lint
-        run: uv run ruff check .
+        run: |
+          uv run ruff check .
+          uv run ruff check backend/src/portal backend/tests/portal
 
       - name: Type-check
         run: uv run mypy backend
@@ -63,18 +74,56 @@ jobs:
         run: uv run python backend/src/portal/codegen.py --out portal/src/api-types.ts --check
 
       # Single run — `-rs` reports skip reasons so the guard below can read
-      # them without paying for a second full pass of the suite.
+      # them without paying for a second full pass of the suite. `--color=no`
+      # pins what is already true here (piping through `tee` makes stdout a
+      # pipe, so --color=auto resolves to no colour) so that /tmp/pytest.out
+      # stays plain text for the two guards that parse it, whatever a future
+      # runner image, `uv`, or a FORCE_COLOR/PY_COLORS in the environment does.
       - name: Test
         run: |
           set -o pipefail
-          uv run pytest -m "not live" -rs 2>&1 | tee /tmp/pytest.out
+          uv run pytest -m "not live" -rs --color=no 2>&1 | tee /tmp/pytest.out
 
       # A skip is not a pass. If the database-backed tests ever start skipping
       # in CI again, fail loudly rather than shipping a hollow green tick.
+      #
+      # Match the skip REASON `-rs` prints, never a bare substring. This guard
+      # was `grep -qi "SKIP_DB_TESTS"`, which matched the ordinary progress line
+      # of the test module named after the variable —
+      #     backend/tests/test_skip_db_tests_relocation.py ....       [  3%]
+      # — so the filename alone failed run 32003095488, in which all 511 tests
+      # had in fact run against the Postgres service above and nothing skipped.
+      #
+      # `-rs` prints one summary line per distinct skip reason, in two shapes:
+      #     SKIPPED [8] backend/tests/graph/test_tracing.py: <reason>
+      #     SKIPPED [1] backend/tests/data/test_lookup.py:27: <reason>
+      # (no line number when the skip came from the
+      # `pytest_collection_modifyitems` hook in backend/tests/conftest.py, one
+      # when it came from a `skipif`). The pattern requires that whole structure
+      # — SKIPPED token, [count], `path[:lineno]:` — and then matches inside the
+      # reason, which a path or test id containing the string cannot satisfy.
+      # Every database skip in the suite carries the one reason "requires the
+      # docker-compose db service (CI sets SKIP_DB_TESTS=1)" (that hook plus the
+      # `skipif` sites under backend/tests/data|graph|grounding|ingress|portal),
+      # so either alternative catches all of them. `SKIP_DB_TESTS` is matched
+      # case-sensitively on purpose: the env var is upper case, the paths that
+      # used to false-positive are lower case.
+      #
+      # No `^` anchor, and `.*` between SKIPPED and [count], both deliberate:
+      # with colour on pytest wraps that one word, emitting
+      #     <ESC>[33mSKIPPED<ESC>[0m [8] backend/tests/graph/...: <reason>
+      # against which BOTH `^SKIPPED` and a literal `SKIPPED [` adjacency match
+      # nothing at all — a guard that cannot fire, which is worse than no guard.
+      # Colour is off here twice over (the `tee` pipe, plus --color=no above) but
+      # the matcher must not depend on that staying true. The escapes cannot fool
+      # `\[[0-9]+\]`: `[33m` and `[0m` have no `]` after their digits, and the
+      # count, path and reason are never coloured.
+      #
+      # Not -q, so the matched lines are printed as diagnostics.
       - name: Assert database tests actually ran
         run: |
-          if grep -qi "SKIP_DB_TESTS" /tmp/pytest.out; then
-            echo "::error::Database-backed tests were skipped — the Postgres service is not reachable."
+          if grep -nE 'SKIPPED.*\[[0-9]+\] [^ ]+: .*(SKIP_DB_TESTS|docker-compose db service)' /tmp/pytest.out; then
+            echo "::error::Database-backed tests were skipped — the Postgres service is not reachable. The offending SKIPPED reasons are printed above."
             exit 1
           fi
 
