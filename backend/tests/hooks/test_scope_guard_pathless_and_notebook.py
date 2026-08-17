@@ -13,7 +13,8 @@ scope_guard.sh execs into; see its own docstring), which intercepts before
 harness_lib.py ever sees the payload.
 
 Acceptance 3: NotebookEdit is added to the settings.json matcher (see
-test_settings_json_matcher_includes_notebookedit below) AND its
+test_settings_json_matcher_includes_notebookedit, retired to
+.claude/harness-archive/ by ADR-019) AND its
 tool_input.notebook_path is honoured by the guard. harness_lib.py's guard
 only ever reads tool_input.file_path and cannot be changed, so
 scope_guard_prep.py normalises notebook_path into file_path before either
@@ -32,7 +33,7 @@ from pathlib import Path
 
 import pytest
 
-from .conftest import REAL_SCOPES, REPO_ROOT, decision, expect, make_project, run_hook
+from .conftest import REAL_SCOPES, decision, expect, make_project, run_hook
 
 # ---------------------------------------------------------------------------
 # Acceptance 2: pathless payloads deny-by-default.
@@ -194,19 +195,3 @@ def test_notebookedit_with_no_notebook_path_is_pathless_denied(project: Path) ->
     assert decision(result) == "deny"
 
 
-def test_settings_json_matcher_includes_notebookedit() -> None:
-    """Acceptance 3's other half: the REAL .claude/settings.json PreToolUse
-    matcher must actually route NotebookEdit calls to scope_guard.sh, or
-    the shim-level normalisation above is unreachable in practice.
-    """
-    settings = json.loads((REPO_ROOT / ".claude" / "settings.json").read_text())
-    matchers = [
-        entry["matcher"]
-        for entry in settings["hooks"]["PreToolUse"]
-        if "scope_guard.sh" in entry["hooks"][0]["command"]
-    ]
-    assert matchers, "no PreToolUse entry routes to scope_guard.sh at all"
-    assert all("NotebookEdit" in m for m in matchers)
-    assert all("Edit" in m and "Write" in m for m in matchers), (
-        "NotebookEdit must be ADDED to the matcher, not replace Edit|Write"
-    )

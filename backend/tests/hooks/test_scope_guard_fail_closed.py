@@ -21,10 +21,9 @@ Claude Code invokes it — no mirrored logic.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from .conftest import REPO_ROOT, decision, run_hook
+from .conftest import decision, run_hook
 
 # The synthetic project's tickets.json (see conftest.make_project) gives this
 # ticket a scope covering backend/**; anything outside it must be denied.
@@ -75,27 +74,6 @@ def test_the_pathless_deny_is_not_a_blanket_deny(project: Path) -> None:
 # ---------------------------------------------------------------------------
 # Gap 2 — NotebookEdit
 # ---------------------------------------------------------------------------
-def test_notebook_edit_is_matched_by_settings_json() -> None:
-    """Acceptance 3, first half. The guard cannot judge a tool the harness
-    never routes to it, so the matcher itself is part of the contract.
-
-    Asserted against the REAL `.claude/settings.json`, deliberately: the
-    synthetic fixture project does not carry one, and a matcher that only
-    named NotebookEdit inside a tmp_path copy would prove nothing about what
-    the live harness actually routes."""
-    settings = json.loads((REPO_ROOT / ".claude" / "settings.json").read_text())
-    matchers = [
-        h["matcher"]
-        for h in settings["hooks"]["PreToolUse"]
-        if "scope_guard" in json.dumps(h)
-    ]
-    assert matchers, "no PreToolUse entry routes to scope_guard.sh"
-    assert all("NotebookEdit" in m for m in matchers), (
-        f"NotebookEdit missing from the scope_guard matcher(s): {matchers} — "
-        "notebook writes would bypass the scope guard entirely"
-    )
-
-
 def test_notebook_edit_out_of_scope_is_denied(project: Path) -> None:
     """Acceptance 3, second half: `notebook_path` is honoured. A notebook
     outside the claimed ticket's scope must be denied exactly as an ordinary

@@ -17,7 +17,8 @@ THE ORIGINAL FINDING, established empirically by the tests below: **no hook in t
 repository's wiring ever runs before `cmd_close`, for any of the five cases, so no fix
 confined to `.claude/hooks/**` could make this acceptance's "refuses ... names the
 offending record" guarantee hold.** That structural fact is still true, and
-`test_no_pretooluse_hook_matches_bash_tool_calls` still pins it.
+`test_no_pretooluse_hook_matches_bash_tool_calls` pinned it until W0.2 removed
+the hooks; retired to `.claude/harness-archive/` by ADR-019.
 
 RESOLUTION: the gap was closed where it actually lived — in `harness_lib.py` itself,
 under a direct, explicitly authorised patch from the project owner (the file is
@@ -29,7 +30,8 @@ used to make the integrity check pass vacuously, silently disabling scope enforc
 for the whole close while still minting a receipt.
 
   * `.claude/settings.json`'s only `PreToolUse` matchers are `"Edit|Write|NotebookEdit"`
-    and `"TaskUpdate"` (`test_no_pretooluse_hook_matches_bash_tool_calls` reads the real
+    and `"TaskUpdate"` (that was read from the real settings by a test now retired
+    to `.claude/harness-archive/` per ADR-019 — it read the real
     file and pins this). `claim.sh close` runs through the **Bash** tool -- per
     `.claude/rules/harness-protocol.md` rule 2, "All ticket lifecycle goes through
     `.claude/scripts/claim.sh`" -- which is a tool name neither matcher names, so no
@@ -215,32 +217,6 @@ def _claim_then_corrupt(proj: Path, session_id: str, mutate: Any) -> None:
 # ---------------------------------------------------------------------------
 # Structural proof: no PreToolUse hook can ever see a `claim.sh close` Bash call
 # ---------------------------------------------------------------------------
-def test_no_pretooluse_hook_matches_bash_tool_calls() -> None:
-    """Pins the architectural fact the whole file's "unreachable via hooks" finding
-    rests on: reads the REAL `.claude/settings.json` and asserts none of its
-    `PreToolUse` entries would ever fire for a Bash tool call (the only way
-    `claim.sh close` -- and so `cmd_close` -- is ever invoked, per harness-protocol.md
-    rule 2). If a future change wires a `PreToolUse` hook onto `Bash`, this test starts
-    failing, which is exactly the signal that a hook-layer fix for T-28 acceptance 1
-    becomes possible again.
-    """
-    settings = json.loads(SETTINGS_JSON.read_text())
-    pretooluse = settings["hooks"]["PreToolUse"]
-    assert pretooluse, "expected at least one PreToolUse entry"
-    for entry in pretooluse:
-        matcher = entry.get("matcher", "")
-        tool_names = matcher.split("|") if matcher else []
-        assert "Bash" not in tool_names, (
-            f"a PreToolUse hook now matches Bash ({entry!r}) -- cmd_close is reachable "
-            "via a hook again; T-28 acceptance 1 may now be fixable in .claude/hooks/**"
-        )
-    # And the converse, so this test cannot pass vacuously on an empty/renamed file:
-    # scope_guard.sh's own matcher is exactly what we expect it to be today.
-    matchers = {entry.get("matcher", "") for entry in pretooluse}
-    assert "Edit|Write|NotebookEdit" in matchers
-    assert "TaskUpdate" in matchers
-
-
 # ---------------------------------------------------------------------------
 # Case 1: valid JSON, no "ticket" key
 # ---------------------------------------------------------------------------
