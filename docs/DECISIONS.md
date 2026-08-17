@@ -282,6 +282,75 @@ re-runnable without exhausting the trial, and rate limits must be respected.
 
 ---
 
+## ADR-021 — `CLASSIFY_SYSTEM` gets one sentence about prior tickets, measured before and after
+
+**Decided 2026-08-16.** Owner call, and it needs to be read against **ADR-020 decision 3**,
+which says in terms that `CLASSIFY_SYSTEM` is **not** rewritten. That still holds. This is a
+different edit for a different reason, and it deliberately does not touch the thing ADR-020
+was protecting.
+
+**Decision.** Add two sentences to `agent.prompts.CLASSIFY_SYSTEM` telling the model that a
+labelled list of the requester's previous tickets may precede the conversation, that it is
+background, and that repeat contact by itself does not change the route. **Keep it only if
+route accuracy does not fall** — the owner pre-approved reverting it on a drop.
+
+**Why it needed a decision.** ADR-009 gave `classify` the requester's last five tickets and
+`agent.nodes.classify` renders them into the **user** message. `CLASSIFY_SYSTEM` was left
+alone, so the shipped prompt says nothing about prior tickets existing at all: the model is
+handed a block of history with no instruction about what it is for. ADR-009's stated goal is
+that "a repeat complainer now reads differently from a first-time asker", and half of that
+was never wired up. Prompt wording is Track B's, but *what ships* is the owner's.
+
+**Why this is not the rewording ADR-020 rejected.** ADR-020 rejected bending the four route
+**definitions** to preserve a label the owner had already agreed was wrong — fixing the
+measurement instead of the thing measured. This edit adds nothing to and removes nothing
+from those four definitions; it describes how to treat a block of context the code already
+sends. It also deliberately does **not** say or imply that repeat contact should escalate.
+That would have inflated the escalation rate, which is demo-visible and which
+`docs/BUILD-PLAN.md §10.2` already flags as inflated by grounding-guard false positives —
+so the sentence says the opposite in as many words.
+
+**It respects `prompts.py`'s own contract.** That module's docstring pins system strings to
+instructions only, never run-specific content — the structural reason no case fact can
+reach a prompt (R9). The addition names no ticket, no case and no customer; it describes a
+shape, and the history itself stays in the user message where ADR-009 put it.
+
+**The measurement, in the order it was taken.** The old 1.000 was over 30 branch-route
+tickets and was stale — ADR-020 moved the set to 52 total / 32 scored / 20 escalate — so a
+single post-change run could not have separated the relabel from the prompt.
+
+| | route accuracy | route-dependent | promptfoo | live calls | cost |
+|---|---|---|---|---|---|
+| baseline, prompt untouched | **1.000** (32/32) | **1.000** (7/7) | **24/24** | 1 (51 cached) | $0.006 |
+| with the addition | **1.000** (32/32) | **1.000** (7/7) | **24/24** | 52 | $0.372 |
+
+Per-route P/R/F1 is 1.000 across all four routes in both runs. One escalate-labeled,
+**route-independent** ticket moved branch (`esc-frustration-repeated-asks-01`, `kb` ->
+`off_topic`) — a message with no ask in it at all ("Absolutely unacceptable. I've asked
+THREE times now"), which escalates on frustration from any branch. No iteration: measured
+once, kept on the first number.
+
+**What this commits us to — and the honest limit on the evidence.** Neither eval harness
+feeds `classify` a non-empty history: `evals/route_accuracy.py` uses `_NoHistoryPort` and
+`evals/promptfoo/provider.py` now does too. So the two runs above prove the addition **costs
+nothing**; they cannot prove it **buys** anything, and it would be dishonest to cite them as
+if they did. A separate six-case live probe with real history blocks found the route
+identical under both prompts in every case, and confidence on ambiguous messages up a little
+with history present (`"Any update?"` 0.72 -> 0.82, `"just checking in"` 0.60 -> 0.72). It
+also found the model was *already* reading the history without being told to (0.62 -> 0.72
+under the old prompt when history was added). The fair claim is therefore narrow: this
+closes a documented gap between what the code sends and what the prompt acknowledges, at no
+measured cost — not that it improved routing, because no routing decision measurably moved.
+
+**Rejected.** Anything stronger than "background" (forcing or implying escalation on repeat
+contact — inflates a demo-visible rate). Putting the guidance in the user message next to
+the history (it is an instruction, and it would then be rebuilt per run for no reason).
+Iterating on the wording to chase a better number (there was no worse number to chase, and
+tuning until a metric looks good and then reporting only the last attempt is the failure
+mode this project keeps finding in its own history).
+
+---
+
 ## ADR-020 — The exact-date tickets are case-status questions; the labels were wrong
 
 **Decided 2026-08-16, during Wave 2.** Owner call. `docs/BUILD-PLAN.md §10.2` Gap 1 raised
@@ -303,6 +372,12 @@ it as "owner decision, not a subagent's"; this is the answer.
    as the alternative fix. It is rejected: bending the classifier away from a reading the
    owner agrees is correct, in order to preserve a label the owner agrees is wrong, is
    fixing the measurement instead of the thing measured.
+   *(Scope of this "not rewritten", clarified 2026-08-16: it is about the four route
+   **definitions**, which remain exactly as they were. **ADR-021** later added two
+   sentences elsewhere in the same string about how to treat the prior-ticket block
+   ADR-009 puts in the user message. That is a different edit for a different reason, it
+   leaves the route definitions untouched, and it was measured before and after. See
+   ADR-021 for why the two decisions do not conflict.)*
 
 **Why it needed a decision.** W1-E3 (`evals/route_accuracy.py`, 2026-08-16, `claude-opus-5`
 over all 51 labels, ~$0.30) drove the **shipped** `agent.nodes.classify` and found these two
@@ -353,11 +428,53 @@ the reply.
   extraction signature over the reply with and without the qualifier, not merely by
   asserting no violations.
 
+**Amendment, 2026-08-16 — the 52nd ticket was written by an agent after the owner's
+label approval, and the owner has now approved it.**
+
+The replacement ticket above, `esc-low_confidence-verifier_failure-summed-stages-01`, was
+**authored by the Wave 2 Track B coding agent**, not by the owner. Track B flagged it at the
+time as exceeding its brief — the brief was to relabel two tickets and add the ETA
+qualifier, not to add a row to the ground truth — and did not treat the flag as
+self-approval. The owner has now **reviewed the ticket and approved keeping it, on
+2026-08-16.** That approval is what this amendment records.
+
+Why the flag was correct to raise, stated precisely, because the obvious version of it is
+wrong. `evals/labeled_set.yaml` is not a hand-written file: `meta.authored_by` and
+`evals/REVIEW.md` both say plainly that the T-7 coding agent authored **every** label in
+it. So the anomaly is not "one machine-written row among 51 human-written ones" — it is
+that the other 51 rows were **read and signed off as a set** by Hank Holcomb on 2026-08-15
+(`approval:` block, after working through `evals/REVIEW.md`), and this one arrived
+**after** that sign-off. Until this amendment it was the single row in the file that no
+human had ever agreed to. The set's independence from the system it grades is the whole
+deliverable (`labeled_set.yaml`'s own header says so), and a row the grader's own toolchain
+added to keep a test green is precisely where that independence is thinnest.
+
+Why the row exists at all: relabeling the two exact-date tickets removed the labeled set's
+**only** two `verifier_failure` examples, and
+`backend/tests/evals/test_labeled_set.py::test_every_low_confidence_subtype_is_covered`
+requires each of `low_confidence`'s three subtypes to be represented. The only two ways
+forward were to write a genuine replacement or to weaken that coverage test. **Weakening
+the test was not on the table** — a coverage test that stops requiring coverage the moment
+coverage is inconvenient is not a test. The replacement poses the same trap about the
+*published* stage windows with no case in it, so nothing in its phrasing invites the
+`case_status` reading that caused the relabel in the first place; the live model routes it
+`kb` at 0.92 confidence, which is what the label needs.
+
+**What a future reader should take from this.** `evals/labeled_set.yaml` is the measuring
+instrument behind every published eval number in `docs/eval-report/`. One of its 52 rows
+was generated by an agent after the owner's review rather than during it, and it is
+identified in the file by its `note:` ("Added by ADR-020…"). If a future eval number is
+carried by that single ticket — for example a `verifier_failure` recall figure with a
+denominator of one — the number is resting on a row the toolchain proposed for itself, and
+should be reported with that stated rather than left for someone to discover.
+
 **Rejected.** Rewording `CLASSIFY_SYSTEM` (see decision 3). Leaving the labels alone and
 accepting a permanent known 2-ticket miss (it would make the route-accuracy harness report
 a defect that is really a labeling error, forever). Adding the disclaimer to *every*
 case-status reply (a completed case has no estimate; blanket hedging teaches customers to
-skip the words where they matter).
+skip the words where they matter). Weakening
+`test_every_low_confidence_subtype_is_covered` instead of writing the replacement ticket
+(see the amendment above).
 
 ---
 

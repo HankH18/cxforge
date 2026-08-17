@@ -13,6 +13,19 @@ promptfoo; the live behaviour (and the sabotage evidence that the suite goes red
 when a prompt is degraded) is recorded in ``promptfooconfig.yaml``'s own header.
 No new first-party import root is added to this directory — see
 ``test_route_accuracy.py``'s docstring for why that matters.
+
+WHAT THIS MODULE CANNOT SEE, AND WHERE THAT IS COVERED
+------------------------------------------------------
+Structural is not the same as executed. Nothing here runs
+``evals/promptfoo/provider.py``, so when W2-B4/ADR-009 gave ``classify`` a
+``port.fetch_requester_history`` call the provider could not answer, every
+classify case in the suite errored for a whole wave (5 passed, 19 errors) and
+all six tests below stayed green. ``test_promptfoo_provider.py`` closes that: it
+calls the real ``call_api`` over the real ``classify`` and ``compose`` nodes,
+offline, and is the module that goes red when a node grows a dependency the
+provider does not supply. The two are complements — the checks below are what
+stop the suite being "simplified" into a raw provider with a pasted prompt, and
+they must not be weakened to make anything pass.
 """
 
 from __future__ import annotations

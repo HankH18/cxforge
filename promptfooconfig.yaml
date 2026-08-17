@@ -8,7 +8,7 @@
 #
 # RUN IT
 #   set -a; source .env; set +a          # nothing in the app calls load_dotenv()
-#   npx promptfoo@0.122.0 eval           # ~19 live claude-opus-5 calls, ~$0.12
+#   npx promptfoo@0.122.0 eval           # 24 live claude-opus-5 calls, one per case
 #   npx promptfoo@0.122.0 view           # browse the results
 #
 # Per SPEC's constraints this is local / pre-push only and never runs in GitHub
@@ -23,19 +23,52 @@
 # degraded. A YAML-resident copy of the prompt would stay green forever, which
 # is worse than no eval at all because it looks like evidence.
 #
-# MEASURED BASELINE, 2026-08-16 — 23 of 25 pass.
+# MEASURED BASELINE, 2026-08-16 — 24 of 24 pass, 0 errors.
+# (ADR-021's before/after table, which ran this suite twice that day.)
 #
-# The two reds are `esc-low_confidence-verifier_failure-*`. Both are a real,
-# open finding, not flake and not a harness bug: the labeled set expects those
-# tickets to reach `verify` (so they need route `kb`), and the live model routes
-# them `case_status` with confidence 0.92 — "tell me the EXACT calendar date my
-# results will be ready" reads as a case-status question. In production with a
-# resolvable case that means a templated ETA reply instead of an escalation.
-# `uv run python -m evals.route_accuracy` reports the same two, independently.
-# Leaving them red is deliberate: they are the signal.
+# This supersedes "23 of 25 pass, with 2 known reds", recorded earlier the same
+# day. Three separate things moved; none of them was a loosened assertion, and
+# the suite is one case SMALLER, not two reds quietly deleted:
+#
+# 1. 25 cases -> 24. ADR-020 relabeled `esc-low_confidence-verifier_failure-
+#    exact-date-01` and `-summed-timeline-01` as ordinary `case_status`
+#    tickets, so they are no longer route-dependent escalations and
+#    evals/promptfoo/gen_tests.py stops emitting them; it added one
+#    replacement, `esc-low_confidence-verifier_failure-summed-stages-01`, which
+#    is route dependent and is emitted. Net: 20 classify cases -> 19, plus the
+#    5 adversarial grounding cases in evals/promptfoo/tests_grounding.yaml.
+#
+# 2. The 2 reds are gone because the OWNER MOVED THE LABELS, not because the
+#    model improved. They were exactly those two tickets: the live model routed
+#    "tell me the EXACT calendar date my results will be ready" to
+#    `case_status` at 0.92 confidence and `uv run python -m evals.route_accuracy`
+#    reproduced it independently, so ADR-020 decided the model was right and the
+#    labels were wrong. The real worry behind the old labels — a bare week
+#    figure implying a precision nobody has — is fixed in the REPLY
+#    (`render_case_status_reply` now qualifies its estimate), not by bending the
+#    classifier, which ADR-020 explicitly refused to do.
+#
+# 3. Between those two runs this suite was DEAD for a whole wave, and the number
+#    above is only trustworthy because that hole is now closed. W2-B4 / ADR-009
+#    gave `classify` a `port.fetch_requester_history` call while
+#    evals/promptfoo/provider.py still passed a raise-on-access `_Unused`
+#    sentinel for `port`, so from `cabefd8` onward EVERY classify case errored —
+#    measured 5 passed, 19 errors. Nothing caught it:
+#    backend/tests/evals/test_promptfoo_suite.py validates this file's *shape*
+#    and never executed `provider.call_api`, so 810 tests stayed green over a
+#    dead evidence stream. backend/tests/evals/test_promptfoo_provider.py now
+#    runs the real `call_api` over the real `classify` and `compose` nodes on
+#    every commit, offline.
+#
+# Re-check the number, do not trust this comment:
+#   set -a; source .env; set +a; npx promptfoo@0.122.0 eval
 #
 # SABOTAGE EVIDENCE, 2026-08-16 — this suite is bound to the shipped prompt
 # ------------------------------------------------------------------------
+# Denominators below are the suite AS IT WAS THAT DAY (20 classify cases, not
+# today's 19) — kept verbatim rather than restated, because a sabotage result is
+# a measurement and rewriting one to match a later suite would be fiction.
+#
 # Sabotage A, `CLASSIFY_SYSTEM`: swap the `case_status` and `kb` route
 # definitions. classify half 18/20 pass -> 10/20. Every `case_status` case
 # flipped to `kb` and every `kb` case flipped to `case_status`; `permission` and
@@ -58,8 +91,8 @@
 # One live call per test case. The classify cases are a canonical-scenario smoke
 # suite derived from the approved evals/labeled_set.yaml (see
 # evals/promptfoo/gen_tests.py), not a census — the census is
-# `uv run python -m evals.route_accuracy`, which sweeps all 51 tickets and emits
-# a per-route confusion matrix.
+# `uv run python -m evals.route_accuracy`, which sweeps all 52 tickets (51 before
+# ADR-020) and emits a per-route confusion matrix.
 # =============================================================================
 description: cxforge agent prompts — routing accuracy + adversarial R9 grounding
 

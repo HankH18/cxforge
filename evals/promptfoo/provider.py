@@ -26,10 +26,32 @@ the real ``compose``. The retrieval step is deliberately out of scope — it is
 measured by ``backend/tests/data`` and by W2-B; what this suite measures is
 what the model does with the context it is given.
 
-The ``port`` and ``escalation_decider`` slots of ``AgentDeps`` are filled with
-a sentinel that raises on any attribute access — neither node touches them, and
-if that ever changes this provider fails loudly rather than measuring something
-else quietly.
+The ``escalation_decider`` slot of ``AgentDeps`` is filled with a sentinel that
+raises on any attribute access — neither node touches it, and if that ever
+changes this provider fails loudly rather than measuring something else
+quietly. ``port`` was that same sentinel until W2-B4/ADR-009 gave ``classify``
+a ``fetch_requester_history`` call; it is now ``_NoHistoryPort``, which answers
+that one method with "no prior contact" (true here — every case is one
+synthetic message from a placeholder requester with no thread) and keeps the
+raise-on-anything-else behaviour for the rest of the port.
+
+TEST-ONLY escape hatch
+----------------------
+``EVALS_PROMPTFOO_FAKE_LLM_FOR_TESTS_ONLY`` substitutes canned schema responses
+for ``LLMClient.structured`` so ``backend/tests/evals/test_promptfoo_provider.py``
+can drive ``call_api`` — the REAL one, over the REAL nodes — inside
+``-m "not live"``, which is network-free and runs with no API key. That test is
+the thing that was missing: the ``_Unused("port")`` regression above killed all
+19 classify cases and 810 offline tests stayed green, because nothing executed
+this function.
+
+Same two-signal guard as ``evals/route_accuracy.py`` and ``evals/report.py``:
+the variable alone is not enough, the process must also be a real pytest process
+(``PYTEST_VERSION``, which pytest sets for the whole process lifetime and which
+a shell export cannot plausibly fake by accident). A stray export in a shell
+running ``npx promptfoo eval`` is a loud error, not a green suite that never
+reached the model. ``backend/tests/evals/test_promptfoo_provider.py::
+test_fake_llm_hatch_is_refused_outside_a_pytest_process`` is the proof.
 """
 
 from __future__ import annotations
@@ -55,14 +77,15 @@ import os  # noqa: E402
 from typing import Any  # noqa: E402
 
 from dotenv import load_dotenv  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
 
 import agent  # noqa: E402, F401  (package init before escalation.* — see nodes docstring)
 from agent import nodes  # noqa: E402
 from agent.config import ANTHROPIC_MODEL  # noqa: E402
-from agent.llm import AnthropicLLMClient  # noqa: E402
+from agent.llm import AnthropicLLMClient, LLMClient  # noqa: E402
 from agent.state import RunState  # noqa: E402
 from data import KBChunk, RetrievedChunk  # noqa: E402
-from evals.route_accuracy import _Unused  # noqa: E402
+from evals.route_accuracy import _NoHistoryPort, _Unused  # noqa: E402
 from helpdesk.models import Message, Ticket  # noqa: E402
 
 _REPO_ROOT = _bootstrap.REPO_ROOT
@@ -70,8 +93,67 @@ _KB_DIR = _REPO_ROOT / "fixtures" / "kb"
 _PLACEHOLDER_EMAIL = "promptfoo-harness@othram.invalid"
 _PLACEHOLDER_TIMESTAMP = "2026-01-01T00:00:00+00:00"
 
+TEST_ONLY_FAKE_LLM_ENV_VAR = "EVALS_PROMPTFOO_FAKE_LLM_FOR_TESTS_ONLY"
 
-def _llm() -> AnthropicLLMClient:
+
+def _running_under_pytest() -> bool:
+    """Second, independent signal that this really is a test process.
+
+    Identical mechanism and identical reasoning to
+    ``evals.route_accuracy._running_under_pytest``: ``PYTEST_VERSION`` is set by
+    pytest for the whole process lifetime, so the canned-response hatch cannot be
+    satisfied by a stray export in a shell running a real promptfoo eval.
+    """
+    return "PYTEST_VERSION" in os.environ
+
+
+class _CannedLLMClient:
+    """TEST-ONLY double — see the module docstring's escape-hatch section.
+
+    The spec is ``{"<SchemaName>": {"default": {...}, "matches": [[needle, {...}]]}}``.
+    ``matches`` is ordered; the first needle found anywhere in the assembled
+    messages wins, else ``default`` — the same shape as
+    ``evals.route_accuracy._FakeClassifyLLMClient``, so a test can prove which
+    text actually reached the model call rather than only that one was made.
+
+    A schema with no canned entry is an ERROR, never a silently-invented answer:
+    if a node this provider drives grows a new ``structured`` call site, the
+    offline acceptance test must be extended deliberately.
+    """
+
+    def __init__(self, spec: dict[str, Any]) -> None:
+        self._spec = spec
+
+    def structured(
+        self, schema: type[BaseModel], messages: list[dict[str, Any]], temperature: float = 0.0
+    ) -> BaseModel:
+        canned = self._spec.get(schema.__name__)
+        if canned is None:
+            raise AssertionError(
+                f"{TEST_ONLY_FAKE_LLM_ENV_VAR} carries no canned response for "
+                f"{schema.__name__}. A node this provider drives now makes an LLM call the "
+                "offline acceptance test does not know about — extend that test rather than "
+                "widening the fake, or the suite stops measuring what it claims to."
+            )
+        blob = "\n".join(str(message.get("content", "")) for message in messages)
+        for needle, payload in canned.get("matches", []):
+            if str(needle) in blob:
+                return schema(**payload)
+        return schema(**canned["default"])
+
+
+def _llm() -> LLMClient:
+    canned = os.environ.get(TEST_ONLY_FAKE_LLM_ENV_VAR)
+    if canned and not _running_under_pytest():
+        raise RuntimeError(
+            f"{TEST_ONLY_FAKE_LLM_ENV_VAR} is set, but this is not a pytest process. That "
+            "variable substitutes a canned response for every model call; honouring it here "
+            "would make promptfoo report on a suite that never reached the model. Unset it "
+            "to run a real eval."
+        )
+    if canned:
+        return _CannedLLMClient(json.loads(canned))
+
     load_dotenv(dotenv_path=_REPO_ROOT / ".env", override=False)
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise RuntimeError(
@@ -86,7 +168,20 @@ def _config(ticket_id: str) -> Any:
         "configurable": {
             "ticket_id": ticket_id,
             "deps": nodes.AgentDeps(
-                port=_Unused("port"),  # type: ignore[arg-type]
+                # W2-B4 / ADR-009 gave `classify` a port call
+                # (`fetch_requester_history`), so `_Unused("port")` here made
+                # EVERY classify case in this suite raise the sentinel's
+                # AssertionError — measured 2026-08-17: 19 errors, 5 passes.
+                # `evals/route_accuracy.py` grew `_NoHistoryPort` for exactly
+                # this and this provider was not updated with it; nothing in
+                # backend/tests/evals/test_promptfoo_suite.py executes
+                # `call_api`, so the offline suite stayed green through it.
+                # `_NoHistoryPort` answers "no prior contact", which is the TRUE
+                # answer here — a promptfoo case is a single synthetic message
+                # with a placeholder requester and no thread — and still raises
+                # on every OTHER port method, so the loud-failure property the
+                # docstring claims is preserved.
+                port=_NoHistoryPort(),  # type: ignore[arg-type]
                 llm=_llm(),
                 escalation_decider=_Unused("escalation_decider"),  # type: ignore[arg-type]
             ),
