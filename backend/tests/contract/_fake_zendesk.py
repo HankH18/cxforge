@@ -7,6 +7,19 @@ loop) against handlers here rather than canned per-call responses. Write
 handlers mutate the same store ``fetch_ticket``/``fetch_conversation`` read
 from, so a contract test can verify a write purely by reading it back
 through the Protocol — exactly the way a real Zendesk trial would behave.
+
+**This simulator lied for the project's whole life, and that is why a
+loop guard was down in production.** ``_put_ticket`` implemented
+``additional_tags`` as an additive tag write, because the adapter assumed it
+was one. Real Zendesk *discards* that field on a single-ticket update. So
+``test_every_write_appends_ai_processed_tag`` and ``test_add_tags_is_additive``
+were green against a fake that granted the assumption, while a complete
+successful production run left no ``ai-processed`` tag on the ticket at all.
+Every tag rule below is now a measurement against the live account
+(2026-08-17), recorded next to the handler that implements it — see
+``ZendeskAdapter._merge_tags`` for the raw table. When this fake and Zendesk
+disagree, the fake is wrong; check it against the account before "fixing" an
+adapter to match it.
 """
 
 from __future__ import annotations
@@ -81,8 +94,19 @@ class FakeZendesk:
         # existing test's author-kind mapping is unchanged.
         self._requester_ids: dict[str, str] = {DEFAULT_REQUESTER_EMAIL: CUSTOMER_USER_ID}
         self._extra_user_ids = count(300)
+        # PUTs to `/tickets/{id}.json` only — the tags sub-resource is counted
+        # separately in `tag_put_calls` so the retry tests, which assert exact
+        # ticket-update counts, are unaffected by the loop-guard tag write.
         self.put_calls: dict[str, int] = {}
+        self.tag_put_calls: dict[str, int] = {}
         self._queued: dict[str, list[httpx.Response]] = {}
+        self._queued_tags: dict[str, list[httpx.Response]] = {}
+        # Who this fake's OAuth token acts as, i.e. what `GET /users/me.json`
+        # answers and who authors every comment a write creates. Defaults to
+        # the dedicated AI user, which is the CORRECT production state (config
+        # agrees with the token). A test flips it to reproduce the 2026-08-17
+        # defect, where the token acted as the owner's admin account instead.
+        self.authenticated_user_id: str = AI_USER_ID
 
         router.route(method="GET", path__regex=r"^/tickets/(?P<ticket_id>\d+)\.json$").mock(
             side_effect=self._get_ticket
@@ -93,8 +117,21 @@ class FakeZendesk:
         router.route(method="PUT", path__regex=r"^/tickets/(?P<ticket_id>\d+)\.json$").mock(
             side_effect=self._put_ticket
         )
+        # The tags sub-resource. Registered AFTER the ticket-update route above
+        # but matched by its own regex, so `/tickets/1/tags.json` can never be
+        # served by `_put_ticket` (whose pattern anchors on `.json` immediately
+        # after the id).
+        router.route(method="PUT", path__regex=r"^/tickets/(?P<ticket_id>\d+)/tags\.json$").mock(
+            side_effect=self._put_tags
+        )
+        router.route(method="POST", path__regex=r"^/tickets/(?P<ticket_id>\d+)/tags\.json$").mock(
+            side_effect=self._post_tags
+        )
         router.route(method="GET", path__regex=r"^/search\.json$").mock(
             side_effect=self._search
+        )
+        router.route(method="GET", path__regex=r"^/users/me\.json$").mock(
+            side_effect=self._get_me
         )
 
     # -- seeding / inspection API used by the harness and adapter-specific tests --
@@ -157,6 +194,12 @@ class FakeZendesk:
         straight from "Zendesk"."""
         self._queued.setdefault(ticket_id, []).append(response)
 
+    def queue_tag_response(self, ticket_id: str, response: httpx.Response) -> None:
+        """Same, for the next ``PUT /tickets/{id}/tags.json`` — used to prove a
+        failed loop-guard tag write ABORTS the write it was guarding rather
+        than letting an untagged public reply out."""
+        self._queued_tags.setdefault(ticket_id, []).append(response)
+
     def group_id_for(self, ticket_id: str) -> str | None:
         group_id = self.tickets[ticket_id]["group_id"]
         return None if group_id is None else str(group_id)
@@ -165,6 +208,48 @@ class FakeZendesk:
         return (_EPOCH + timedelta(seconds=next(self._auto_clock))).isoformat()
 
     # -- route handlers -----------------------------------------------------
+
+    def _get_me(self, request: httpx.Request) -> httpx.Response:
+        """``GET /users/me.json`` — the identity the token acts as.
+
+        The single fact nothing in this project ever checked, and the reason
+        ``ZENDESK_AI_USER_ID`` could name a user that appears in no event the
+        system will ever see.
+        """
+        user = self.users.get(
+            self.authenticated_user_id,
+            {"id": int(self.authenticated_user_id), "role": "admin"},
+        )
+        return httpx.Response(200, json={"user": user})
+
+    def _put_tags(self, request: httpx.Request, ticket_id: str) -> httpx.Response:
+        """``PUT /tickets/{id}/tags.json`` — ADDITIVE. Measured 2026-08-17:
+        against tags ``['replace-probe']``, ``{"tags": ["ai-processed"]}``
+        yielded ``['ai-processed', 'replace-probe']``. Returns the merged set.
+        """
+        self.tag_put_calls[ticket_id] = self.tag_put_calls.get(ticket_id, 0) + 1
+        queued = self._queued_tags.get(ticket_id)
+        if queued:
+            return queued.pop(0)
+        existing = self.tickets[ticket_id]["tags"]
+        for tag in json.loads(request.content)["tags"]:
+            if tag not in existing:
+                existing.append(tag)
+        return httpx.Response(200, json={"tags": list(existing)})
+
+    def _post_tags(self, request: httpx.Request, ticket_id: str) -> httpx.Response:
+        """``POST /tickets/{id}/tags.json`` — REPLACES, despite the name.
+
+        Modelled although no adapter path calls it, because the measurement is
+        counter-intuitive enough to be a live trap: on 2026-08-17 a POST of one
+        tag reduced ticket 3's tags from
+        ``['ai-processed', 'cxforge-verify', 'probe-tags-endpoint']`` to
+        ``['probe-post-tags']``, wiping both the loop guard and the owner's
+        marker. Anyone who "simplifies" ``_merge_tags`` to a POST must fail a
+        test here, not in production.
+        """
+        self.tickets[ticket_id]["tags"] = list(json.loads(request.content)["tags"])
+        return httpx.Response(201, json={"tags": list(self.tickets[ticket_id]["tags"])})
 
     def _get_ticket(self, request: httpx.Request, ticket_id: str) -> httpx.Response:
         ticket = self.tickets.get(ticket_id)
@@ -237,42 +322,56 @@ class FakeZendesk:
             comment = patch["comment"]
             comment_id = next(self._comment_ids)
             is_public = bool(comment.get("public", True))
+            # Authored by whoever the token acts as — `authenticated_user_id`,
+            # NOT the configured `ai_user_id`. Hardcoding AI_USER_ID here was
+            # the second half of this fake's dishonesty: it made "the comment
+            # author equals ZENDESK_AI_USER_ID" true by construction, which is
+            # precisely the production assumption that turned out false.
+            author_id = int(self.authenticated_user_id)
             self.comments[ticket_id].append(
                 {
                     "id": comment_id,
-                    # Every write in production reaches Zendesk via the AI
-                    # agent user's own OAuth token, so every comment this
-                    # simulator creates is authored by it.
-                    "author_id": int(AI_USER_ID),
+                    "author_id": author_id,
                     "body": comment.get("body", comment.get("html_body", "")),
                     "html_body": comment.get("html_body", comment.get("body", "")),
                     "public": is_public,
                     "created_at": self._next_timestamp(),
                 }
             )
-            comment_event = {"type": "Comment", "id": comment_id, "public": is_public}
+            # Real Zendesk names the actor on the Comment event and on the
+            # enclosing audit; both are reproduced because
+            # `ZendeskAdapter._check_comment_author` reads the event first and
+            # falls back to the audit.
+            comment_event = {
+                "type": "Comment",
+                "id": comment_id,
+                "public": is_public,
+                "author_id": author_id,
+            }
 
-        # Real Zendesk: `tags` REPLACES the ticket's entire tag set, while
-        # `additional_tags` is purely additive. Applying `tags` first (if
-        # present) and then folding `additional_tags` on top mirrors what a
-        # single PUT carrying both would do against the real API, and is
-        # what makes this fake capable of reproducing the clobbering a
-        # `tags` write would inflict (including wiping the ai-processed
-        # loop-guard tag) rather than silently ignoring the field.
+        # MEASURED, not assumed. On `PUT /tickets/{id}.json` real Zendesk
+        # REPLACES the whole tag set from `tags`, and does not have an
+        # `additional_tags` field at all — it belongs to `update_many`, and an
+        # unknown key in the `ticket` object is discarded with a 200 exactly
+        # like the `banana_tags` control field was. So this handler applies
+        # `tags` destructively and IGNORES `additional_tags` entirely.
+        #
+        # Not ignoring it is what made this fake lie: the adapter's loop-guard
+        # tag rode in that field, the fake honoured it, and every tag assertion
+        # in the suite passed against a ticket Zendesk would have left untagged.
         if "tags" in patch:
             ticket["tags"] = list(patch["tags"])
-        if "additional_tags" in patch:
-            existing = ticket["tags"]
-            for tag in patch["additional_tags"]:
-                if tag not in existing:
-                    existing.append(tag)
         if "status" in patch:
             ticket["status"] = patch["status"]
         if "group_id" in patch:
             ticket["group_id"] = patch["group_id"]
 
         events = [comment_event] if comment_event else []
-        audit = {"id": next(self._audit_ids), "events": events}
+        audit = {
+            "id": next(self._audit_ids),
+            "author_id": int(self.authenticated_user_id),
+            "events": events,
+        }
         return httpx.Response(200, json={"ticket": ticket, "audit": audit})
 
 

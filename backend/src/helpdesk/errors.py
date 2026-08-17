@@ -36,6 +36,24 @@ class HelpdeskAPIError(HelpdeskError):
         self.status_code = status_code
 
 
+class HelpdeskAuthError(HelpdeskAPIError):
+    """The credential is dead and could not be renewed. Never retried.
+
+    A *subclass* of ``HelpdeskAPIError`` on purpose: every existing caller
+    already handles that type to mean "this read or write definitively
+    failed", and a credential failure is a strict special case of it. So
+    adding this type cannot change the control flow of code that predates
+    it (``worker.main.run_ticket``'s ``except Exception``,
+    ``portal``'s handlers) — it only lets a caller that *wants* to tell
+    "expired credential" apart from "Zendesk rejected the payload" do so.
+
+    Distinct from ``HelpdeskConfigError``, which means a credential was
+    never supplied. This one means a credential *was* supplied and is no
+    longer usable — the failure mode that read as "someone forgot to
+    re-authorize" three separate times because nothing named it.
+    """
+
+
 class RetryableResponse(HelpdeskError):
     """Internal signal for the adapter's retry loop only.
 

@@ -104,6 +104,14 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ZENDESK_SUBDOMAIN: ${ZENDESK_SUBDOMAIN:-}
       ZENDESK_OAUTH_TOKEN: ${ZENDESK_OAUTH_TOKEN:-}
+      # The access token above expires 30 minutes after issue, so these three
+      # are what let a long-running container renew it by itself
+      # (backend/src/helpdesk/zendesk_credentials.py). Without them a worker
+      # is useful for one 30-minute window and then 401s every run while
+      # still looking healthy to `docker compose ps`.
+      ZENDESK_OAUTH_REFRESH_TOKEN: ${ZENDESK_OAUTH_REFRESH_TOKEN:-}
+      ZENDESK_OAUTH_CLIENT_ID: ${ZENDESK_OAUTH_CLIENT_ID:-}
+      ZENDESK_OAUTH_CLIENT_SECRET: ${ZENDESK_OAUTH_CLIENT_SECRET:-}
       ZENDESK_AI_USER_ID: ${ZENDESK_AI_USER_ID:-}
       ZENDESK_WEBHOOK_SIGNING_SECRET: ${ZENDESK_WEBHOOK_SIGNING_SECRET:-}
       PORTAL_TOKEN: ${PORTAL_TOKEN:-dev-portal-token}

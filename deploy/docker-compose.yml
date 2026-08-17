@@ -93,6 +93,14 @@ services:
       # docs/zendesk-runbook.md has been completed by a human.
       ZENDESK_SUBDOMAIN: ${ZENDESK_SUBDOMAIN:-}
       ZENDESK_OAUTH_TOKEN: ${ZENDESK_OAUTH_TOKEN:-}
+      # ZENDESK_OAUTH_TOKEN expires 30 minutes after issue (it is a JWT with a
+      # single `exp` claim). These three are the renewal credential
+      # backend/src/helpdesk/zendesk_credentials.py spends to replace it, so a
+      # container outlives a single token. Empty is tolerated on the same
+      # request-time terms as the rest of this block.
+      ZENDESK_OAUTH_REFRESH_TOKEN: ${ZENDESK_OAUTH_REFRESH_TOKEN:-}
+      ZENDESK_OAUTH_CLIENT_ID: ${ZENDESK_OAUTH_CLIENT_ID:-}
+      ZENDESK_OAUTH_CLIENT_SECRET: ${ZENDESK_OAUTH_CLIENT_SECRET:-}
       ZENDESK_AI_USER_ID: ${ZENDESK_AI_USER_ID:-}
       ZENDESK_WEBHOOK_SIGNING_SECRET: ${ZENDESK_WEBHOOK_SIGNING_SECRET:-}
       # The agent graph (backend/src/agent/llm.py's AnthropicLLMClient) is
@@ -292,6 +300,14 @@ services:
       PORTAL_TOKEN: ${PORTAL_TOKEN:-dev-portal-token}
       ZENDESK_SUBDOMAIN: ${ZENDESK_SUBDOMAIN:-}
       ZENDESK_OAUTH_TOKEN: ${ZENDESK_OAUTH_TOKEN:-}
+      # The worker is the container this matters most for: it is long-running
+      # and `agent.nodes.ingest`'s first statement is a Zendesk fetch, so once
+      # ZENDESK_OAUTH_TOKEN's 30 minutes are up EVERY run fails — and arq
+      # books each swallowed failure as `success = True`, so nothing but the
+      # ERROR log disagrees. These three let it renew instead.
+      ZENDESK_OAUTH_REFRESH_TOKEN: ${ZENDESK_OAUTH_REFRESH_TOKEN:-}
+      ZENDESK_OAUTH_CLIENT_ID: ${ZENDESK_OAUTH_CLIENT_ID:-}
+      ZENDESK_OAUTH_CLIENT_SECRET: ${ZENDESK_OAUTH_CLIENT_SECRET:-}
       ZENDESK_AI_USER_ID: ${ZENDESK_AI_USER_ID:-}
       ZENDESK_WEBHOOK_SIGNING_SECRET: ${ZENDESK_WEBHOOK_SIGNING_SECRET:-}
       # NOT optional for the worker, unlike for `backend`: this container's

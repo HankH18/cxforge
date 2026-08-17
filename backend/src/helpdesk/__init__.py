@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from helpdesk.errors import (
     HelpdeskAPIError,
+    HelpdeskAuthError,
     HelpdeskConfigError,
     HelpdeskError,
     RateLimited,
@@ -24,10 +25,12 @@ from helpdesk.models import (
 )
 from helpdesk.port import HelpdeskPort
 from helpdesk.zendesk_adapter import ZendeskAdapter
+from helpdesk.zendesk_credentials import ZendeskCredentials
 
 __all__ = [
     "EscalationGroup",
     "HelpdeskAPIError",
+    "HelpdeskAuthError",
     "HelpdeskConfigError",
     "HelpdeskError",
     "HelpdeskPort",
@@ -39,4 +42,5 @@ __all__ = [
     "TicketStatus",
     "TicketSummary",
     "ZendeskAdapter",
+    "ZendeskCredentials",
 ]

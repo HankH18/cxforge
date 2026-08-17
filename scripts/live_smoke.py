@@ -65,10 +65,29 @@ def main(argv: list[str]) -> int:
 
     # Imported only after credentials are confirmed present, so a
     # credentials-absent run never constructs an httpx.Client at all.
+    from helpdesk.errors import HelpdeskConfigError
     from helpdesk.models import EscalationGroup
     from helpdesk.zendesk_adapter import ZendeskAdapter
 
     adapter = ZendeskAdapter()
+
+    # FIRST, before any write. `ZENDESK_AI_USER_ID` and the identity the token
+    # acts as are two independent facts, and on 2026-08-17 they disagreed on the
+    # live account — the AI's reply was authored by the owner's admin user while
+    # the variable named a different "Othram AI Agent" user, so ingress's
+    # self-event loop guard was comparing against an id no event can carry.
+    # Nothing failed anywhere; it took reading a ticket by hand to find.
+    #
+    # Ordered ahead of the writes deliberately: this is the check that can still
+    # be acted on cheaply. Once the script has posted a public reply, a wrong id
+    # has already produced an unguarded customer-visible comment.
+    try:
+        actual_user_id = adapter.verify_ai_user_id()
+    except HelpdeskConfigError as exc:
+        print(f"  FAIL: {exc}", file=sys.stderr)
+        return 1
+    print(f"  verify_ai_user_id   -> token acts as user {actual_user_id}, matching config")
+
     print(f"live_smoke: exercising every HelpdeskPort op against ticket {ticket_id}")
 
     ticket = adapter.fetch_ticket(ticket_id)
