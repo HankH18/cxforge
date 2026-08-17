@@ -6,6 +6,12 @@ deadline pressure is on the Zendesk one.
 Nothing here can be done from inside an agent session: each needs a browser consent, an
 account signup, a purchase decision, or a camera.
 
+> **Status 2026-08-17.** OA-1 ✅ · OA-2 ✅ · OA-3 ✅ · OA-4 ✅ · **OA-5 (the video) is the only
+> item left.** Two optional decisions remain and are *not* actions: Voyage billing
+> (`docs/BUILD-PLAN.md §10.3b`) and the reply-author identity (§10.7b). Re-measure with the
+> **Quick status check** at the bottom before trusting any ✅ — this page has flipped from ✅ to
+> ❌ overnight before.
+
 ---
 
 ## OA-1 — Voyage AI API key ⟵ do this first
@@ -90,8 +96,33 @@ project **"jarvis"** under org **"hank-personal"**.
 
 ---
 
-## OA-3 — Cloudflare domain and named tunnel ⚠️ **ONE FIELD WRONG — 30-second dashboard fix, 2026-08-17**
+## OA-3 — Cloudflare domain and named tunnel ✅ **DONE — verified live 2026-08-17**
 
+> ### The tunnel is live and one hostname serves everything.
+>
+> Measured from the public internet, not from the dashboard:
+>
+> | `https://cxforge.hankholcomb.com` | Result |
+> |---|---|
+> | `/` | **200** — the portal UI |
+> | `/health` | **200** |
+> | `/api/*` | **401** without a token |
+> | `/webhooks/zendesk` | **401** unsigned |
+>
+> **The fix was not the dropdown described below.** The owner repointed the tunnel's Service to
+> **`portal:80`** — not `HTTP → backend:8000` — and the portal container's nginx proxies
+> `/api/`, `/webhooks/` and `/health` to the backend while serving the SPA at `/`. No droplet
+> port is exposed.
+>
+> **The Zendesk webhook URL did not change**, and that was verified *before* the change was
+> recommended rather than after: a payload signed with the server's own `compute_signature`
+> returned **202 through nginx** and **202 direct**, so a valid HMAC signature survives the
+> proxy. Nothing in Admin Center needed touching.
+>
+> A real Zendesk comment has since travelled this path end to end — `docs/STATE.md §1`.
+
+> ### ⚠️ SUPERSEDED by the banner above (kept: it is the record of a correct diagnosis with the wrong fix)
+>
 > ### The tunnel is up. The ingress rule says `https://backend:8000` and the origin is plain HTTP.
 >
 > **Measured during W3-G3, after the redeploy.** `cloudflared` is running on the droplet
@@ -156,7 +187,7 @@ curl https://cxforge.hankholcomb.com/health  →  502
 **The 502 is the correct answer and is not a defect.** It means Cloudflare's edge resolved
 the hostname, found the tunnel configuration, and could not reach the origin — because
 `cloudflared` exists only as committed config in the working tree and nothing is deployed.
-It becomes 200 when W3-G3 redeploys the droplet. Getting a 502 rather than a 1033/530 is
+~~It becomes 200 when W3-G3 redeploys the droplet.~~ Getting a 502 rather than a 1033/530 is
 positive evidence the tunnel and hostname are wired correctly.
 
 > **Corrected 2026-08-17 by W3-G3.** The sentence "it becomes 200 when W3-G3 redeploys the
@@ -166,12 +197,20 @@ positive evidence the tunnel and hostname are wired correctly.
 > than the one this section describes (the ingress rule's scheme; see the banner above).
 > A 502 is consistent with at least three distinct causes, which is exactly why it could not
 > carry the claim "the tunnel and hostname are wired correctly" on its own.
+>
+> **Corrected again, same day.** It did not become 200 from the redeploy *or* from the scheme
+> dropdown either: it took a **Service-type change to `portal:80`**. Two predictions in a row
+> about what would turn this 200 were wrong; the thing that settled it was reading `/`,
+> `/health`, `/api/*` and `/webhooks/zendesk` back through the hostname.
 
 `CLOUDFLARE_TUNNEL_TOKEN` (184 chars) and `PUBLIC_BASE_URL=https://cxforge.hankholcomb.com`
 are both in `.env`.
 
-**Still to do, after W3-G3:** re-point the Zendesk webhook (Admin Center → Apps and
-integrations → Webhooks) to `https://cxforge.hankholcomb.com/webhooks/zendesk`.
+~~**Still to do, after W3-G3:** re-point the Zendesk webhook (Admin Center → Apps and
+integrations → Webhooks) to `https://cxforge.hankholcomb.com/webhooks/zendesk`.~~
+**Nothing left to do** — the webhook already pointed there, and the `portal:80` change did not
+alter the URL (signature verified through the proxy; see the banner). What *was* missing was a
+**trigger** to fire it — `docs/STATE.md §6.16`, now created.
 
 <details><summary>Original instructions (kept for reference)</summary>
 
@@ -201,10 +240,63 @@ would mean re-pasting the endpoint into Zendesk Admin Center before every take.
 
 ---
 
-## OA-4 — Zendesk re-authorization ❌ **REOPENED — the token is dead again, 2026-08-17**
+## OA-4 — Zendesk credential ✅ **SOLVED — 2026-08-17. Not a recurring chore.**
+
+> ### Standing procedure — renewal needs no browser
+>
+> ```bash
+> uv run python scripts/zendesk_oauth.py --refresh   # renews; then re-source .env
+> ```
+>
+> **Re-source `.env` afterwards: both values rotate.** Zendesk invalidates the spent refresh
+> token, so `ZENDESK_OAUTH_TOKEN` *and* `ZENDESK_OAUTH_REFRESH_TOKEN` are both new. Browser
+> consent (`--serve`) is needed **only** if the 30-day refresh token itself lapses.
+>
+> **This page was wrong about the mechanism three times, so here is what it actually is:**
+>
+> - The access token is a **JWT with exactly one claim (`exp`)** and a lifetime of **exactly
+>   1800s**. It was never "expired or revoked" — it simply expires. `expires_in` is not a
+>   lever: minting with 86400 / 172800 / 604800 returned 1800 every time.
+> - **A refresh token was being issued all along.** `scope` is `read write` with no
+>   `offline_access`, and Zendesk returns a **30-day** `refresh_token` regardless. The old
+>   `scripts/zendesk_oauth.py` did `.get("access_token")` and discarded the rest — and the
+>   grant response is the **only** place the refresh token is readable in full
+>   (`oauth/tokens/current.json` masks it) — so every one was thrown away unrecoverably.
+>   **That is why this was misdiagnosed three times.**
+> - **Rotation is proven, not assumed.** `--refresh` was run twice: the access token rotated
+>   both times, the refresh token rotated both times, and each new access token returned
+>   **200**.
+>
+> **Limitation, recorded as an open question rather than a defect** (`docs/BUILD-PLAN.md`
+> §10.7a): rotation is durable for a *process's* lifetime but **not across a container
+> restart** — a container's copy of the refresh token dies the first time that container
+> refreshes it. Fixing it properly needs a store the containers share (the database), which
+> is a **scope decision**.
+>
+> **API tokens were never an alternative.** `docs/SPEC.md:147` forbids them, *and* this
+> account (admin user created 2026-08-14) falls after Zendesk's **2026-07-28** cutoff that
+> blocks creating them at all.
+>
+> A real Zendesk ticket has since been answered end to end on the droplet with this
+> credential — `docs/STATE.md §1`.
+
+<details><summary>Previous status, 2026-08-17 morning (kept — it is the record of the last wrong theory)</summary>
+
+> **Status, 2026-08-17.** The *cause* is fixed in code: the access token's 30-minute
+> expiry is now renewed automatically from a 30-day refresh token
+> (`backend/src/helpdesk/zendesk_credentials.py`), and a credential that cannot be renewed
+> fails loudly instead of 401ing invisibly. What is left is **one** browser consent, to
+> seed `ZENDESK_OAUTH_REFRESH_TOKEN` in `.env` — the token currently there was minted by
+> the old script, which discarded the refresh token. Details and the exact command are
+> under "The permanent fix" below.
+
+</details>
 
 **Gates:** all of Wave 4 (live e2e), demo shots 1–5, **W3-G3's redeploy being worth
-anything**, and W3-G2's deep check ever passing against a real deployment.
+anything**, and W3-G2's deep check ever passing against a real deployment. **UNBLOCKED.**
+
+*Everything from here down is the historical record of how this was diagnosed. It is accurate
+about what was measured and stale about the status; the banner above is current.*
 
 Measured 2026-08-17 while building W3-G2, twice, from the token in `.env`:
 
@@ -229,8 +321,9 @@ healthy in `docker compose ps`, answer `verify_deploy.sh` 4/4, and answer no tic
 only signal is the worker's ERROR log, because arq books a swallowed failure as
 `success = True` (`worker/main.py`'s docstring).
 
-**Fix:** step 2 of the collapsed section below (`uv run python scripts/zendesk_oauth.py
---serve`), then step 3 to verify. Two minutes, needs a browser login.
+~~**Fix:** step 2 of the collapsed section below (`uv run python scripts/zendesk_oauth.py
+--serve`), then step 3 to verify. Two minutes, needs a browser login.~~ **Superseded — the fix
+is `--refresh`, and it needs no browser. See the banner at the top of OA-4.**
 
 ### ⚠️ The reason this keeps reopening: the token lives ~25 minutes
 
@@ -259,33 +352,70 @@ times with "nothing announcing the change".
 
 **Consequences that matter more than the re-auth itself:**
 
-- **A re-auth buys a ~25-minute window.** `scripts/verify_deploy.sh --deep` can take up to
-  4 minutes, so it must be run *immediately* after the re-auth, not after a build.
-- **Wave 4 is not runnable on a single token.** ADR-015's 20–30-ticket scenario run, and
-  every demo take, will cross an expiry boundary. Filming a 5-shot demo on a 25-minute
-  credential is a losing proposition.
-- **Nothing in the app refreshes it.** The token is read from the environment at request
-  time and never renewed, so a container that is running when the token expires keeps
-  401ing until someone re-authorizes and restarts (or re-copies `.env`).
+- **A re-auth buys a 30-minute window** (measured 1800s exactly, not the ~25 min first
+  estimated — that figure was the remainder from first *observed use*, not from issue).
+  Before the fix below, `scripts/verify_deploy.sh --deep` at up to 4 minutes had to run
+  *immediately* after a re-auth.
+- **Wave 4 was not runnable on a single token.** ADR-015's 20–30-ticket scenario run, and
+  every demo take, cross an expiry boundary. This is what the refresh path below is for:
+  with `ZENDESK_OAUTH_REFRESH_TOKEN` seeded, a long-running worker renews itself and the
+  30-minute boundary stops being a filming constraint.
+- ~~**Nothing in the app refreshes it.**~~ **Fixed 2026-08-17.**
+  `backend/src/helpdesk/zendesk_credentials.py` now renews the token in-process, before a
+  stale call goes out and again in response to a 401.
 
-**The permanent fix, and evidence that it is available.** Zendesk's `refresh_token` grant
-**is authorized for this OAuth client** — measured, with a control that proves the two
-errors are distinguishable:
+**The permanent fix — implemented 2026-08-17, and the standing theory about it was wrong.**
 
-```bash
-# grant_type=refresh_token, deliberately invalid refresh_token
-POST /oauth/tokens  →  400 invalid_grant        # grant type accepted, token rejected
-# control: grant_type=client_credentials, real client_id + secret
-POST /oauth/tokens  →  400 unauthorized_client  # that grant type is NOT authorized
+The theory recorded here was: the client would honour a refresh, but
+`scripts/zendesk_oauth.py` never requests `offline_access`, so no refresh token is ever
+issued. **The first half is right and the second half is false.** Measured against
+`GET /api/v2/oauth/tokens/current.json` on a live token:
+
+```
+scopes                   : ['read', 'write']          <- no offline_access anywhere
+refresh_token            : "...DM7OM4PKDA"            <- issued anyway
+refresh_token_expires_at : 2026-09-16T06:35:52Z       <- 30 days
+expires_at               : 2026-08-17T07:05:52Z       <- 30 min (created_at 06:35:52)
 ```
 
-`invalid_grant` rather than `unsupported_grant_type`/`unauthorized_client` means the client
-will honour a refresh. But `scripts/zendesk_oauth.py` requests `SCOPE = "read write"` and
-never `offline_access`, so **no refresh token is ever issued or stored** — the flow throws
-away the one thing that would end this. Making that change (request `offline_access`, keep
-`ZENDESK_OAUTH_REFRESH_TOKEN`, refresh on 401 in `helpdesk/zendesk_adapter.py`) touches
-`scripts/**` and `backend/src/helpdesk/**`, which are not W3-G3's rows in the ownership
-matrix, so it is written down here as the owner's call rather than taken.
+A refresh token **was being issued on every exchange all along**. The bug was that
+`scripts/zendesk_oauth.py` parsed `access_token` out of the grant response and dropped the
+rest of it. That endpoint is also the only place the refresh token is ever readable in
+full — `oauth/tokens/current.json` reports it masked, as above — so each dropped value was
+unrecoverable, which is what made the credential look un-renewable. **Nobody needs to
+change the scope, and adding `offline_access` would have risked a 400 for no benefit.**
+
+That the grant is authorized is now a three-way control, not a two-way inference:
+
+```bash
+POST /oauth/tokens  grant_type=refresh_token      →  400 invalid_grant          # supported + authorized; the VALUE was bad
+POST /oauth/tokens  grant_type=client_credentials  →  400 unauthorized_client    # supported; client not authorized for it
+POST /oauth/tokens  grant_type=banana_grant        →  400 unsupported_grant_type # server does not know it
+```
+
+Three distinct errors, so the server does separate those cases, and `refresh_token` lands
+in the one that means "we accept this grant from this client".
+
+Also measured, and worth knowing because it closes off the obvious shortcut: **`expires_in`
+is not a lever.** Minting tokens with `expires_in` of 86400, 172800 and 604800 produced a
+1800-second token every time. There is no "just ask for a 2-day token" option.
+
+~~**What you still have to do once:**~~ **DONE — nothing outstanding.** `.env` now carries
+`ZENDESK_OAUTH_REFRESH_TOKEN`, and rotation was demonstrated twice with a 200 on each new
+access token. Both commands, for the record:
+
+```bash
+uv run python scripts/zendesk_oauth.py --serve     # writes BOTH tokens; only if the 30-day refresh token lapses
+uv run python scripts/zendesk_oauth.py --refresh   # ordinary renewal, no browser; re-source .env after
+```
+
+**Caveat that is not fixed and cannot be fixed in `.env`:** Zendesk rotates the refresh
+token on every use, so the copy forwarded into a container is invalidated the first time
+that container refreshes. In-process renewal is therefore durable for the life of the
+process and **not** across a `docker compose restart`, which falls back to the now-spent
+value in the environment. The worker logs a WARNING when it rotates a value it cannot
+persist. Persisting it properly needs a store the containers share (the DB), which is a
+**scope decision, not a bug fix** — tracked as an open question in `docs/BUILD-PLAN.md §10.7a`.
 
 The trial lapses around **2026-08-27**, unchanged.
 
@@ -294,8 +424,10 @@ The trial lapses around **2026-08-27**, unchanged.
 > so. The `Quick status check` at the bottom of this file is the only thing here that
 > re-measures rather than remembers — run it before trusting any ✅ on this page.
 
-**Still to do here after OA-3 lands:** re-point the webhook in Admin Center → Apps and
-integrations → Webhooks to `https://cxforge.<your-domain>/webhooks/zendesk`.
+~~**Still to do here after OA-3 lands:** re-point the webhook in Admin Center → Apps and
+integrations → Webhooks to `https://cxforge.<your-domain>/webhooks/zendesk`.~~ **Not needed —
+the webhook URL never changed (OA-3). The missing piece was a *trigger* to fire it, now created:
+`docs/STATE.md §6.16`.**
 
 <details><summary>Original instructions (kept for reference)</summary>
 
@@ -361,6 +493,13 @@ whether the **real** model picks the right route for each scenario — something
 the repo checks today, because every canonical test hands the route in via a fake. It is
 the cheapest way to avoid a scenario behaving differently on camera than in tests.
 
+**One decision to settle before filming, not during it:** every customer-visible reply is
+currently authored by **"Hank Holcomb", admin** — the identity the OAuth token acts as — not by
+the dedicated "Othram AI Agent" user. Switching is **demo optics, not correctness**, and needs an
+OAuth consent as that user, which is `role: agent` and may lose permissions the admin token has.
+If you want it, do it early and prove it with a `scripts/live_smoke.py` run.
+`docs/BUILD-PLAN.md §10.7b`.
+
 ---
 
 ## Quick status check
@@ -379,7 +518,12 @@ printf "Zendesk token:   "
 curl -s -o /dev/null -w '%{http_code}\n' --max-time 15 \
   -H "Authorization: Bearer $ZENDESK_OAUTH_TOKEN" \
   "https://$ZENDESK_SUBDOMAIN.zendesk.com/api/v2/users/me.json"
+echo "Public hostname: $(curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://cxforge.hankholcomb.com/health) (want 200)"
 ```
+
+**If the Zendesk line prints 401, that is normal** — the access token lives 1800s. Run
+`uv run python scripts/zendesk_oauth.py --refresh`, re-source `.env` (both values rotate), and
+re-check. No browser needed unless the 30-day refresh token has lapsed (OA-4).
 
 > **Never use `${VAR:+SET}${VAR:-MISSING}`** for this. When `VAR` *is* set, `${VAR:-MISSING}`
 > expands to the **secret itself**, so the line prints `SET` followed by the full key. The

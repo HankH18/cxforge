@@ -296,6 +296,14 @@ empty database does **not** report a passing p95.
 **Acceptance:** SPEC success criterion 1 demonstrated against the **deployed** droplet;
 success criterion 6 backed by 20–30 real data points rather than a vacuous zero.
 
+> **Status 2026-08-17 — criterion 1 is met; criterion 6 is partly met.** A real Zendesk comment
+> drove a full run to a publicly posted reply on the droplet, and `/api/metrics` reports
+> `sample_count: 3` with p50 `15.0s` / p95 `15.3s` (§10.6a–b). What remains for this wave is the
+> **volume**: H1's 20–30-ticket runner, H2's read-back assertions across the canonical scenarios,
+> and H3's external-vs-`/api/metrics` agreement. Three data points are real evidence, not the
+> 20–30 ADR-015 commits to. The prerequisites §10.5(g) named — the tunnel, the trigger, a live
+> credential, and two working loop guards — are all now satisfied.
+
 ---
 
 ## 7. Wave 5 — Documentation and demo
@@ -353,15 +361,15 @@ A package is done when **all** hold. No exceptions, no "green enough" (ADR-016).
 
 See `docs/OWNER-ACTIONS.md` for exact commands. Ordered by what they unblock:
 
-Status as of **2026-08-16**, each verified by reading the effect back — not by being told:
+Status as of **2026-08-17**, each verified by reading the effect back — not by being told:
 
 | Action | Gates | Status |
 |---|---|---|
 | Voyage AI API key | W2-B1 | ✅ **DONE** — key present and verified live 2026-08-16 (`voyage-4-lite`, `output_dimension=1024` → exactly 1024 dims). **But the account has no payment method**, so it is on the free tier's 3 RPM / 10k TPM — see §10.3 |
 | Voyage billing + `KB_EMBEDDER=voyage` in the deploy env | the Voyage reseed being what production actually uses | ❌ **OUTSTANDING** — see §10.3 |
 | Langfuse `cxforge` project + correct `pk-lf-` / `sk-lf-` pair | W2-C1 | ✅ **DONE** — keys resolve to project `cxforge`; prefixes differ |
-| Cloudflare domain + named tunnel token | W1-F2, W3-G3, W4 | ⚠️ **ONE FIELD WRONG** — token and hostname are fine and the connector is up with 4 ready connections, but the dashboard ingress rule says `https://backend:8000` against a plaintext origin, so the edge still returns **502** after the redeploy. 30-second dashboard fix; see §10.5(c) and OA-3 |
-| Zendesk OAuth re-auth (browser PKCE consent) | **W3-G3, W3-G2's ability to pass, W4 entirely** | ❌ **REOPENED, and now understood** — the token is a **JWT that lives ~25 minutes** (`exp` is its only claim). 200 at 05:38, expired 06:03:13, 401 in the droplet's worker at 06:05:36 on 2026-08-17. A re-auth buys a 25-minute window, so it cannot carry ADR-015's 20–30-ticket run or a demo take. The client **would** honour a `refresh_token` grant the flow never requests. See §10.5(b) and OA-4 |
+| Cloudflare domain + named tunnel token | W1-F2, W3-G3, W4 | ✅ **DONE — verified 2026-08-17.** Service repointed to **`portal:80`** (not `backend:8000`); `https://cxforge.hankholcomb.com` serves `/` 200, `/health` 200, `/api/*` 401, `/webhooks/zendesk` 401 unsigned, no droplet port exposed. The webhook URL did not change and a valid HMAC signature survives the nginx proxy. See §10.6 and OA-3 |
+| Zendesk OAuth re-auth (browser PKCE consent) | **W3-G3, W3-G2's ability to pass, W4 entirely** | ✅ **SOLVED — 2026-08-17, and it was never a recurring chore.** A refresh token was being issued all along; the old script discarded it. Renewal is `uv run python scripts/zendesk_oauth.py --refresh`, **no browser**, proven twice. Browser consent only if the 30-day refresh token lapses. One limitation remains (rotation does not survive a container restart) — §10.7(a) and OA-4 |
 | Record the demo video | W5-J4 | Last |
 
 ### 10.1 ✅ RESOLVED — the retired harness no longer constrains new work
@@ -556,6 +564,9 @@ from four liveness assertions is precisely what carried "the deploy works" for w
 
 ### 10.5 W3-G3 measured findings — the droplet now runs the real loop, and two things gate it
 
+> **Both gates cleared 2026-08-17 — see §10.6.** (b) the credential, and (c) the hostname. (g)'s
+> "not proven" list is now proven end to end.
+
 **2026-08-17, W3-G3.** The droplet at **`161.35.2.250`** (DigitalOcean id `592687747`, name
 `cxforge`; the other two droplets on the account were not touched) was redeployed by rsync +
 `scp .env` + `deploy/compose.sh up -d --build --wait`. Six services, all reporting healthy,
@@ -588,7 +599,11 @@ carries the timeline, the consequence for ADR-015's 20–30-ticket run, and the 
 evidence that the client **would** honour a `refresh_token` grant that
 `scripts/zendesk_oauth.py` never asks for.
 
-**(c) The public hostname is still 502, and it is one dashboard dropdown.** `cloudflared`
+**(c)** ~~**The public hostname is still 502, and it is one dashboard dropdown.**~~
+**RESOLVED 2026-08-17 — and the diagnosis below was half right.** The scheme *was* wrong, but
+the fix was not `HTTP → backend:8000`: the Service is now **`portal:80`**, so one hostname
+serves the portal SPA, `/api/`, `/webhooks/` and `/health` through the portal container's
+nginx. See §10.6. *Original finding, preserved:* `cloudflared`
 runs with `readyConnections: 4`, but the ingress rule Cloudflare pushes down says
 `"service":"https://backend:8000"` while uvicorn serves plain HTTP (`http://backend:8000/health`
 → 200; `https://` → `SSL routines::wrong version number`). `deploy/cloudflared/README.md`
@@ -625,7 +640,10 @@ containers** — because the run itself never got past `ingest`:
 explicitly in the droplet's `.env` rather than left to the compose default. Flipping to
 Voyage needs the reseed in the same window (§10.3) and is a separate operation.
 
-**(g) Not proven, and it needs to be said plainly.** Nothing downstream of `ingest` has run
+**(g)** ~~**Not proven, and it needs to be said plainly.**~~ **ALL OF IT IS NOW PROVEN —
+2026-08-17, by a real customer comment on ticket 3. See §10.6.** Including the last sentence:
+the missing `notification_webhook` trigger was the Wave 4 prerequisite this paragraph
+identified, and it now exists. *Original finding, preserved:* Nothing downstream of `ingest` has run
 on the droplet: no `classify`/`compose`/`verify`/`act`, **no `runs` row has ever existed
 there** (the table is still empty), no draft, no Langfuse trace *from a droplet run*, and no
 public reply posted by the deployed agent. The tunnel has carried no request to the origin.
@@ -642,6 +660,85 @@ that is arq's own bookkeeping, not application state. Zendesk **ticket 3**
 ("W3-G3 deploy verification — case status question", requester `w.park@example.com`, tag
 `cxforge-verify`) was created as the disposable `CXFORGE_VERIFY_TICKET_ID` and left in place
 deliberately — the check is designed to reuse one ticket, and the retry after OA-4 needs it.
+
+### 10.6 The loop ran end to end on the droplet, driven by a real Zendesk comment
+
+**2026-08-17.** Everything here was read back from the live systems.
+
+**(a) The run.** A real public comment from the requester on live Zendesk **ticket 3**:
+Zendesk trigger fired (`WebhookEvent` in the audit) → Cloudflare tunnel → droplet ingress →
+**real Redis** → arq worker dequeued in **0.03s** → `run_agent` → `fetch_ticket` 200,
+`fetch_conversation` 200, `fetch_requester_history` 200 (**ADR-009 working in production**) →
+2 × Anthropic `claude-opus-5` → 3 × PUT to Zendesk → `agent run completed, duration_s: 11.477`.
+Route `case_status`, confidence **0.98**, outcome **`auto_sent`**. The reply is **publicly
+posted** and carries ADR-020's disclaimer verbatim ("an estimated timeline, and subject to
+change"). A Langfuse trace **from the droplet run** — `81cdbd81bdbc474eafac148ae997a51b` —
+landed in project `cxforge`. **This is SPEC success criterion 1 against the deployed system.**
+
+**(b) Metrics are real.** `/api/metrics` through the tunnel: `sample_count: 3`,
+`latency_p50_s: 15.0`, `latency_p95_s: 15.3` — against the vacuous `0.0` that
+`docs/STATE.md §4.1` warned would read as a passing p95. Inside R8's 5-minute bar **with
+evidence behind it**, on 3 data points rather than ADR-015's 20–30.
+
+**(c) One hostname serves everything.** Service repointed to **`portal:80`**; the portal
+container's nginx proxies `/api/`, `/webhooks/` and `/health` to the backend and serves the SPA
+at `/`. `/` 200, `/health` 200, `/api/*` 401 without a token, `/webhooks/zendesk` 401 unsigned.
+No droplet port exposed. **The Zendesk webhook URL did not change** — verified *before*
+recommending the change, not after: a payload signed with the server's own `compute_signature`
+returned **202 through nginx** and **202 direct**.
+
+**(d) The Zendesk credential renews itself, and the mechanism had been misdiagnosed three
+times.** The access token is a JWT with **exactly one claim (`exp`)** and a lifetime of
+**exactly 1800s**; `expires_in` is not a lever (86400 / 172800 / 604800 all returned 1800).
+**A refresh token was being issued all along:** `scope` is `read write` with no
+`offline_access`, and Zendesk returns a **30-day** `refresh_token` regardless. The old
+`scripts/zendesk_oauth.py` did `.get("access_token")` and discarded the rest — and the grant
+response is the **only** place the refresh token is readable in full — so every one was thrown
+away unrecoverably. Rotation is now **proven**: `--refresh` run twice, access token rotated
+both times, refresh token rotated both times (Zendesk invalidates the spent one), each new
+access token returned 200, **no browser**. Standing procedure is in OA-4. API tokens were never
+an alternative: `docs/SPEC.md:147` forbids them **and** this account (admin user created
+2026-08-14) falls after Zendesk's 2026-07-28 cutoff that blocks creating them at all.
+
+**(e) Three production defects the run exposed**, all fixed and verified live, recorded where
+the stale claim was: the `ai-processed` loop-guard tag was **inert**
+(`docs/STATE.md §5.1` — `additional_tags` is not a field of the ticket-update schema and
+Zendesk discards unknown keys with a 200; and on the tags sub-resource `PUT` is additive while
+`POST` is destructive, the reverse of the UI labels); `ZENDESK_AI_USER_ID` named a user the
+token never acts as, so **both loop guards were down simultaneously** and only an unrelated
+`{{ticket.latest_comment_id}}`-renders-empty bug stopped an infinite reply loop
+(`docs/STATE.md §6.15`); and the account had **zero triggers with a `notification_webhook`
+action**, so nothing ever fired the webhook — trigger `54508374798747` now exists and was
+verified by read-back (`docs/STATE.md §6.16`, the Wave 4 prerequisite §10.5(g) identified).
+
+**(f) CI is green for the first time.** It had failed **30 of 30 runs** — every run ever —
+on a `backend/tests/hooks` test that faked "no interpreter" with `PATH=/bin`: true on macOS,
+false on Ubuntu where `/bin` is a usrmerge symlink. **The guard was correct; the test was wrong
+about Linux.** That suite is retired (ADR-019 amendment) and run **32003095488** shows
+`Lint ✓ Type-check ✓ Portal contract ✓ Test ✓` with **511 passed**.
+
+### 10.7 Open questions from the live run — not decided, do not resolve in passing
+
+Each of these is the owner's call. None is a defect; none has been decided.
+
+**(a) Refresh-token rotation does not survive a container restart.** Zendesk invalidates a
+spent refresh token, so a container's copy in its environment dies the first time that
+container refreshes. In-process renewal is durable for a process's lifetime and **not** across
+`docker compose restart`. Fixing it properly needs a store the containers share (the database).
+That is a **scope decision, not a bug fix**.
+
+**(b) Every customer-visible reply is authored by "Hank Holcomb", admin.** Switching to the
+dedicated "Othram AI Agent" identity (`54404962250395`) is **demo optics, not correctness**, and
+needs an OAuth consent as that user — which is `role: agent` and may lose permissions the admin
+token has (group assignment, some search scopes). If it is done, do it via a `scripts/live_smoke.py`
+run, not as a discovery during filming.
+
+**(c) Two CI guards cannot do their job.** `ruff check .` in CI **silently skips 19 files** —
+`extend-exclude = ["portal", ...]` is gitignore-style, so `backend/src/portal` and
+`backend/tests/portal` have never been linted in CI. `.claude/rules/build-protocol.md` rule 2
+already requires the explicit invocation **locally**; CI does not do it. They are clean today, so
+adding it would pass — widening the CI gate is the owner's call. Separately, the **collected-count
+floor is 200 against 511 actual**, so it would not notice losing 60% of the suite.
 
 ---
 

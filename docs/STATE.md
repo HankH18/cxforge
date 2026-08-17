@@ -1,4 +1,4 @@
-# cxforge — verified state, 2026-08-16
+# cxforge — verified state, 2026-08-16 · updated 2026-08-17
 
 **This file supersedes `docs/HANDOFF.md` and the entire `.claude/NEEDS_HUMAN.md` log as
 the entry point.** Both remain on disk as historical record; neither is current. Where
@@ -13,6 +13,35 @@ finding they examined, and those corrections are folded in here.
 ---
 
 ## 1. The one-sentence version
+
+> ### ✅ THE SYSTEM ANSWERED A REAL ZENDESK TICKET, END TO END, ON THE DEPLOYED DROPLET — 2026-08-17
+>
+> **This is SPEC success criterion 1 demonstrated against the deployed system.** No synthetic
+> POST, no stub: a real public comment from the requester on live Zendesk **ticket 3** drove
+> the whole chain.
+>
+> ```
+> Zendesk trigger fires (WebhookEvent in the audit) → Cloudflare tunnel → droplet ingress
+>   → real Redis → arq worker dequeues in 0.03s → run_agent
+>   → fetch_ticket 200 · fetch_conversation 200 · fetch_requester_history 200 (ADR-009 in production)
+>   → 2 × Anthropic claude-opus-5 → 3 × PUT to Zendesk
+>   → "agent run completed, duration_s: 11.477"
+> ```
+>
+> The reply is **publicly posted on the ticket** and carries ADR-020's disclaimer verbatim
+> ("an estimated timeline, and subject to change"). Route `case_status`, confidence **0.98**,
+> outcome **`auto_sent`**. A Langfuse trace **from the droplet run** —
+> `81cdbd81bdbc474eafac148ae997a51b` — landed in project `cxforge`.
+>
+> `/api/metrics` through the tunnel now reports `sample_count: 3`, `latency_p50_s: 15.0`,
+> `latency_p95_s: 15.3` — **real data where it previously reported a vacuous `0.0`**, and
+> comfortably inside R8's 5-minute bar with evidence behind it.
+>
+> Five things had to be fixed to get here, each recorded where the stale claim was: **§3.2**
+> (the tunnel served nothing), **§5.1** (the loop-guard tag was inert in production), **§6.15**
+> (the AI user id was wrong — **both loop guards were down at once**), **§6.16** (no Zendesk
+> trigger existed, so nothing ever fired the webhook) and `docs/OWNER-ACTIONS.md` **OA-4** (the
+> credential renews itself now, with no browser). Measured detail: `docs/BUILD-PLAN.md §10.6`.
 
 > ### ⚠️ SUPERSEDED — 2026-08-16, Waves 1 and 2
 >
@@ -38,10 +67,13 @@ finding they examined, and those corrections are folded in here.
 >
 > **Precise about what is and is not proven:**
 >
-> - **No code in this repo has ever opened a real Redis connection.** `ArqJobQueue` has
->   only ever met a stub. The Redis hop is the largest remaining unknown and no unit test
->   can close it; it needs `docker compose up`, a signed webhook, and a `runs` row read
->   back (Wave 3 **G2**).
+> - ~~**No code in this repo has ever opened a real Redis connection.**~~ **OBSOLETE —
+>   crossed 2026-08-17.** *Original finding, preserved:* `ArqJobQueue` has only ever met a
+>   stub. The Redis hop is the largest remaining unknown and no unit test can close it; it
+>   needs `docker compose up`, a signed webhook, and a `runs` row read back (Wave 3 **G2**).
+>   **Now:** crossed locally (`docs/BUILD-PLAN.md §10.4a`), then on the droplet with a signed
+>   synthetic webhook (§10.5a), and finally by a **real Zendesk comment** — the droplet's arq
+>   worker dequeued that job in **0.03s**. See the banner above.
 > - **Production still retrieves lexically.** `KB_EMBEDDER` defaults to `hashing`, and
 >   switching to Voyage requires the env change **and** a KB reseed (§10.3 of
 >   `docs/BUILD-PLAN.md`) — flipping without reseeding returns plausible nonsense, not an
@@ -50,9 +82,11 @@ finding they examined, and those corrections are folded in here.
 >   `422bccf6fc854007b2cefb47ff80ce56` in project `cxforge`, 8 spans, `/trace/<id>` → 307 →
 >   200.
 >
-> Everything downstream of the loop in §1 and §2 — `runs` empty, the feed reading
+> ~~Everything downstream of the loop in §1 and §2 — `runs` empty, the feed reading
 > "No runs yet.", metrics at 0.0 — remains **true of the deployed droplet**, which still
-> runs the pre-Wave-1 image.
+> runs the pre-Wave-1 image.~~ **OBSOLETE — 2026-08-17.** The droplet runs the current
+> image, `runs` has rows written by real tickets, and `/api/metrics` reports
+> `sample_count: 3` with p50 `15.0s` / p95 `15.3s`. See the banner above.
 
 Every component works and is tested; **nothing assembles them**. The Zendesk webhook
 accepts events and returns 202 without ever starting an agent run, so no agent run has
@@ -140,6 +174,30 @@ correct pair — there is no way to fix A without fixing B. See `docs/OWNER-ACTI
 
 ---
 
+## 3.2 The Cloudflare tunnel is live, and one hostname serves everything — 2026-08-17
+
+`https://cxforge.hankholcomb.com`, measured from the public internet. **No droplet port is
+exposed.**
+
+| Path | Result |
+|---|---|
+| `/` | **200** — the portal UI |
+| `/health` | **200** |
+| `/api/*` | **401** without a token |
+| `/webhooks/zendesk` | **401** unsigned |
+
+The owner repointed the tunnel's Service to **`portal:80`** — not `backend:8000`, which is
+what OA-3 and `deploy/cloudflared/README.md` originally specified. The portal container's
+nginx proxies `/api/`, `/webhooks/` and `/health` to the backend and serves the SPA at `/`.
+
+**The Zendesk webhook URL did not change**, and that was verified *before* the change was
+recommended rather than after: a payload signed with the server's own `compute_signature`
+returned **202 through nginx** and **202 direct**, so a valid HMAC signature survives the
+proxy. Corrected history — including the prediction that got this wrong — is in
+`docs/OWNER-ACTIONS.md` OA-3.
+
+---
+
 ## 4. Four defects not previously recorded anywhere
 
 ### 4.1 R8/R13 latency measures the wrong interval
@@ -156,8 +214,12 @@ records no time.
 **Both are false about the code beneath them.** Connecting the core loop does not fix
 this; it must be fixed deliberately.
 
-Today `/api/metrics` reports p50 = p95 = 0.0 because there are no runs — which would
-make success criterion 6 ("p95 < 5 min") *vacuously true* if read off the panel.
+~~Today `/api/metrics` reports p50 = p95 = 0.0 because there are no runs — which would
+make success criterion 6 ("p95 < 5 min") *vacuously true* if read off the panel.~~
+**CORRECTED 2026-08-17:** the interval was fixed by ADR-004 (receipt stamped in the ingress
+handler and threaded through), W2-C3 made an empty sample report honestly, and the deployed
+panel now reads `sample_count: 3`, p50 `15.0s`, p95 `15.3s` from real tickets. Criterion 6 is
+no longer vacuous — it is 3 data points against ADR-015's 20–30.
 
 ### 4.2 R15's headline number rests on a smaller base than it appears
 
@@ -216,13 +278,17 @@ repository's life — against a tree containing the stray duplicate test module.
 
 These are load-bearing and should not be disturbed:
 
-- **`ZendeskAdapter`** — all 7 `HelpdeskPort` operations over 3 real endpoints; every
+- **`ZendeskAdapter`** — all 7 `HelpdeskPort` operations over 3 real endpoints; ~~every
   write funnels through one `_update_ticket` that unconditionally folds in the
-  `ai-processed` loop-guard tag; 429 handling honours `Retry-After`; tenacity backoff on
+  `ai-processed` loop-guard tag~~ (**stale since 2026-08-17:** `_update_ticket` now *refuses*
+  tag fields and the loop-guard tag is a separate additive write to the tags sub-resource —
+  §5.1); 429 handling honours `Retry-After`; tenacity backoff on
   5xx; typed `HelpdeskAPIError` otherwise. The contract suite drives it over real
   `httpx` through a respx Zendesk simulator, so its green is evidence of real request
-  construction. *Caveat:* the additive-tag assumption is unverified against the real API,
-  and the tag is never removed, so a ticket can be processed exactly once.
+  construction. *Caveat:* ~~the additive-tag assumption is unverified against the real
+  API~~ — **VERIFIED, AND IT WAS FALSE. This was a live production defect; fixed and
+  verified live 2026-08-17 — see §5.1.** The tag is still never removed, so a ticket can be
+  processed exactly once.
 - **Grounding (R9)** — case facts are pure template-fill from a `data.Case` tool result
   (`agent/templates.py`, no LLM in the module); free generation happens only on
   `route == "kb"` (`nodes.py:357`), backstopped by a pure-Python, judge-independent
@@ -242,12 +308,45 @@ These are load-bearing and should not be disturbed:
 
 ---
 
+## 5.1 The loop-guard tag was inert in production — measured 2026-08-17
+
+§5 above recorded the additive-tag assumption as unverified. It has now been verified against
+the real API and **it was wrong**: after a complete, successful production run, the ticket
+carried **no `ai-processed` tag at all**, so the trigger's nullifier condition was inert.
+
+**Root cause, established with a control rather than inferred:** `additional_tags` **is not a
+field of the single-ticket update schema, and Zendesk silently discards unknown keys with a
+200.** A `banana_tags` probe behaved identically. All three of the worker's successful PUTs
+therefore proved nothing.
+
+**Second finding, counter-intuitive and a trap** — on the tags sub-resource the verbs are the
+reverse of Zendesk's own "Add Tags" / "Set Tags" UI labels:
+
+```
+PUT  /tickets/{id}/tags.json   →  ADDITIVE
+POST /tickets/{id}/tags.json   →  DESTRUCTIVE   (a POST probe wiped existing tags off the live ticket)
+```
+
+**Fixed and verified live:** after a real adapter write, an independent GET read the ticket
+back as `['ai-processed', 'cxforge-live-verify', 'cxforge-verify']`.
+
+**The respx simulator had been lying twice**, which is why the suite could not see either
+defect: it implemented `additional_tags` as additive, and it hardcoded comment `author_id` to
+the AI user id — the second of which made **§6.15 structurally unobservable**. Fixing the fake
+turned **six pre-existing tests into real detectors** that fail against the old adapter.
+
+---
+
 ## 6. Known-weak, in priority order
 
-1. **Nothing has ever run end-to-end.** All 78 graph/grounding/escalation tests drive a
-   `FakeLLMClient`, and every canonical-scenario test **hands the route in** via a canned
-   `Classification`. Route-classification accuracy — the thing R2–R5 all hinge on — is
-   measured by nothing.
+1. ~~**Nothing has ever run end-to-end.**~~ **FIXED — 2026-08-17. A real Zendesk ticket ran
+   to a publicly posted reply on the droplet; see the §1 banner.** *Original finding,
+   preserved:* All 78 graph/grounding/escalation tests drive a `FakeLLMClient`, and every
+   canonical-scenario test **hands the route in** via a canned `Classification`.
+   Route-classification accuracy — the thing R2–R5 all hinge on — is measured by nothing.
+   **Also fixed:** W1-E3 measured it against the live model for the first time — 1.000
+   (30/30) on the four branch routes (`docs/BUILD-PLAN.md §10.2`). The unit tests still hand
+   the route in; that is now a gap in the *suite*, not a gap in the evidence.
 2. ~~**Every deploy check is a liveness check.**~~ **PARTLY FIXED by W3-G2, 2026-08-17 —
    read the nuance.** *Original finding, preserved:* Nothing in `verify_deploy.sh`,
    `backend/tests/deploy/**`, or CI makes a model call, writes a row, or touches the
@@ -267,6 +366,10 @@ These are load-bearing and should not be disturbed:
    (iii) it has **never passed against a real deployment**, because `ZENDESK_OAUTH_TOKEN`
    is 401 again (OA-4) and `ingest`'s `fetch_ticket` is the first thing every run does —
    see `docs/BUILD-PLAN.md §10.4`.
+   **Corrected 2026-08-17:** (iii)'s *blocker* is gone — the credential renews itself
+   (OA-4) and a real ticket has since run to completion on the droplet, `fetch_ticket` 200
+   included. Whether `--deep` **itself** has been re-run green against the deployment is
+   **not measured**.
 3. ~~**Langfuse is installed and imported nowhere.**~~ **FIXED by W2-C1 (ADR-006),
    2026-08-16.** *Original finding, preserved:* Zero `import langfuse` repo-wide.
    `nodes.py:592` mints `trace_id = uuid.uuid4().hex` and reports it to no one; the
@@ -352,6 +455,41 @@ These are load-bearing and should not be disturbed:
     `backend/src/worker/main.py` both call `load_dotenv(..., override=False)` at startup.
     `docs/deploy.md`'s `set -a; source .env; set +a` is still required for
     `docker compose` itself, which resolves `${VAR}` before any Python runs.
+15. ~~**`ZENDESK_AI_USER_ID` named a user the token never acts as — so both loop guards were
+    inert at the same time.**~~ **FIXED 2026-08-17, verified live.** It was configured as
+    `54404962250395` ("Othram AI Agent", role agent), but the OAuth token acts as
+    `54402664002843` ("Hank Holcomb", admin) — which is who actually authored the AI's reply.
+    Ingress's self-event drop was therefore comparing against an id that never appears in any
+    event. **Combined with §5.1 the loop had no guard at all**, and the AI's own public comment
+    satisfies the trigger's "Comment is Public" condition. Zendesk's invocation log confirms
+    the AI's replies genuinely *did* re-fire the trigger (502s at 06:39 and 06:57, from when
+    the tunnel was misrouted). **The only thing that prevented an infinite reply loop was a
+    third, unrelated bug: `{{ticket.latest_comment_id}}` renders *empty* in this account, so
+    the follow-up webhook deduped against the earlier `(ticket_id, '')` row. A coincidence
+    held the guard, not the design.** **Now:** `ZENDESK_AI_USER_ID=54402664002843`, verified
+    live against the actual comment author; `verify_ai_user_id()` is a preflight that **raises**
+    rather than warns; and a per-reply author read-back logs ERROR on drift. *Open owner
+    decision, not resolved:* every customer-visible reply is authored by **Hank Holcomb,
+    admin** — see `docs/BUILD-PLAN.md §10.7b`.
+16. ~~**No Zendesk trigger existed, so nothing ever fired the webhook.**~~ **FIXED
+    2026-08-17.** The account had **7 active triggers and zero with a `notification_webhook`
+    action**: the webhook existed, was active and pointed at the right URL, and nothing ever
+    invoked it. Trigger **`54508374798747`** was created to `docs/zendesk-runbook.md` step 7's
+    spec and verified by reading it back — the `ai-processed` nullifier in `conditions.all`,
+    create-or-public-comment in `conditions.any`, and a JSON body matching
+    `ZendeskWebhookPayload` on all six fields. This was an **undocumented Wave 4
+    prerequisite**; it is now satisfied.
+17. ~~**CI had failed 30 of 30 runs — every run in the repository's history.**~~ **FIXED
+    2026-08-17.** Cause: a `backend/tests/hooks` test faked "no interpreter" with `PATH=/bin`,
+    which is true on macOS and false on Ubuntu, where `/bin` is a usrmerge symlink into
+    `/usr/bin`. **The guard was correct; the test was wrong about Linux.** That suite is
+    retired (`docs/DECISIONS.md` ADR-019 amendment) and run **32003095488** shows
+    `Lint ✓ Type-check ✓ Portal contract ✓ Test ✓` with **511 passed** — the first green suite
+    on Ubuntu in this repo's history. **Two CI guards still cannot do their job** (owner's call,
+    `docs/BUILD-PLAN.md §10.7c`): `ruff check .` in CI **silently skips 19 files** because
+    `extend-exclude` is gitignore-style, so `backend/src/portal` and `backend/tests/portal`
+    have never been linted in CI (they are clean today); and the **collected-count floor is 200
+    against 511 actual**, so it would not notice losing 60% of the suite.
 
 ---
 
