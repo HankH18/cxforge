@@ -39,12 +39,34 @@ _STAGE_DESCRIPTIONS: dict[str, str] = {
 }
 
 
+# ADR-020's qualifier. Two constraints shape it, and both are load-bearing:
+#
+# 1. It attaches ONLY to a reply that actually states a forward-looking
+#    estimate. A completed case has no timeline left to qualify, and
+#    stamping "subject to change" onto a statement of fact would be noise
+#    that teaches customers to ignore the words when they do matter.
+# 2. It introduces **zero new facts**. Not a number, not a stage name, not a
+#    cause ("due to lab throughput"). `agent.grounding_guard` exists to catch
+#    exactly that shape of claim on free-generated text, and R9 is this
+#    project's headline property — a disclaimer that smuggled in a fact would
+#    deserve to trip it. Every content word below is a hedge on a figure
+#    already present in the sentence it qualifies.
+_ETA_QUALIFIER = "an estimated timeline, and subject to change"
+
+
 def render_case_status_reply(case: Case) -> str:
     """Fill the case-status template from ``Case`` fields ONLY (R2, R9).
 
     Every sentence below either names a fixed stage description (a static
     lookup table, not a fact about *this* case) or interpolates one of
     ``case``'s own fields verbatim — nothing here is free-generated.
+
+    ADR-020: when this reply states an ETA it carries ``_ETA_QUALIFIER``.
+    W1-E3 measured the live model routing *"can you tell me the EXACT
+    calendar date my results will be ready?"* to ``case_status`` at 0.92
+    confidence — correctly, the owner decided — which means the honest
+    answer to an exact-date question is this template's week estimate, said
+    without implying more precision than the lab has.
     """
     dna = "available" if case.dna_profile_available else "not yet available"
     photos = "available" if case.photos_available else "not yet available"
@@ -53,7 +75,14 @@ def render_case_status_reply(case: Case) -> str:
     if case.stage == "complete":
         eta_sentence = "Your case is complete, so there is no further processing time remaining."
     else:
-        eta_sentence = f"We estimate about {case.eta_weeks} more week(s) in this stage."
+        # "About N more week(s)" rather than "We estimate about N more
+        # week(s)" only so the qualifier does not immediately repeat the
+        # word "estimate". `agent.grounding_guard`'s ETA detector keys on
+        # "N more week(s)" and the "more week"/"in this stage" personalizing
+        # cues, all of which are preserved verbatim.
+        eta_sentence = (
+            f"About {case.eta_weeks} more week(s) to go in this stage — {_ETA_QUALIFIER}."
+        )
 
     return (
         f"Thanks for checking in on case {case.case_id}.\n\n"
@@ -76,12 +105,28 @@ _ALWAYS_GRANT_DESCRIPTIONS: dict[AlwaysGrantKind, str] = {
 
 def render_permission_grant_reply(kind: AlwaysGrantKind) -> str:
     """Fill the always-grant confirmation template from the matched
-    ``AlwaysGrantKind`` (R3) — no case facts are stated here at all."""
+    ``AlwaysGrantKind`` (R3) — no case facts are stated here at all.
+
+    ADR-011: this used to end *"it's now been processed for your case"*,
+    which asserted a completed side effect **the codebase performs nowhere**.
+    What the ``permission`` node actually does is decide, grounded in the
+    KB's always-grant list, that the request needs no specialist review — an
+    approval, not an execution. The wording below claims the approval and
+    stops there, and it says plainly that the change itself is applied by
+    someone else, so a customer whose contact never gets added knows to
+    chase it instead of assuming it is done.
+
+    ADR-011 explicitly scopes this to wording: implementing the side effects
+    is a data-layer change and is not in scope here.
+    """
     described = _ALWAYS_GRANT_DESCRIPTIONS[kind]
     return (
-        f"Happy to help — {described} is something we can take care of "
-        "directly, and it's now been processed for your case.\n\n"
-        "Let us know if there's anything else we can do."
+        f"Happy to help — {described} is covered by our standard "
+        "authorizations, so it doesn't need a specialist to review it. "
+        "I've approved the request and recorded that approval here on your "
+        "ticket.\n\n"
+        "Our support team makes the change itself, so if you don't see it "
+        "take effect, just reply here and we'll follow up."
     )
 
 

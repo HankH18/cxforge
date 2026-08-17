@@ -357,7 +357,8 @@ Status as of **2026-08-16**, each verified by reading the effect back — not by
 
 | Action | Gates | Status |
 |---|---|---|
-| Voyage AI API key | W2-B1 | ❌ **OUTSTANDING** — `VOYAGE_API_KEY` absent; idles a whole Wave-2 track |
+| Voyage AI API key | W2-B1 | ✅ **DONE** — key present and verified live 2026-08-16 (`voyage-4-lite`, `output_dimension=1024` → exactly 1024 dims). **But the account has no payment method**, so it is on the free tier's 3 RPM / 10k TPM — see §10.3 |
+| Voyage billing + `KB_EMBEDDER=voyage` in the deploy env | the Voyage reseed being what production actually uses | ❌ **OUTSTANDING** — see §10.3 |
 | Langfuse `cxforge` project + correct `pk-lf-` / `sk-lf-` pair | W2-C1 | ✅ **DONE** — keys resolve to project `cxforge`; prefixes differ |
 | Cloudflare domain + named tunnel token | W1-F2, W3-G3, W4 | ✅ **DONE** — token in `.env` (184 chars); `PUBLIC_BASE_URL=https://cxforge.hankholcomb.com`; DNS resolves to Cloudflare anycast (`172.67.136.113`, `104.21.7.150`); the edge returns **502**, which is correct — it found the tunnel and the origin is not deployed yet (W3-G3) |
 | Zendesk OAuth re-auth (browser PKCE consent) | W4 entirely | ✅ **DONE** — `/api/v2/users/me.json` returns 200. Webhook still needs re-pointing once OA-3 lands |
@@ -431,6 +432,42 @@ reply instead of escalating** — a live R6 gap, reproduced independently by pro
 Fixing it means either rewording `CLASSIFY_SYSTEM` (Track B owns prompt wording) or
 re-examining those two labels. **Owner decision, not a subagent's.**
 
+> ### ✅ Gap 1 RESOLVED — `docs/DECISIONS.md` **ADR-020**, 2026-08-16, implemented in W2-B5
+>
+> **The owner decided the model is right and the labels were wrong.** Both tickets are now
+> ordinary `case_status` labels in `evals/labeled_set.yaml`, each carrying a `relabeled:`
+> block with the measurement, the reasoning and the consequence. `CLASSIFY_SYSTEM` was
+> **not** reworded — bending the classifier away from a reading the owner agrees is correct
+> would be fixing the measurement instead of the thing measured.
+>
+> The real worry — answering an exact-date question with unearned precision — is addressed
+> where it belongs, in the reply: `render_case_status_reply` now ends its estimate with
+> *"— an estimated timeline, and subject to change."*, scoped to replies that actually state a
+> timeline, and stating no number, stage or cause so it cannot trip `grounding_guard`.
+>
+> **Three consequences, recorded so nobody rediscovers them as bugs:**
+>
+> 1. **The published eval numbers will move.** These two tickets sit in the escalation set
+>    behind `docs/eval-report/`'s `P = R = F1 = 1.000` and its hard-trigger recall, and
+>    were two of the six `evals/report.py` excludes as structurally unmeasurable — so the
+>    denominator *and* `measured_sample_size` both change. ADR-007 already commits to
+>    regenerating live and publishing whatever the numbers are; that is **Wave 3 G1**.
+>    Nothing under `docs/eval-report/` was touched.
+> 2. **The labeled set is now 52 tickets — 32 branch-route, 20 escalate** (was 51/30/21).
+>    Both relabeled tickets were the set's only `verifier_failure` examples, so one
+>    replacement was written (`esc-low_confidence-verifier_failure-summed-stages-01`,
+>    the same trap posed about the *published* stage windows with no case in it) rather
+>    than weakening `test_every_low_confidence_subtype_is_covered`.
+>    `backend/tests/evals/test_route_accuracy.py`'s pinned counts were re-derived.
+> 3. **`evals/route_accuracy.py` needed a real port.** W2-B4 gave `classify` a second
+>    collaborator (`fetch_requester_history`, ADR-009), and that harness had deliberately
+>    filled the `port` slot with a raise-on-touch sentinel. It did its job — it failed
+>    loudly — and now gets `_NoHistoryPort`, which answers "no prior contact" and still
+>    raises on every other method. Anything else that drives `classify` directly needs the
+>    same one-line change.
+>
+> Gap 2 below is untouched and still open.
+
 **Gap 2 — `grounding_guard` false-positives on correct refusals.** On 3 of 4 adversarial
 kb-route cases the live model answers *correctly* — refuses plainly, states it has no case
 access, does not affirm the false premise — and the shipped guard flags it anyway, because
@@ -441,6 +478,45 @@ docstring calls "the intended failure mode", now measured for the first time.
 production.** Safe (it escalates rather than fabricates) but it inflates the escalation rate,
 which is a demo-visible metric.
 
+### 10.3 W2-B measured findings — two owner actions the reseed surfaced
+
+**2026-08-16, W2-B1/B2.** Both measured live, neither assumed.
+
+**(a) Nothing runs on Voyage until `KB_EMBEDDER=voyage` is set in the deploy env — and the
+default is the *lexical* embedder.** `HashingEmbedder` stays the default so CI and the
+`-m "not live"` suite need no network and no key (§1.4). The switch is deliberately **not**
+"use Voyage if `VOYAGE_API_KEY` is set": this repo's `.env` carries the key, so that rule
+would put the gated suite on the network the moment anyone ran it with
+`set -a; source .env`. The consequence is that the droplet keeps using bag-of-words
+retrieval unless the variable is set *and* the KB is reseeded with it. **Flipping the
+variable without reseeding is worse than not flipping it** — query vectors and stored
+vectors would be from different spaces, which produces plausible-looking nonsense rather
+than an error. Track F owns compose/env forwarding; this is one row in `.env.example` and
+both compose files, plus a reseed in W3-G3.
+
+Why it is worth doing, measured on the 12 held-out queries in
+`backend/tests/data/test_retrieval.py` plus 12 topic paraphrases and 7 off-domain probes:
+
+| | rank-1, customer wording | rank-1, topic paraphrase | off-domain probes rejected |
+|---|---|---|---|
+| `HashingEmbedder` (default) | 10/12 | **5/12** (3 retrieve nothing) | 3 of 5 |
+| `VoyageEmbedder` | **12/12** | **11/12** | **5 of 5** |
+
+The topic-paraphrase column is the one that matters operationally: `agent.nodes.kb_answer`
+searches with `state["topic"]`, the classifier's one-sentence paraphrase, **not** the
+customer's words. `docs/BUILD-PLAN.md §11`'s risk that "Voyage makes retrieval worse" is
+retired — it is better on every axis measured, and the gap is not close.
+
+**(b) The Voyage account has no payment method,** so it is on the free tier: **3 requests
+per minute, 10,000 tokens per minute** (the 429 body says so verbatim). A whole-KB batch is
+~12k tokens — *over the per-minute ceiling in a single request* — so a naive reseed 429s
+forever rather than slowly. `VoyageEmbedder` handles it (16-item batches, fixed 20s
+backoff, 8 attempts), and a 44-chunk reseed takes ~2 minutes. Two things to weigh before
+the live e2e run: **query-time** embedding also costs one request per `search_kb` call, so
+3 RPM is a hard ceiling on agent throughput, and W4's 20–30-ticket scenario run would be
+throttled by it. Adding a payment method lifts the limits within minutes and the free token
+grant still applies.
+
 ---
 
 ## 11. Risks
@@ -449,7 +525,7 @@ which is a demo-visible metric.
 |---|---|
 | ~~The Zendesk OAuth **client** was deleted, not just the token expired.~~ **RETIRED 2026-08-16 — measured, not assumed.** | The OAuth client is **alive and authenticating**. Probe: POST `/oauth/tokens` with the real `client_id`/`client_secret` and a deliberately bogus `code` → `invalid_grant` (400). Control with a wrong `client_id` → `invalid_client` (401), so the discriminator is real. Only the access token is dead. OA-4 is the 2-minute re-auth; no OAuth-app rebuild, and the runbook's OAuth-app section stands. |
 | Trial lapses ~2026-08-27 mid-recording. | Wave 4 is scheduled before it; `zendesk-runbook.md` gains a "trial expired" branch in J2. |
-| Voyage reseed makes retrieval **worse** than the lexical embedder for these queries. | B1 verifies retrieval quality against known-good queries before B2 calibrates the floor. `HashingEmbedder` stays in the tree as a one-line revert. |
+| ~~Voyage reseed makes retrieval **worse** than the lexical embedder for these queries.~~ **RETIRED 2026-08-16 — measured, not assumed (§10.3a).** | Voyage is better on every axis measured: rank-1 12/12 vs 10/12 on the held-out queries, **11/12 vs 5/12** on the topic paraphrases `kb_answer` actually searches with, (3 of hashing's 12 retrieve **nothing**; Voyage retrieves on all 12), and it rejects 5/5 off-domain probes vs 3/5. The margin is not close: hashing's in-domain score band (0.1068–0.3762) **overlaps** its off-domain band (0.0542–0.2238) — "Who won the World Cup final in 2022?" outscores the correct chunk for 5 of the 12 queries, so no single relevance floor can separate signal from noise on it at all. Voyage's bands are cleanly separated (0.2929–0.6336 in-domain vs 0.1110–0.2644 off-domain), which is what makes B2's `KB_MIN_SCORE` calibratable. `HashingEmbedder` remains the offline default and the one-line revert. The live risk is now the opposite one: production stays lexical until `KB_EMBEDDER=voyage` is set **and** the KB is reseeded — see §10.3a. |
 | Live regeneration moves the published 1.000 eval numbers. | Accepted deliberately (ADR-007). The new numbers ship. |
 | The real model routes a canonical scenario differently than the fakes assume — nothing measures this today. | E3 exists precisely to find this before camera time is spent. Run it before scheduling a recording. |
 | Two concurrent pytest processes corrupt each other's DB schema. | Never run the suite while a subagent runs it; `test_concurrency.py` fails if a third process touches the same database. |

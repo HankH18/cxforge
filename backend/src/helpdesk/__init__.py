@@ -14,7 +14,14 @@ from helpdesk.errors import (
     RateLimited,
     ServerUnavailable,
 )
-from helpdesk.models import EscalationGroup, Message, MessageRef, Ticket, TicketStatus
+from helpdesk.models import (
+    EscalationGroup,
+    Message,
+    MessageRef,
+    Ticket,
+    TicketStatus,
+    TicketSummary,
+)
 from helpdesk.port import HelpdeskPort
 from helpdesk.zendesk_adapter import ZendeskAdapter
 
@@ -30,5 +37,6 @@ __all__ = [
     "ServerUnavailable",
     "Ticket",
     "TicketStatus",
+    "TicketSummary",
     "ZendeskAdapter",
 ]

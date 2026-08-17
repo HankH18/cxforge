@@ -35,9 +35,17 @@ class EmailHarness:
     port: HelpdeskPort
     adapter: EmailAdapter
 
-    def seed_ticket(self, *, tags: list[str] | None = None) -> Seeded:
-        ticket_id = self.adapter.seed_ticket(tags=tags)
-        return Seeded(ticket_id=ticket_id, requester_email=DEFAULT_REQUESTER_EMAIL)
+    def seed_ticket(
+        self,
+        *,
+        tags: list[str] | None = None,
+        subject: str = "Where is my case?",
+        requester_email: str = DEFAULT_REQUESTER_EMAIL,
+    ) -> Seeded:
+        ticket_id = self.adapter.seed_ticket(
+            tags=tags, subject=subject, requester_email=requester_email
+        )
+        return Seeded(ticket_id=ticket_id, requester_email=requester_email)
 
     def seed_comment(
         self,

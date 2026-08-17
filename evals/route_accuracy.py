@@ -351,11 +351,13 @@ class _FakeClassifyLLMClient:
 class _Unused:
     """Sentinel for an ``AgentDeps`` slot ``classify`` must never touch.
 
-    ``classify`` reads only ``deps.llm``. Filling ``port`` and
-    ``escalation_decider`` with something that raises on any attribute access
-    makes that a structural fact rather than an assumption: if a future
-    ``classify`` starts using them, this harness stops with a clear error
-    instead of quietly measuring a different thing.
+    ``classify`` reads ``deps.llm`` and — since W2-B4 — exactly one method on
+    ``deps.port``. Filling every other slot with something that raises on any
+    attribute access makes that a structural fact rather than an assumption:
+    if a future ``classify`` starts using one, this harness stops with a clear
+    error instead of quietly measuring a different thing. It did exactly that
+    when W2-B4 landed, which is why ``_NoHistoryPort`` exists below rather
+    than a broader stub having been slipped in.
     """
 
     def __init__(self, name: str) -> None:
@@ -367,6 +369,24 @@ class _Unused:
             f"deps.{self._name} (attempted: .{attr}). If classify now needs it, this harness "
             f"needs a real collaborator — do not stub one in silently."
         )
+
+
+class _NoHistoryPort(_Unused):
+    """The narrowest port ``classify`` can be driven with (W2-B4/ADR-009).
+
+    Answers ``fetch_requester_history`` with an empty list — the true answer
+    for this harness, since ``evals/labeled_set.yaml`` is a flat list of
+    independent tickets with no requester threading — and inherits
+    ``_Unused``'s raise-on-anything-else behaviour for every other method.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("port")
+
+    def fetch_requester_history(
+        self, requester_email: str, *, exclude_ticket_id: str, limit: int = 5
+    ) -> list[Any]:
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -429,7 +449,21 @@ def classify_ticket(ticket: dict[str, Any], *, llm: LLMClient) -> dict[str, Any]
         "configurable": {
             "ticket_id": ticket["id"],
             "deps": nodes.AgentDeps(
-                port=_Unused("port"),  # type: ignore[arg-type]
+                # W2-B4 / ADR-009 gave `classify` a second collaborator: it
+                # now asks the port for the requester's prior tickets and
+                # puts them in the classifier's context. So `port` can no
+                # longer be an `_Unused` sentinel.
+                #
+                # `_NoHistoryPort` answers "no prior contact", which is the
+                # TRUE answer for this harness rather than a convenient one:
+                # evals/labeled_set.yaml is a flat list of independent
+                # tickets with no requester threading at all, and
+                # `build_ticket_and_conversation` synthesizes one ticket per
+                # row. Every other port method stays an `_Unused` sentinel,
+                # so if `classify` ever starts calling one of those, this
+                # harness still fails loudly instead of measuring something
+                # subtly different from the shipped node.
+                port=_NoHistoryPort(),  # type: ignore[arg-type]
                 llm=llm,
                 escalation_decider=_Unused("escalation_decider"),  # type: ignore[arg-type]
             ),

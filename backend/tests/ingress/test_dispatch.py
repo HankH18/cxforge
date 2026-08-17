@@ -50,7 +50,14 @@ from agent.llm import AnthropicLLMClient
 from agent.schemas import Classification
 from data import get_connection
 from escalation.schemas import EscalationCall
-from helpdesk.models import EscalationGroup, Message, MessageRef, Ticket, TicketStatus
+from helpdesk.models import (
+    EscalationGroup,
+    Message,
+    MessageRef,
+    Ticket,
+    TicketStatus,
+    TicketSummary,
+)
 from helpdesk.zendesk_adapter import ZendeskAdapter
 from main import app
 from worker import main as worker_main
@@ -134,6 +141,17 @@ class _RecordingPort:
                 created_at=datetime(2026, 8, 16, tzinfo=UTC),
             )
         ]
+
+    def fetch_requester_history(
+        self, requester_email: str, *, exclude_ticket_id: str, limit: int = 5
+    ) -> list[TicketSummary]:
+        """W2-B4/ADR-009 added this to the `HelpdeskPort` Protocol, and
+        `agent.nodes.classify` now calls it on every run. This fake knows
+        about exactly one ticket — the one under test — so the honest answer
+        is "no prior contact"; returning a fabricated history here would
+        change what the classifier sees in a latency test that is not about
+        the classifier."""
+        return []
 
     def post_public_reply(self, ticket_id: str, html_body: str) -> MessageRef:
         self.public_replies.append(html_body)

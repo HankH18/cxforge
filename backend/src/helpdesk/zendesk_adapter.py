@@ -39,7 +39,15 @@ from helpdesk.errors import (
     RateLimited,
     ServerUnavailable,
 )
-from helpdesk.models import AuthorKind, EscalationGroup, Message, MessageRef, Ticket, TicketStatus
+from helpdesk.models import (
+    AuthorKind,
+    EscalationGroup,
+    Message,
+    MessageRef,
+    Ticket,
+    TicketStatus,
+    TicketSummary,
+)
 
 # The loop-guard tag: the Zendesk trigger that fires the webhook carries the
 # nullifying condition "tags not include ai-processed" (see the T-4 runbook).
@@ -131,6 +139,56 @@ class ZendeskAdapter:
         # explicitly rather than trusting API ordering.
         messages.sort(key=lambda message: message.created_at)
         return messages
+
+    def fetch_requester_history(
+        self, requester_email: str, *, exclude_ticket_id: str, limit: int = 5
+    ) -> list[TicketSummary]:
+        """The requester's other tickets, newest first (ADR-009).
+
+        Zendesk quirks handled here and nowhere else, as with everything in
+        this class:
+
+        - There is no "tickets by requester email" endpoint. The Search API
+          is the supported route, and its ``requester:`` term takes an email
+          address. ``type:ticket`` is required or the same query also returns
+          users and organizations, which have no ``subject`` at all.
+        - Sorting is a query parameter, not part of the query string;
+          ``sort_by``/``sort_order`` are what Search honours.
+        - The current ticket comes back in its own requester's results, so
+          ``exclude_ticket_id`` is filtered client-side *after* the fetch,
+          and ``per_page`` asks for one extra row so excluding it cannot
+          silently shorten the list below ``limit``.
+        - A malformed/oversized search query answers 422, which
+          ``_request`` already surfaces as a typed ``HelpdeskAPIError``.
+        """
+        response = self._request(
+            "GET",
+            "/search.json",
+            params={
+                "query": f"type:ticket requester:{requester_email}",
+                "sort_by": "created_at",
+                "sort_order": "desc",
+                "per_page": str(limit + 1),
+            },
+        )
+        results = response.json().get("results", [])
+        summaries: list[TicketSummary] = []
+        for row in results:
+            ticket_id = str(row["id"])
+            if ticket_id == exclude_ticket_id:
+                continue
+            summaries.append(
+                TicketSummary(
+                    id=ticket_id,
+                    subject=row.get("subject") or "",
+                    status=row["status"],
+                    created_at=row["created_at"],
+                    tags=list(row.get("tags", [])),
+                )
+            )
+            if len(summaries) == limit:
+                break
+        return summaries
 
     def post_public_reply(self, ticket_id: str, html_body: str) -> MessageRef:
         response = self._update_ticket(

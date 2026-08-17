@@ -83,10 +83,24 @@ services:
       ZENDESK_AI_USER_ID: ${ZENDESK_AI_USER_ID:-}
       ZENDESK_WEBHOOK_SIGNING_SECRET: ${ZENDESK_WEBHOOK_SIGNING_SECRET:-}
       PORTAL_TOKEN: ${PORTAL_TOKEN:-dev-portal-token}
-      # ADR-008 / W2-B1: resolved by the voyageai SDK, so no os.environ
-      # read names it anywhere in backend/src. Forwarded ahead of B1 and
-      # required by test_env_forwarding.py's SDK_RESOLVED_VARIABLES.
+      # --- Embeddings (ADR-008 / W2-B1) ---
+      # `backend/src/data/embeddings.py` reads BOTH of these itself, with
+      # literal keys, so test_env_forwarding.py's AST scan requires them here
+      # and neither can be exempted away. (This comment previously said the
+      # key was resolved by the `voyageai` SDK; W2-B1 shipped an httpx client
+      # instead, so it is an ordinary os.environ read now.)
+      #
+      # Empty default, like every other credential in this file: it reaches
+      # the container either way, and `VoyageEmbedder` refuses to build
+      # without it rather than degrading to the lexical embedder.
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      # `hashing` is the offline lexical embedder and the code's own default,
+      # so an unset shell variable leaves this stack exactly where it is.
+      # Setting `voyage` REQUIRES reseeding the KB in the same run — the
+      # stored vectors and the query vectors must come from one embedding
+      # space, and a mismatch returns confident nonsense rather than an
+      # error. See docs/BUILD-PLAN.md §10.3.
+      KB_EMBEDDER: ${KB_EMBEDDER:-hashing}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}

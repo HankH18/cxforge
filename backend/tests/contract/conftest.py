@@ -29,11 +29,23 @@ class AdapterHarness(Protocol):
     """What a contract test may know about an adapter beyond the Protocol
     itself: how to seed a starting state, and how to read back the one
     write (`assign_group`'s target) that `Ticket`/`Message` don't expose.
-    Every adapter factory below returns something satisfying this."""
+    Every adapter factory below returns something satisfying this.
+
+    ``seed_ticket`` grew ``subject``/``requester_email`` for W2-B4: proving
+    ``fetch_requester_history`` returns *this* requester's other tickets and
+    nobody else's needs more than one requester and more than one
+    distinguishable subject in the store. Both stay keyword-only with
+    defaults, so every pre-existing call site is unchanged."""
 
     port: HelpdeskPort
 
-    def seed_ticket(self, *, tags: list[str] | None = None) -> Seeded: ...
+    def seed_ticket(
+        self,
+        *,
+        tags: list[str] | None = None,
+        subject: str = ...,
+        requester_email: str = ...,
+    ) -> Seeded: ...
 
     def seed_comment(
         self,

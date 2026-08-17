@@ -17,7 +17,7 @@ import yaml
 
 from data.chunking import chunk_text, parse_kb_doc
 from data.db import get_connection
-from data.embeddings import Embedder, HashingEmbedder
+from data.embeddings import Embedder, default_embedder
 from data.models import Case
 from data.schema import init_schema
 
@@ -40,8 +40,15 @@ def seed_all(
     kb_dir: Path = DEFAULT_KB_DIR,
     embedder: Embedder | None = None,
 ) -> SeedResult:
-    """Create the schema if needed, then truncate-and-reload cases + KB chunks."""
-    resolved_embedder = embedder or HashingEmbedder()
+    """Create the schema if needed, then truncate-and-reload cases + KB chunks.
+
+    ``embedder`` defaults to ``data.embeddings.default_embedder()`` — the
+    same resolution ``data.retrieval.search_kb`` uses, so seeding and
+    searching are always in the same embedding space. ``input_type
+    ="document"`` is the index-side hint (see that module's docstring);
+    ``search_kb`` passes ``"query"``.
+    """
+    resolved_embedder = embedder or default_embedder(input_type="document")
     with get_connection() as conn:
         init_schema(conn)
         case_count = _seed_cases(conn, cases_path)

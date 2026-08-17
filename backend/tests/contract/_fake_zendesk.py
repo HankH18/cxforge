@@ -72,6 +72,15 @@ class FakeZendesk:
         self._comment_ids = count(1000)
         self._audit_ids = count(5000)
         self._auto_clock = count(0)
+        # One Zendesk user per distinct requester email. Previously this
+        # simulator overwrote CUSTOMER_USER_ID's email on every seed, so the
+        # whole store had exactly one requester — which is fine until a test
+        # needs to prove `fetch_requester_history` does not return SOMEBODY
+        # ELSE's tickets, the single most important thing that method must
+        # get right. The default email keeps CUSTOMER_USER_ID so every
+        # existing test's author-kind mapping is unchanged.
+        self._requester_ids: dict[str, str] = {DEFAULT_REQUESTER_EMAIL: CUSTOMER_USER_ID}
+        self._extra_user_ids = count(300)
         self.put_calls: dict[str, int] = {}
         self._queued: dict[str, list[httpx.Response]] = {}
 
@@ -83,6 +92,9 @@ class FakeZendesk:
         ).mock(side_effect=self._get_comments)
         router.route(method="PUT", path__regex=r"^/tickets/(?P<ticket_id>\d+)\.json$").mock(
             side_effect=self._put_ticket
+        )
+        router.route(method="GET", path__regex=r"^/search\.json$").mock(
+            side_effect=self._search
         )
 
     # -- seeding / inspection API used by the harness and adapter-specific tests --
@@ -96,18 +108,27 @@ class FakeZendesk:
         tags: list[str] | None = None,
     ) -> str:
         ticket_id = str(next(self._ticket_ids))
+        requester_id = self._requester_id_for(requester_email)
         self.tickets[ticket_id] = {
             "id": int(ticket_id),
             "subject": subject,
-            "requester_id": int(CUSTOMER_USER_ID),
+            "requester_id": int(requester_id),
             "status": status,
             "tags": list(tags or []),
             "created_at": self._next_timestamp(),
             "group_id": None,
         }
-        self.users[CUSTOMER_USER_ID]["email"] = requester_email
         self.comments[ticket_id] = []
         return ticket_id
+
+    def _requester_id_for(self, email: str) -> str:
+        existing = self._requester_ids.get(email)
+        if existing is not None:
+            return existing
+        user_id = str(next(self._extra_user_ids))
+        self._requester_ids[email] = user_id
+        self.users[user_id] = {"id": int(user_id), "email": email, "role": "end-user"}
+        return user_id
 
     def seed_comment(
         self,
@@ -159,6 +180,48 @@ class FakeZendesk:
         if request.url.params.get("include") == "users":
             payload["users"] = list(self.users.values())
         return httpx.Response(200, json=payload)
+
+    def _search(self, request: httpx.Request) -> httpx.Response:
+        """``GET /search.json`` — enough of the Search API to be a real test
+        of ``fetch_requester_history``'s request construction.
+
+        Parses the ``query`` string rather than accepting any query and
+        returning everything: an adapter that forgot ``type:ticket``, or
+        that put the requester's *id* where Zendesk wants an email, or that
+        tried to express sorting inside the query string instead of via
+        ``sort_by``/``sort_order``, has to fail here. A handler that ignored
+        the query would make the contract test assert nothing about the
+        request at all.
+        """
+        params = request.url.params
+        query = params.get("query", "")
+        terms = dict(
+            term.split(":", 1) for term in query.split() if ":" in term
+        )
+        if terms.get("type") != "ticket":
+            return httpx.Response(
+                422, json={"error": "InvalidSearch", "description": f"unsupported: {query!r}"}
+            )
+        requester = terms.get("requester")
+        if requester is None:
+            return httpx.Response(
+                422, json={"error": "InvalidSearch", "description": "no requester term"}
+            )
+        requester_id = self._requester_ids.get(requester)
+
+        results = [
+            ticket
+            for ticket in self.tickets.values()
+            if requester_id is not None and ticket["requester_id"] == int(requester_id)
+        ]
+        if params.get("sort_by") == "created_at":
+            results.sort(
+                key=lambda t: t["created_at"], reverse=params.get("sort_order") == "desc"
+            )
+        per_page = int(params.get("per_page", "100"))
+        return httpx.Response(
+            200, json={"results": results[:per_page], "count": len(results)}
+        )
 
     def _put_ticket(self, request: httpx.Request, ticket_id: str) -> httpx.Response:
         self.put_calls[ticket_id] = self.put_calls.get(ticket_id, 0) + 1
@@ -230,9 +293,17 @@ class ZendeskHarness:
     fake: FakeZendesk
     sleeps: list[float] = field(default_factory=list)
 
-    def seed_ticket(self, *, tags: list[str] | None = None) -> Seeded:
-        ticket_id = self.fake.seed_ticket(tags=tags)
-        return Seeded(ticket_id=ticket_id, requester_email=DEFAULT_REQUESTER_EMAIL)
+    def seed_ticket(
+        self,
+        *,
+        tags: list[str] | None = None,
+        subject: str = "Where is my case?",
+        requester_email: str = DEFAULT_REQUESTER_EMAIL,
+    ) -> Seeded:
+        ticket_id = self.fake.seed_ticket(
+            tags=tags, subject=subject, requester_email=requester_email
+        )
+        return Seeded(ticket_id=ticket_id, requester_email=requester_email)
 
     def seed_comment(
         self,

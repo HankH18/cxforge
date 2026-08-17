@@ -175,3 +175,118 @@ def test_assign_group_sends_normalized_value(adapter_harness: AdapterHarness) ->
     adapter_harness.port.assign_group(seeded.ticket_id, group)
 
     assert adapter_harness.group_id_for(seeded.ticket_id) == "77"
+
+
+# -- fetch_requester_history (ADR-009 / BUILD-PLAN §1.5) ---------------------
+#
+# The one method added to the Protocol since DESIGN pinned it. It is the
+# strongest test of R14 in this file, because the two adapters answer it in
+# genuinely different ways — Zendesk has to build a Search API query
+# (`type:ticket requester:<email>`, sorted by parameter, current ticket
+# filtered client-side) while EmailAdapter walks a local thread store — and
+# every assertion below is written against the Protocol's semantics, so
+# neither implementation can satisfy them by accident.
+
+OTHER_REQUESTER = "someone-else@example.com"
+
+
+def test_requester_history_returns_prior_tickets_newest_first(
+    adapter_harness: AdapterHarness,
+) -> None:
+    """Ordering is the Protocol's, not the provider's. A history read for a
+    classifier is only useful if the most recent contact is first — an
+    adapter that returned insertion order, or whatever its store iterates
+    in, fails here."""
+    oldest = adapter_harness.seed_ticket(subject="first contact")
+    middle = adapter_harness.seed_ticket(subject="second contact")
+    current = adapter_harness.seed_ticket(subject="today's question")
+
+    history = adapter_harness.port.fetch_requester_history(
+        current.requester_email, exclude_ticket_id=current.ticket_id
+    )
+
+    assert [summary.id for summary in history] == [middle.ticket_id, oldest.ticket_id]
+    assert [summary.subject for summary in history] == ["second contact", "first contact"]
+
+
+def test_requester_history_excludes_the_ticket_being_processed(
+    adapter_harness: AdapterHarness,
+) -> None:
+    """The current ticket is the requester's too, and a provider search
+    returns it. Leaving it in would feed the classifier the message it is
+    already reading, labelled as prior history."""
+    adapter_harness.seed_ticket(subject="a previous one")
+    current = adapter_harness.seed_ticket(subject="today's question")
+
+    history = adapter_harness.port.fetch_requester_history(
+        current.requester_email, exclude_ticket_id=current.ticket_id
+    )
+
+    assert current.ticket_id not in [summary.id for summary in history]
+    assert [summary.subject for summary in history] == ["a previous one"]
+
+
+def test_requester_history_never_returns_another_requesters_tickets(
+    adapter_harness: AdapterHarness,
+) -> None:
+    """The property with real consequences: a history leak would put one
+    customer's subject lines into another customer's classification context,
+    and from there into a trace and a support agent's screen."""
+    adapter_harness.seed_ticket(subject="not yours", requester_email=OTHER_REQUESTER)
+    mine = adapter_harness.seed_ticket(subject="mine, earlier")
+    current = adapter_harness.seed_ticket(subject="today's question")
+
+    history = adapter_harness.port.fetch_requester_history(
+        current.requester_email, exclude_ticket_id=current.ticket_id
+    )
+
+    assert [summary.id for summary in history] == [mine.ticket_id]
+
+
+def test_requester_history_honours_the_limit(adapter_harness: AdapterHarness) -> None:
+    """`limit` caps prompt cost on every run, so it has to be a real cap and
+    not a suggestion — and it must count tickets AFTER the current one is
+    excluded, or asking for 2 can yield 1."""
+    for index in range(6):
+        adapter_harness.seed_ticket(subject=f"older {index}")
+    current = adapter_harness.seed_ticket(subject="today's question")
+
+    history = adapter_harness.port.fetch_requester_history(
+        current.requester_email, exclude_ticket_id=current.ticket_id, limit=2
+    )
+
+    assert len(history) == 2
+    assert [summary.subject for summary in history] == ["older 5", "older 4"]
+
+
+def test_requester_history_is_empty_for_a_first_time_requester(
+    adapter_harness: AdapterHarness,
+) -> None:
+    """No prior contact is a normal, common answer — not an error, and not
+    a list containing the current ticket."""
+    current = adapter_harness.seed_ticket(subject="today's question")
+
+    history = adapter_harness.port.fetch_requester_history(
+        current.requester_email, exclude_ticket_id=current.ticket_id
+    )
+
+    assert history == []
+
+
+def test_requester_history_returns_normalized_summaries(
+    adapter_harness: AdapterHarness,
+) -> None:
+    """Every field BUILD-PLAN §1.5 pins, normalized the same way for both
+    adapters — no provider-shaped status string, no raw provider id."""
+    adapter_harness.seed_ticket(subject="a previous one", tags=["vip"])
+    current = adapter_harness.seed_ticket(subject="today's question")
+
+    summary = adapter_harness.port.fetch_requester_history(
+        current.requester_email, exclude_ticket_id=current.ticket_id
+    )[0]
+
+    assert isinstance(summary.id, str) and summary.id
+    assert summary.subject == "a previous one"
+    assert summary.status in ("new", "open", "pending", "solved")
+    assert summary.created_at is not None
+    assert "vip" in summary.tags

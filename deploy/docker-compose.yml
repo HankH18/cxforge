@@ -106,10 +106,28 @@ services:
       # longer reads that name at all, so forwarding it deployed a stack
       # that could not reach the model.)
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      # ADR-008 / W2-B1: resolved by the voyageai SDK, so no os.environ
-      # read names it anywhere in backend/src. Forwarded ahead of B1 and
-      # required by test_env_forwarding.py's SDK_RESOLVED_VARIABLES.
+      # --- Embeddings (ADR-008 / W2-B1) ---
+      # `backend/src/data/embeddings.py` reads BOTH of these itself, with
+      # literal keys, so test_env_forwarding.py's AST scan requires them on
+      # every service running this image and neither can be exempted away.
+      # (This comment previously said the key was resolved by the `voyageai`
+      # SDK; W2-B1 shipped an httpx client instead, so it is now an ordinary
+      # os.environ read.)
+      #
+      # Empty default, like every other credential in this file: it reaches
+      # the container either way, and `VoyageEmbedder` refuses to build
+      # without it rather than silently degrading to the lexical embedder —
+      # which would seed and query in two different embedding spaces.
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      # THIS IS THE SWITCH THAT PUTS PRODUCTION ON VOYAGE, and it is set to
+      # the offline lexical embedder on purpose (docs/BUILD-PLAN.md §10.3).
+      # `hashing` is also the code's own default, so an unset shell variable
+      # and this line agree. Flipping it to `voyage` is only correct together
+      # with a reseed of `kb_chunks` in the same maintenance window: the
+      # stored vectors and the query vectors must come from one embedding
+      # space, and a mismatch produces plausible nonsense rather than an
+      # error — strictly worse than not flipping it at all.
+      KB_EMBEDDER: ${KB_EMBEDDER:-hashing}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}
@@ -221,10 +239,14 @@ services:
       # entire job is to call the model. An empty value here is a worker
       # that accepts jobs and fails every one of them.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      # ADR-008 / W2-B1: resolved by the voyageai SDK, so no os.environ
-      # read names it anywhere in backend/src. Forwarded ahead of B1 and
-      # required by test_env_forwarding.py's SDK_RESOLVED_VARIABLES.
+      # Embeddings (ADR-008 / W2-B1) — see `backend` above for the full note.
+      # Retrieval runs HERE, in the worker: `agent.nodes.kb_answer` calls
+      # `data.retrieval.search_kb`, which resolves its embedder through
+      # `default_embedder()`. So this service, not just the seeder, needs
+      # both, and the two must agree with `backend`'s values or the reseed
+      # and the queries end up in different embedding spaces.
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      KB_EMBEDDER: ${KB_EMBEDDER:-hashing}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-https://cloud.langfuse.com}

@@ -21,18 +21,43 @@ rules, computed on every run:
      at all.
 
 Rule 3 is here because rules 1 and 2 were *both* measured blind to a live
-example. `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` are resolved by the
-`langfuse` SDK, so there is no ``os.environ`` read for rule 1, and neither
-name appears anywhere in ``backend/src/**`` (only ``LANGFUSE_HOST`` does), so
-rule 2 sees nothing either. Verified 2026-08-16 by deleting all six
-credential lines from both compose files: the suite stayed **45 passed**. The
-`langfuse` instrumentation W2-C1 is about to add would then have landed on a
-worker with no keys — `docs/STATE.md §6.2` reproduced exactly.
+example. When this module was written, `LANGFUSE_PUBLIC_KEY` /
+`LANGFUSE_SECRET_KEY` were resolved by the `langfuse` SDK and by nothing
+else: no ``os.environ`` read for rule 1, and neither name anywhere in
+``backend/src/**`` (only ``LANGFUSE_HOST``), so rule 2 saw nothing either.
+Verified 2026-08-16 by deleting all six credential lines from both compose
+files: the suite stayed **45 passed**. The `langfuse` instrumentation W2-C1
+was about to add would then have landed on a worker with no keys —
+`docs/STATE.md §6.2` reproduced exactly.
+
+**That is now history for those two names, and the ledger is unchanged by
+it.** W2-C1 has landed, and `backend/src/agent/llm.py`'s
+``langfuse_configured()`` reads both keys as literal ``os.environ.get``
+calls to decide whether to instrument at all — so rule 1 finds them without
+help, which is the *stricter* path: it cannot be forgotten, whereas a rule-3
+line can be deleted. Their rule-3 entries stay anyway. ``app_env_vars``
+unions the two sets, so nothing about what is required moves, and the line
+is what keeps the credential checked if that gate is ever refactored back
+into the SDK. Rule 3's justification does not depend on any single name
+still being invisible to rules 1 and 2.
 
 `ANTHROPIC_API_KEY` is the same shape and got caught only by luck: it happens
 to be *named* in `agent/llm.py`'s docstring, which is not a property anyone
 guaranteed. It is in rule 3 now too, so it no longer depends on a comment
 surviving.
+
+`VOYAGE_API_KEY` went the same way for a different reason. Its rule-3 line was
+written before W2-B1 existed, on the assumption that the `voyageai` SDK would
+resolve it; W2-B1 shipped an httpx client instead, so
+``backend/src/data/embeddings.py`` reads it — and ``KB_EMBEDDER`` — itself.
+Both reads use **literal** keys precisely so rule 1 resolves them: a read
+through a module constant is unresolvable, lands in ``KNOWN_DYNAMIC_ENV_READS``
+below, and is then required by *nothing*. Rule 1 is the stricter home for
+both — a literal read cannot be exempted (see
+``test_the_exemption_ledger_can_never_silence_a_real_requirement``) and drags a
+``.env.example`` line along with it, neither of which is true of a name that
+only rule 2 can see. That constraint is written down in ``embeddings.py`` next
+to each constant so nobody DRYs the literal away.
 
 **Rule 3 is required, never exempting.** Deleting a line from it is how a
 credential stops being checked, so the only way to add an SDK credential
@@ -128,8 +153,11 @@ SDK_RESOLVED_VARIABLES: dict[str, str] = {
         "docstring, which is not a guarantee — this line is."
     ),
     "LANGFUSE_PUBLIC_KEY": (
-        "Resolved by the langfuse SDK (ADR-006 / W2-C1). The name appears "
-        "nowhere in backend/src/**; only LANGFUSE_HOST does."
+        "Resolved by the langfuse SDK (ADR-006 / W2-C1). Since W2-C1 landed, "
+        "backend/src/agent/llm.py's langfuse_configured() also reads it "
+        "literally to decide whether to instrument, so rule 1 finds it too; "
+        "this line keeps it required if that gate is ever refactored back "
+        "into the SDK."
     ),
     "LANGFUSE_SECRET_KEY": (
         "Resolved by the langfuse SDK (ADR-006 / W2-C1). In Langfuse the key "
@@ -137,9 +165,15 @@ SDK_RESOLVED_VARIABLES: dict[str, str] = {
         "one and not the other traces to the wrong project or nowhere."
     ),
     "VOYAGE_API_KEY": (
-        "Resolved by the voyageai SDK. ADR-008 / W2-B1 replaces HashingEmbedder "
-        "with VoyageEmbedder; retrieval runs inside the worker, so the worker "
-        "needs it and not only the seeder."
+        "ADR-008 / W2-B1. This line predates the implementation and said the "
+        "`voyageai` SDK resolved the key; it does not — W2-B1 shipped an httpx "
+        "client, and backend/src/data/embeddings.py reads the name literally, "
+        "so rule 1 now finds it without help. Same situation as LANGFUSE_* "
+        "above, and the line stays for the same reason: swapping VoyageEmbedder "
+        "for the SDK would delete the only literal read, and this is what would "
+        "keep the credential required if that happened. Retrieval runs inside "
+        "the worker (agent.nodes.kb_answer -> data.retrieval.search_kb), so the "
+        "worker needs it and not only the seeder."
     ),
 }
 

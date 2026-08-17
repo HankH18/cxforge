@@ -35,6 +35,7 @@ from agent import store, templates
 from agent.config import (
     DEFAULT_ESCALATION_GROUP_ID,
     DEFAULT_ESCALATION_GROUP_NAME,
+    REQUESTER_HISTORY_LIMIT,
     RETRIEVAL_K,
     VERIFIER_THRESHOLD,
 )
@@ -52,7 +53,7 @@ from agent.state import RunState
 from data import Case, RetrievedChunk, get_case, get_cases_by_requester, search_kb
 from escalation.notes import compose_internal_note
 from escalation.schemas import Reason
-from helpdesk.models import EscalationGroup, Message, Ticket
+from helpdesk.models import EscalationGroup, Message, Ticket, TicketSummary
 from helpdesk.port import HelpdeskPort
 
 # -- shared helpers -----------------------------------------------------
@@ -177,20 +178,81 @@ def ingest(state: RunState, config: RunnableConfig) -> dict[str, Any]:
 # -- classify ---------------------------------------------------------------
 
 
+def _render_requester_history(history: list[TicketSummary]) -> str:
+    """One line per prior ticket, oldest context first.
+
+    Deliberately renders only what ``TicketSummary`` carries — no bodies. A
+    prior ticket's *body* is another conversation's content, and pulling it
+    into this run's prompt would both blow up the context and give the
+    classifier free text it could mistake for the customer's current ask.
+    Subject + status + age + tags is enough to tell a repeat complainer from
+    a first-time asker, which is what ADR-009 wanted it for.
+    """
+    lines = []
+    for summary in history:
+        tags = f" [tags: {', '.join(summary.tags)}]" if summary.tags else ""
+        lines.append(
+            f"- {summary.created_at.date().isoformat()} "
+            f"(status: {summary.status}) {summary.subject}{tags}"
+        )
+    return "\n".join(lines)
+
+
 def classify(state: RunState, config: RunnableConfig) -> dict[str, Any]:
     """The only node allowed to choose among the four branch routes —
-    never ``"escalate"`` itself (see ``agent.state``'s module docstring)."""
+    never ``"escalate"`` itself (see ``agent.state``'s module docstring).
+
+    ADR-009 adds the requester's prior tickets to the classifier's context.
+    Two deliberate choices about *how*:
+
+    - The history goes in the **user** message, not into ``CLASSIFY_SYSTEM``.
+      ``agent.prompts``'s own contract is that the system strings carry
+      instructions only and never run-specific content, which is what keeps a
+      case fact structurally unable to reach a prompt (R9). History is
+      run-specific content, so it belongs here, labelled clearly enough that
+      the model cannot confuse a prior subject line with the current ask.
+    - It is fetched here rather than in ``ingest`` because it is classifier
+      context, and because ``ingest``'s two port calls are R7's "rebuild the
+      conversation from the live port" contract — a third call with different
+      semantics does not belong inside it.
+
+    The port call is not wrapped in a try/except, matching ``ingest``: a
+    helpdesk API failure fails the run loudly, where ADR-003's worker
+    releases the dedup row and logs it, rather than silently degrading to a
+    classification made without context nobody knows was missing.
+    """
     deps = _deps(config)
+    ticket = state["ticket"]
     transcript = _conversation_transcript(state["conversation"])
+    current = transcript or _latest_customer_message(state["conversation"])
+
+    history = deps.port.fetch_requester_history(
+        ticket.requester_email, exclude_ticket_id=ticket.id, limit=REQUESTER_HISTORY_LIMIT
+    )
+    if history:
+        user_content = (
+            f"This requester has contacted support before. Their previous "
+            f"tickets, newest first — context only, NOT the message to "
+            f"classify:\n{_render_requester_history(history)}\n\n"
+            f"Conversation to classify:\n{current}"
+        )
+    else:
+        user_content = current
+
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": CLASSIFY_SYSTEM},
-        {"role": "user", "content": transcript or _latest_customer_message(state["conversation"])},
+        {"role": "user", "content": user_content},
     ]
     result = deps.llm.structured(Classification, messages)
     assert isinstance(result, Classification)
 
     tool_results = _tool_results(state)
     tool_results["case_id_hint"] = result.case_id
+    # Carried so the escalation seam and `act`'s internal note can see the
+    # same history the classifier saw — a repeat complainer is exactly the
+    # signal a human triaging the escalation wants, and re-fetching it later
+    # would be a second API call that could disagree with this one.
+    tool_results["requester_history"] = history
 
     return {
         "topic": result.topic,

@@ -9,7 +9,14 @@ whole run/draft/settings schema is created now, up front, via
 """
 
 from data.db import get_connection, get_dsn
-from data.embeddings import EMBEDDING_DIM, Embedder, HashingEmbedder
+from data.embeddings import (
+    EMBEDDING_DIM,
+    Embedder,
+    HashingEmbedder,
+    VoyageEmbedder,
+    default_embedder,
+    min_score_for,
+)
 from data.lookup import get_case, get_cases_by_requester
 from data.models import Case, CaseNotFound, KBChunk, RetrievedChunk, Stage
 from data.retrieval import search_kb
@@ -26,11 +33,14 @@ __all__ = [
     "RetrievedChunk",
     "SeedResult",
     "Stage",
+    "VoyageEmbedder",
+    "default_embedder",
     "get_case",
     "get_cases_by_requester",
     "get_connection",
     "get_dsn",
     "init_schema",
+    "min_score_for",
     "search_kb",
     "seed_all",
 ]

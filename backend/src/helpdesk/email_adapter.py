@@ -37,7 +37,15 @@ from itertools import count
 from typing import TYPE_CHECKING
 
 from helpdesk.errors import HelpdeskAPIError
-from helpdesk.models import AuthorKind, EscalationGroup, Message, MessageRef, Ticket, TicketStatus
+from helpdesk.models import (
+    AuthorKind,
+    EscalationGroup,
+    Message,
+    MessageRef,
+    Ticket,
+    TicketStatus,
+    TicketSummary,
+)
 from helpdesk.port import HelpdeskPort
 
 # Loop-guard tag convention (DESIGN §HelpdeskPort / T-4 runbook). Every
@@ -171,6 +179,36 @@ class EmailAdapter:
         # than trusting store/insertion order to already be chronological.
         messages.sort(key=lambda message: message.created_at)
         return messages
+
+    def fetch_requester_history(
+        self, requester_email: str, *, exclude_ticket_id: str, limit: int = 5
+    ) -> list[TicketSummary]:
+        """Prior threads from the same address, newest first (ADR-009).
+
+        In the email domain "the requester's other tickets" is "the other
+        threads whose ``From:`` is this address" — no search API, no query
+        language, just the local thread store this stub keeps in place of
+        an IMAP mailbox. The ordering and the ``exclude_ticket_id`` /
+        ``limit`` semantics are the Protocol's, not email's, so they are
+        implemented here rather than left to whatever order the store
+        happens to iterate in.
+        """
+        threads = [
+            thread
+            for thread in self._threads.values()
+            if thread.requester_email == requester_email and thread.id != exclude_ticket_id
+        ]
+        threads.sort(key=lambda thread: thread.created_at, reverse=True)
+        return [
+            TicketSummary(
+                id=thread.id,
+                subject=thread.subject,
+                status=thread.status,
+                created_at=thread.created_at,
+                tags=list(thread.tags),
+            )
+            for thread in threads[:limit]
+        ]
 
     def post_public_reply(self, ticket_id: str, html_body: str) -> MessageRef:
         thread = self._get_thread(ticket_id)

@@ -31,6 +31,29 @@ class Ticket(BaseModel):
     created_at: datetime
 
 
+class TicketSummary(BaseModel):
+    """One of the requester's *other* tickets, as seen by
+    ``HelpdeskPort.fetch_requester_history`` (ADR-009 / BUILD-PLAN §1.5).
+
+    Deliberately not a ``Ticket``. History is read to answer "has this person
+    been here before, and about what" — the classifier needs the shape of the
+    prior contact, not another copy of the requester's email on every row.
+    Dropping ``requester_email`` also means a history list cannot become a
+    second, unaudited source of identity: the run's requester comes from
+    ``fetch_ticket``, once.
+
+    Field list pinned in BUILD-PLAN §1.5: ``(id, subject, status, created_at,
+    tags)``. Provider quirks stay in the adapter, as with every other model
+    in this module.
+    """
+
+    id: str
+    subject: str
+    status: TicketStatus
+    created_at: datetime
+    tags: list[str]
+
+
 class Message(BaseModel):
     """One conversation entry, as pinned in DESIGN §HelpdeskPort.
 

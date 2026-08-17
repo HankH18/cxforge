@@ -48,14 +48,23 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FAKE_LLM_ENV_VAR = "EVALS_ROUTE_ACCURACY_FAKE_LLM_FOR_TESTS_ONLY"
 
-# The labeled set's own shape, asserted rather than assumed: 51 tickets, of
-# which 30 carry one of the four branch routes classify can actually emit and 21
+# The labeled set's own shape, asserted rather than assumed: 52 tickets, of
+# which 32 carry one of the four branch routes classify can actually emit and 20
 # are labeled `escalate` (which classify structurally cannot emit — its schema
 # is agent.state.ClassifyRoute). If evals/labeled_set.yaml changes, these
 # numbers must be re-derived deliberately, not silently absorbed.
-EXPECTED_TOTAL = 51
-EXPECTED_SCORED = 30
-EXPECTED_ESCALATE = 21
+#
+# Re-derived 2026-08-16 for **ADR-020** (was 51 / 30 / 21). W1-E3 measured the
+# live model routing two `esc-low_confidence-verifier_failure-*` tickets to
+# `case_status` at 0.92 confidence; the owner decided the model was right and
+# the labels wrong, so both moved to `case_status` (escalate 21 -> 19, branch
+# 30 -> 32) and one genuinely kb-route replacement was added to keep the
+# verifier-failure hard trigger represented (escalate 19 -> 20, total 51 -> 52).
+# Each relabeled ticket carries a `relabeled:` block in evals/labeled_set.yaml
+# recording the measurement and the consequence.
+EXPECTED_TOTAL = 52
+EXPECTED_SCORED = 32
+EXPECTED_ESCALATE = 20
 
 # The escalations whose detection lives inside one specific branch node, so a
 # mis-route means the ticket does not escalate at all. Pinned here so a change
@@ -67,8 +76,7 @@ EXPECTED_ROUTE_DEPENDENT = {
     "esc-out_of_procedure-early-deletion-01": "permission",
     "esc-low_confidence-empty_retrieval-accreditation-01": "kb",
     "esc-low_confidence-empty_retrieval-international-01": "kb",
-    "esc-low_confidence-verifier_failure-exact-date-01": "kb",
-    "esc-low_confidence-verifier_failure-summed-timeline-01": "kb",
+    "esc-low_confidence-verifier_failure-summed-stages-01": "kb",
 }
 
 
@@ -120,9 +128,9 @@ def _results(output_dir: Path) -> dict[str, Any]:
 
 
 def test_scores_only_the_branch_route_tickets(tmp_path: Path) -> None:
-    """The 21 ``escalate`` labels must not be graded against a route classify
+    """The 20 ``escalate`` labels must not be graded against a route classify
     cannot emit — doing so would mark them all wrong by construction and drag
-    the headline number to a meaningless 30/51."""
+    the headline number to a meaningless 32/52."""
     out = tmp_path / "run"
     proc = _run(out)
     assert proc.returncode == 0, proc.stderr
@@ -136,9 +144,10 @@ def test_scores_only_the_branch_route_tickets(tmp_path: Path) -> None:
 
 
 def test_confusion_matrix_records_the_actual_misroutes(tmp_path: Path) -> None:
-    """A model that answers ``kb`` for everything must score 10/30 with all 20
+    """A model that answers ``kb`` for everything must score 10/32 with all 22
     misses landing in the ``kb`` column — not a blanket pass, and not a blanket
-    fail."""
+    fail. (Was 10/30 with 20 misses before ADR-020 moved two tickets into
+    ``case_status``; see EXPECTED_SCORED above.)"""
     out = tmp_path / "run"
     proc = _run(out, fake_route="kb")
     assert proc.returncode == 0, proc.stderr
@@ -146,16 +155,16 @@ def test_confusion_matrix_records_the_actual_misroutes(tmp_path: Path) -> None:
     summary = _results(out)["summary"]
     matrix = summary["confusion_matrix"]
 
-    assert summary["route_accuracy"] == round(10 / 30, 4)
+    assert summary["route_accuracy"] == round(10 / 32, 4)
     assert matrix["kb"]["kb"] == 10
-    assert matrix["case_status"]["kb"] == 10
+    assert matrix["case_status"]["kb"] == 12
     assert matrix["permission"]["kb"] == 5
     assert matrix["off_topic"]["kb"] == 5
     assert matrix["case_status"]["case_status"] == 0
 
     per_route = summary["per_route"]
     assert per_route["kb"]["recall"] == 1.0
-    assert per_route["kb"]["precision"] == round(10 / 30, 4)
+    assert per_route["kb"]["precision"] == round(10 / 32, 4)
     assert per_route["case_status"]["recall"] == 0.0
 
 
@@ -178,8 +187,10 @@ def test_route_dependent_escalations_are_identified_and_graded(tmp_path: Path) -
     }
     assert by_id == EXPECTED_ROUTE_DEPENDENT
 
-    # The canned client answers "kb" for everything, so exactly the three
-    # kb-required tickets pass and the five others are reported as misses.
+    # The canned client answers "kb" for everything, so exactly the
+    # kb-required tickets pass and every other route-dependent one is
+    # reported as a miss. Both counts are derived from the map above rather
+    # than written out, so this stays correct as the map changes.
     assert esc["route_dependent_correct"] == sum(
         1 for route in EXPECTED_ROUTE_DEPENDENT.values() if route == "kb"
     )

@@ -18,6 +18,8 @@ graph:
 
 from __future__ import annotations
 
+from data.embeddings import default_min_score
+
 # DESIGN pins strict structured outputs + "one config constant" for the
 # model version, not a provider or a specific model name. Change only here.
 ANTHROPIC_MODEL = "claude-opus-5"
@@ -50,3 +52,33 @@ DEFAULT_ESCALATION_GROUP_NAME = "Specialist Escalation"
 # or a permission always-grant check. Not DESIGN-pinned; matches
 # `search_kb`'s own default of 5.
 RETRIEVAL_K = 5
+
+# How many of the requester's prior tickets `classify` puts in front of the
+# classifier (ADR-009 / BUILD-PLAN §1.5, whose signature defaults `limit` to
+# the same 5). Small on purpose: this is "has this person been here before,
+# and about what", not a case file. Every extra row is prompt cost on every
+# single run, and a long history would start to compete with the message
+# actually being classified.
+REQUESTER_HISTORY_LIMIT = 5
+
+# BUILD-PLAN §1.3 / ADR-010's relevance floor: chunks scoring below this are
+# dropped, so `search_kb` can return nothing at all and R6's `empty_retrieval`
+# hard trigger becomes reachable (`docs/STATE.md §6.4` records that it was
+# previously unreachable).
+#
+# Unlike every other constant in this module this is NOT a literal pinned
+# here, and deliberately so. A cosine cutoff is only meaningful relative to
+# the embedding space that produced the score: the lexical HashingEmbedder's
+# correct hits land at 0.17-0.38 while VoyageEmbedder's land at 0.29-0.63,
+# so one hard-coded number would either be a no-op for one embedder or
+# reject every result from the other. The calibrated value therefore lives
+# beside the embedder it was measured on (see each class's `min_score` in
+# `data.embeddings`, which records the measurement), and this name resolves
+# whichever one the configured embedder carries. `data` cannot import from
+# `agent`, so the dependency necessarily points this way.
+#
+# Resolved once, at import. `search_kb` does not read this name — it reads
+# the floor off the embedder instance it actually used, so the two can never
+# disagree even if `KB_EMBEDDER` changes mid-process (which only a test
+# does). This constant is the config surface BUILD-PLAN §1.3 names.
+KB_MIN_SCORE: float = default_min_score()

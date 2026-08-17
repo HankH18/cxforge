@@ -112,3 +112,66 @@ def test_query_cases_cover_twelve_distinct_docs() -> None:
     """Guards against the smoke test collapsing onto fewer than 12 distinct docs."""
     assert len(QUERY_CASES) == 12
     assert len({slug for _, slug in QUERY_CASES}) == 12
+
+
+# -- the relevance floor (ADR-010 / BUILD-PLAN §1.3) -------------------------
+#
+# Before the floor, `search_kb` always returned `k` chunks for any input
+# whatsoever, because nearest-neighbour search has no opinion about whether
+# the nearest thing is actually close. That made R6's `empty_retrieval` hard
+# escalation trigger unreachable (`docs/STATE.md §6.4`). The three tests
+# below pin the two halves of a floor that is worth having: it must reject
+# what the KB does not cover, AND it must not reject what the KB does.
+
+# Questions no fixtures/kb/*.md document covers. The first is the body of
+# `esc-low_confidence-empty_retrieval-accreditation-01` from
+# evals/labeled_set.yaml — a labeled ticket that claimed to exercise this
+# trigger and, until the floor existed, could not.
+#
+# This list is the subset the DEFAULT (lexical) embedder can actually
+# reject, and the omissions are stated rather than quietly dropped: measured
+# 2026-08-16, "How do I reverse a linked list in Python?" scores 0.0948,
+# "Do you accept samples from law enforcement agencies outside the US..."
+# 0.1320, and "Who won the World Cup final in 2022?" 0.2238 — all above the
+# 0.09 floor, and the last above the correct answer for 5 of the 12
+# held-out queries. `HashingEmbedder.min_score` records why no cutoff can
+# fix that, and `VoyageEmbedder` is what does.
+OFF_DOMAIN_QUERIES: list[str] = [
+    "Is Meridian ISO 17025 accredited, and what are your international "
+    "shipping and customs requirements for skeletal remains?",
+    "What is the weather forecast for Houston this weekend?",
+    "Can you give me a recipe for sourdough starter?",
+    "Should I buy shares in a semiconductor ETF right now?",
+]
+
+
+@pytest.mark.parametrize("query", OFF_DOMAIN_QUERIES)
+def test_off_domain_query_retrieves_nothing_under_the_default_floor(
+    seeded: SeedResult, query: str
+) -> None:
+    """The floor fires: a question outside the KB returns no chunks at all,
+    which is what `agent.nodes.kb_answer` escalates on."""
+    assert search_kb(query, k=5) == []
+
+
+@pytest.mark.parametrize("query", OFF_DOMAIN_QUERIES)
+def test_min_score_zero_restores_the_pre_floor_behaviour(
+    seeded: SeedResult, query: str
+) -> None:
+    """The same query still has nearest neighbours — the floor is what
+    removes them, not an empty table or a failed embed. This is what makes
+    the test above evidence about the floor rather than about the fixtures."""
+    assert len(search_kb(query, k=5, min_score=0.0)) == 5
+
+
+@pytest.mark.parametrize("query,expected_slug", QUERY_CASES)
+def test_the_default_floor_discards_no_held_out_hit(
+    seeded: SeedResult, query: str, expected_slug: str
+) -> None:
+    """The other half, and the one that makes the floor a calibration rather
+    than a guess: a floor high enough to reject everything would pass the
+    tests above and destroy retrieval. Every one of the 12 held-out queries
+    must still retrieve its expected doc with the default floor applied."""
+    results = search_kb(query, k=10)
+    assert results, f"the default floor discarded every chunk for {query!r}"
+    assert expected_slug in [r.chunk.doc_slug for r in results]

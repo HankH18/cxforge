@@ -282,6 +282,85 @@ re-runnable without exhausting the trial, and rate limits must be respected.
 
 ---
 
+## ADR-020 — The exact-date tickets are case-status questions; the labels were wrong
+
+**Decided 2026-08-16, during Wave 2.** Owner call. `docs/BUILD-PLAN.md §10.2` Gap 1 raised
+it as "owner decision, not a subagent's"; this is the answer.
+
+**Decision.** Three parts, one decision.
+
+1. **The two labels move.** `esc-low_confidence-verifier_failure-exact-date-01` and
+   `esc-low_confidence-verifier_failure-summed-timeline-01` in `evals/labeled_set.yaml`
+   become ordinary `case_status` tickets — `expected_escalate: false`,
+   `expected_reasons: []`. Each carries a `relabeled:` block in the file recording the
+   measurement, the reasoning and the consequence, so a future reader never finds an
+   unexplained label diff.
+2. **Case-status replies that state an ETA carry a qualifier.** `agent/templates.py`'s
+   `render_case_status_reply` now ends its estimate with *"— an estimated timeline, and
+   subject to change."* Scoped to the branch that actually states a forward-looking
+   estimate; a completed case has no timeline to hedge and gets nothing.
+3. **The `CLASSIFY_SYSTEM` prompt is NOT rewritten.** §10.2 offered rewording the prompt
+   as the alternative fix. It is rejected: bending the classifier away from a reading the
+   owner agrees is correct, in order to preserve a label the owner agrees is wrong, is
+   fixing the measurement instead of the thing measured.
+
+**Why it needed a decision.** W1-E3 (`evals/route_accuracy.py`, 2026-08-16, `claude-opus-5`
+over all 51 labels, ~$0.30) drove the **shipped** `agent.nodes.classify` and found these two
+tickets routed to `case_status` at **0.92 confidence** each — reproduced independently by
+promptfoo. The labels expected them on the `kb` route, failing the groundedness verifier.
+Someone was wrong, and the choice is not a coding decision: *"can you tell me the EXACT
+calendar date my results will be ready?"* is, on any plain reading, a question about the
+state of that customer's case. So the labels were wrong.
+
+But the worry behind the original labels is real. The lab publishes per-stage windows, not
+calendar dates, and `fixtures/kb/turnaround-times.md` explicitly warns against summing
+stage windows. Answering an exact-date question with a bare week figure implies a precision
+nobody has. That is a **reply-content** problem, not a routing problem, so it is fixed in
+the reply.
+
+**What this commits us to.**
+
+- **The published eval numbers will move, and that is in policy, not an accident.** These
+  two tickets currently sit in the escalation set behind `docs/eval-report/`'s
+  `P = R = F1 = 1.000` and its hard-trigger recall. Removing them changes that denominator,
+  and they were also two of the six tickets `evals/report.py` excludes as structurally
+  unmeasurable — so `measured_sample_size` moves too (45 → 47 of the labeled rows).
+  **ADR-007** already commits this project to regenerating the report live and publishing
+  whatever the numbers are; that regeneration is Wave 3 **G1**. Nothing under
+  `docs/eval-report/` was touched by this ADR, and `uv run python -m evals.report` was not
+  run against it.
+- **The verifier-failure hard trigger keeps a representative.** Both relabeled tickets were
+  the labeled set's only `verifier_failure` examples, and
+  `backend/tests/evals/test_labeled_set.py::test_every_low_confidence_subtype_is_covered`
+  requires each of `low_confidence`'s three subtypes to be represented. Rather than weaken
+  that test, one replacement was written —
+  `esc-low_confidence-verifier_failure-summed-stages-01`, the same trap posed about the
+  **published** stage windows with no case in it, so nothing about its phrasing invites a
+  `case_status` reading. The labeled set is now 52 tickets: 32 branch-route, 20 escalate.
+  `backend/tests/evals/test_route_accuracy.py`'s pinned counts were re-derived accordingly
+  — that file's own comment demands they be changed deliberately, and this is that.
+- **The two relabeled tickets keep their `esc-…` ids.** They are the join key into
+  `evals/route-accuracy/results.json` and the approved `docs/eval-report/`, neither of
+  which this change rewrites; renaming would orphan the measurement that justifies the
+  decision. Recorded as an explicit exception in `labeled_set.yaml`'s `meta.id_convention`.
+  Nothing keys off the prefix — every id-marker check gates on `low_confidence` being in
+  `expected_reasons` first, and these two now have none.
+- **The qualifier must never grow a fact.** It states no number, no stage, and no cause.
+  `agent/grounding_guard.py` flags exactly that shape of claim and R9 is this project's
+  headline property, so a disclaimer that explained *why* the estimate might slip ("due to
+  lab throughput") would trip it and would deserve to.
+  `backend/tests/grounding/test_reply_wording.py` pins this by comparing the guard's full
+  extraction signature over the reply with and without the qualifier, not merely by
+  asserting no violations.
+
+**Rejected.** Rewording `CLASSIFY_SYSTEM` (see decision 3). Leaving the labels alone and
+accepting a permanent known 2-ticket miss (it would make the route-accuracy harness report
+a defect that is really a labeling error, forever). Adding the disclaimer to *every*
+case-status reply (a completed case has no estimate; blanket hedging teaches customers to
+skip the words where they matter).
+
+---
+
 ## ADR-019 — The three `settings.json` acceptance tests are retired with the hooks they assert
 
 **Decided 2026-08-16, during Wave 1.** Owner call, escalated rather than decided by the agent.

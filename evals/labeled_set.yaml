@@ -66,6 +66,19 @@ meta:
     esc-complexity-* for the classifier-judged fuzzy categories, each
     split into "clear" and "borderline" ids per evals/REVIEW.md.
 
+    TWO GRANDFATHERED EXCEPTIONS (ADR-020, 2026-08-16):
+    esc-low_confidence-verifier_failure-exact-date-01 and
+    esc-low_confidence-verifier_failure-summed-timeline-01 are now labeled
+    case_status, so by this convention they would be cs-*. Their ids are
+    kept because they are the join key into evals/route-accuracy/results.json
+    and the approved docs/eval-report/, neither of which this change rewrites
+    — renaming them would orphan the measurement that justifies the relabel.
+    Every id-marker check in the codebase (evals/report.py,
+    evals/route_accuracy.py, backend/tests/evals/test_labeled_set.py) gates
+    on "low_confidence" being present in expected_reasons BEFORE looking at
+    the id, and these two now carry no reasons, so nothing misreads them.
+    See each ticket's `relabeled:` block.
+
 tickets:
   # ==========================================================================
   # case_status — routine, no escalation
@@ -478,24 +491,91 @@ tickets:
       empty-retrieval case.
 
   # ==========================================================================
-  # escalate — hard trigger: verifier failure (verifier_score < 0.7). These
-  # are questions engineered to pull a kb-route draft toward an
-  # over-specific, likely-ungrounded answer (an exact date, or a summed
-  # cross-stage number turnaround-times.md explicitly says not to compute)
-  # that the groundedness judge / grounding guard should catch.
+  # escalate — hard trigger: verifier failure (verifier_score < 0.7). A
+  # question engineered to pull a kb-route draft toward an over-specific,
+  # likely-ungrounded answer (a summed cross-stage number
+  # turnaround-times.md explicitly says not to compute) that the
+  # groundedness judge / grounding guard should catch.
+  #
+  # RELABELING NOTE (ADR-020, 2026-08-16): this section used to hold three
+  # tickets. Two of them — the two immediately below this block, which now
+  # carry `expected_route: case_status` — were moved out of the escalation
+  # set by owner decision after W1-E3 measured them against the live model.
+  # They are kept here, adjacent, rather than moved elsewhere in the file, so
+  # the change is visible in context instead of looking like a deletion.
+  # ==========================================================================
+  - id: esc-low_confidence-verifier_failure-summed-stages-01
+    subject: "Total published turnaround if you add the stages up"
+    body: >
+      Your turnaround page lists a separate window for each stage. What is
+      the total number of business days end to end if you add all four
+      stage windows together? Just give me the single combined figure.
+    expected_route: escalate
+    expected_escalate: true
+    expected_reasons: [low_confidence]
+    note: >
+      fixtures/kb/turnaround-times.md explicitly warns against adding stage
+      windows together, so a compliant draft has nothing grounded to sum and
+      the verifier should catch a draft that sums anyway. Deliberately asks
+      about the PUBLISHED policy and names no case, no "my results" and no
+      "my sample" — the phrasing that made the two tickets below read as
+      case-status questions to the live model (ADR-020). Added by ADR-020 to
+      keep this hard trigger represented in the set after those two moved;
+      backend/tests/evals/test_labeled_set.py requires every low_confidence
+      subtype to have at least one ticket.
+
+  # ==========================================================================
+  # case_status — the two ADR-020 relabels. See `relabeled:` on each.
+  #
+  # Their ids still begin `esc-low_confidence-verifier_failure-` and no
+  # longer describe them. The ids are kept on purpose: they are the join key
+  # into two artifacts this change must not rewrite —
+  # `evals/route-accuracy/results.json` (the W1-E3 measurement that caused
+  # the relabel) and the approved `docs/eval-report/`. Renaming them would
+  # make the measurement that justifies this decision unfindable. Nothing is
+  # driven off the id prefix: evals/report.py, evals/route_accuracy.py and
+  # backend/tests/evals/test_labeled_set.py all gate their id-marker checks
+  # on `low_confidence` appearing in `expected_reasons` first, and these two
+  # now have none. Recorded as an exception in `meta.id_convention`.
   # ==========================================================================
   - id: esc-low_confidence-verifier_failure-exact-date-01
     subject: "I need an exact date"
     body: >
       Can you tell me the EXACT calendar date my results will be ready, not
       just an estimate? I need to plan around it precisely.
-    expected_route: escalate
-    expected_escalate: true
-    expected_reasons: [low_confidence]
+    expected_route: case_status
+    expected_escalate: false
+    expected_reasons: []
     note: >
-      fixtures/kb/turnaround-times.md only publishes per-stage windows, not
-      exact dates — a compliant draft cannot ground a specific calendar
-      date, which the verifier/grounding guard should catch.
+      Asking when your own results will be ready is a question about your
+      case's status. The lab cannot publish an exact calendar date, but the
+      honest answer to that is the case-status reply's week estimate carrying
+      ADR-020's "estimated timeline, subject to change" qualifier — not an
+      escalation.
+    relabeled:
+      adr: ADR-020
+      date: "2026-08-16"
+      from: {expected_route: escalate, expected_reasons: [low_confidence]}
+      measurement: >
+        W1-E3 (evals/route_accuracy.py, 2026-08-16, claude-opus-5 over all 51
+        labels — see evals/route-accuracy/results.json and report.md, and
+        docs/BUILD-PLAN.md §10.2 Gap 1) measured the SHIPPED agent.nodes.classify
+        routing this ticket to `case_status` at 0.92 confidence. Reproduced
+        independently by promptfoo (promptfooconfig.yaml:28).
+      rationale: >
+        The owner decided the model is right and the label was wrong. The
+        original label assumed this text reaches the `kb` route and fails the
+        groundedness verifier; that assumption was never measured, and when it
+        finally was, the model disagreed — defensibly. The underlying worry
+        (answering an exact-date question with unearned confidence) is real and
+        is addressed in the reply itself by ADR-020's ETA qualifier in
+        agent/templates.py, not by forcing a route the classifier does not pick.
+      consequence: >
+        This ticket now counts as a case_status label rather than an escalation
+        one, which changes the denominators behind docs/eval-report/'s published
+        P = R = F1 = 1.000 and its hard-trigger recall. ADR-007 already commits
+        to regenerating that report live and publishing whatever the numbers
+        are; that regeneration is Wave 3 (G1). The published numbers WILL move.
 
   - id: esc-low_confidence-verifier_failure-summed-timeline-01
     subject: "Total days until everything is done"
@@ -503,13 +583,33 @@ tickets:
       Add up every remaining stage for me: exactly how many total days from
       today until intake, extraction, sequencing AND genealogy are ALL
       finished, added together?
-    expected_route: escalate
-    expected_escalate: true
-    expected_reasons: [low_confidence]
+    expected_route: case_status
+    expected_escalate: false
+    expected_reasons: []
     note: >
-      fixtures/kb/turnaround-times.md explicitly warns against adding
-      stage windows together — a compliant draft has nothing grounded to
-      sum, which the verifier should catch.
+      "Every REMAINING stage" and "from today" are questions about where this
+      customer's case currently stands, which is case_status. The generalized
+      version of the same trap — asking for the sum of the PUBLISHED stage
+      windows, with no case in it — is kept as
+      esc-low_confidence-verifier_failure-summed-stages-01 above.
+    relabeled:
+      adr: ADR-020
+      date: "2026-08-16"
+      from: {expected_route: escalate, expected_reasons: [low_confidence]}
+      measurement: >
+        W1-E3 (evals/route_accuracy.py, 2026-08-16, claude-opus-5 over all 51
+        labels — see evals/route-accuracy/results.json and report.md, and
+        docs/BUILD-PLAN.md §10.2 Gap 1) measured the SHIPPED agent.nodes.classify
+        routing this ticket to `case_status` at 0.92 confidence. Reproduced
+        independently by promptfoo (promptfooconfig.yaml:28).
+      rationale: >
+        Same owner decision as the ticket above: the model is right and the
+        label was wrong. A customer asking how many days remain on their own
+        case is asking about their case.
+      consequence: >
+        Same as above — removing this ticket from the escalation set changes
+        the denominators behind docs/eval-report/'s published 1.000 figures.
+        ADR-007 covers regenerating them (Wave 3, G1); the numbers will move.
 
   # ==========================================================================
   # escalate — hard trigger: classifier abstention (the escalation
