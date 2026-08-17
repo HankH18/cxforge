@@ -29,10 +29,20 @@ export default function GateToggle({ enabled, onChanged }: GateToggleProps) {
     }
   }
 
+  const state = enabled === null ? 'unknown' : enabled ? 'on' : 'off'
+
   return (
-    <section aria-label="Approval gate">
-      <label>
+    <section className="panel gate" aria-label="Approval gate">
+      <header className="panel__header">
+        <h2 className="panel__title">Approval gate</h2>
+        <span className={`badge badge--gate-${state}`}>
+          {state === 'unknown' ? '…' : state.toUpperCase()}
+        </span>
+      </header>
+
+      <label className="gate__control">
         <input
+          className="gate__switch"
           type="checkbox"
           role="switch"
           checked={enabled ?? false}
@@ -40,16 +50,24 @@ export default function GateToggle({ enabled, onChanged }: GateToggleProps) {
           aria-checked={enabled ?? false}
           onChange={handleToggle}
         />
-        {' '}Hold every outbound reply for review (gate ON)
+        <span className="gate__control-label">
+          Hold every outbound reply for review (gate ON)
+        </span>
       </label>
-      <p>
+
+      <p className={`gate__state gate__state--${state}`}>
         {enabled === null
-          ? 'Loading gate setting…'
+          ? 'Checking the current gate setting…'
           : enabled
             ? 'Gate is ON — every reply is held as a draft for approve/edit/reject.'
             : 'Gate is OFF — replies send autonomously.'}
       </p>
-      {error && <p role="alert">Could not update gate: {error}</p>}
+
+      {error && (
+        <p className="alert alert--error" role="alert">
+          Could not update gate: {error}
+        </p>
+      )}
     </section>
   )
 }

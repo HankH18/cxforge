@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react'
 
 import { approveDraft, editDraft, rejectDraft, type DraftResponse, type FeedItem } from '../api'
-import { describeError, formatPercent } from '../format'
+import {
+  describeError,
+  formatDraftStatus,
+  formatOutcome,
+  formatPercent,
+  outcomeSlug,
+} from '../format'
 
 interface DraftDetailProps {
   item: FeedItem
@@ -64,59 +70,109 @@ export default function DraftDetail({ item, onClose, onChanged }: DraftDetailPro
   }
 
   return (
-    <section aria-label="Draft detail">
-      <h2>Ticket {item.ticket_id}</h2>
-      <button type="button" onClick={onClose}>
-        Close
-      </button>
-      <dl>
-        <dt>Route</dt>
-        <dd>{item.route ?? '—'}</dd>
-        <dt>Confidence</dt>
-        <dd>{formatPercent(item.confidence)}</dd>
-        <dt>Escalation reason</dt>
-        <dd>{item.escalation_reason ?? '—'}</dd>
-        <dt>Draft status</dt>
-        <dd>{item.draft_status ?? 'no draft'}</dd>
+    <section className="panel draft" aria-label="Draft detail">
+      <header className="panel__header">
+        <h2 className="panel__title">Ticket {item.ticket_id}</h2>
+        <button type="button" className="button button--ghost draft__close" onClick={onClose}>
+          Close
+        </button>
+      </header>
+
+      <dl className="draft__meta">
+        <div className="draft__meta-item">
+          <dt className="draft__meta-label">Route</dt>
+          <dd className="draft__meta-value">{item.route ?? '—'}</dd>
+        </div>
+        <div className="draft__meta-item">
+          <dt className="draft__meta-label">Confidence</dt>
+          <dd className="draft__meta-value">{formatPercent(item.confidence)}</dd>
+        </div>
+        <div className="draft__meta-item">
+          <dt className="draft__meta-label">Run outcome</dt>
+          <dd className="draft__meta-value">
+            <span className={`badge badge--outcome-${outcomeSlug(item.outcome)}`}>
+              {formatOutcome(item.outcome)}
+            </span>
+          </dd>
+        </div>
+        <div className="draft__meta-item">
+          <dt className="draft__meta-label">Escalation reason</dt>
+          <dd className="draft__meta-value">{item.escalation_reason ?? '—'}</dd>
+        </div>
+        <div className="draft__meta-item">
+          <dt className="draft__meta-label">Draft status</dt>
+          <dd className="draft__meta-value">
+            <span className={`badge badge--draft-${item.draft_status ?? 'none'}`}>
+              {formatDraftStatus(item.draft_status)}
+            </span>
+          </dd>
+        </div>
       </dl>
 
-      {item.draft_id === null && <p>No draft exists for this run.</p>}
+      {item.draft_id === null && (
+        <div className="draft__empty placeholder">
+          <p className="placeholder__headline">No draft exists for this run.</p>
+          <p className="placeholder__detail">
+            The agent reached an outcome without writing a reply for review — the run row
+            above is the whole record.
+          </p>
+        </div>
+      )}
 
       {item.draft_id !== null && isPending && (
-        <>
-          <label htmlFor="draft-body">
+        <div className="draft__editor">
+          <label className="draft__editor-label" htmlFor="draft-body">
             Reply body — this exact text is what gets sent when you approve
           </label>
           <textarea
+            className="draft__textarea"
             id="draft-body"
             value={editedText}
             onChange={(event) => setEditedText(event.target.value)}
             disabled={busy}
             rows={8}
-            cols={60}
           />
-          {isDirty && <p>Edited from the original draft — the text above will be sent, not the original.</p>}
-          <div>
-            <button type="button" onClick={handleApprove} disabled={busy}>
+          {isDirty && (
+            <p className="draft__dirty note">
+              Edited from the original draft — the text above will be sent, not the original.
+            </p>
+          )}
+          <div className="draft__actions">
+            <button
+              type="button"
+              className="button button--primary"
+              onClick={handleApprove}
+              disabled={busy}
+            >
               Approve{isDirty ? ' edited reply' : ''}
             </button>
-            <button type="button" onClick={handleReject} disabled={busy}>
+            <button
+              type="button"
+              className="button button--danger"
+              onClick={handleReject}
+              disabled={busy}
+            >
               Reject
             </button>
           </div>
-        </>
+          {busy && <p className="draft__busy note">Working…</p>}
+        </div>
       )}
 
       {item.draft_id !== null && !isPending && (
-        <>
-          <h3>
+        <div className="draft__sent">
+          <h3 className="draft__sent-title">
             {item.draft_status === 'rejected' ? 'Rejected — nothing was sent' : 'Sent'}
           </h3>
-          <pre>{item.sent_body ?? item.draft_body ?? '(no body)'}</pre>
-        </>
+          <pre className="draft__body">{item.sent_body ?? item.draft_body ?? '(no body)'}</pre>
+        </div>
       )}
 
-      {error && <p role="alert">Action failed: {error}</p>}
+      {error && (
+        <p className="alert alert--error" role="alert">
+          Action failed: {error}
+        </p>
+      )}
     </section>
   )
 }

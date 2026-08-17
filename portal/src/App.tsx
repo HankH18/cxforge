@@ -14,6 +14,9 @@ const POLL_INTERVAL_MS = 5000
 export default function App() {
   const [runs, setRuns] = useState<FeedItem[]>([])
   const [feedError, setFeedError] = useState<string | null>(null)
+  // First load only — subsequent poll ticks must not flip the feed back to
+  // a loading placeholder under the reviewer.
+  const [feedLoaded, setFeedLoaded] = useState(false)
   const [statusFilter, setStatusFilter] = useState<DraftStatus | ''>('')
 
   const [gate, setGate] = useState<boolean | null>(null)
@@ -31,6 +34,8 @@ export default function App() {
       setFeedError(null)
     } catch (err) {
       setFeedError(describeError(err))
+    } finally {
+      setFeedLoaded(true)
     }
   }, [statusFilter])
 
@@ -72,7 +77,14 @@ export default function App() {
     return () => clearInterval(id)
   }, [loadMetrics])
 
-  const selectedItem = runs.find((run) => run.draft_id === selectedDraftId) ?? null
+  // `selectedDraftId === null` means NOTHING is selected. Matching it
+  // against `run.draft_id` would find any draftless run — an escalation, say
+  // — and pop its detail pane open unbidden on first paint. Guard the null
+  // case before searching.
+  const selectedItem =
+    selectedDraftId === null
+      ? null
+      : (runs.find((run) => run.draft_id === selectedDraftId) ?? null)
 
   function handleDraftChanged(result: DraftResponse) {
     // Patch the row immediately so the reviewer isn't staring at stale
@@ -101,36 +113,58 @@ export default function App() {
   }
 
   return (
-    <main>
-      <h1>Othram Support — Review Portal</h1>
+    <div className="app">
+      <header className="app__header">
+        <h1 className="app__title">Othram Support — Review Portal</h1>
+        <p className="app__subtitle">
+          Every agent run, the reply it drafted, and who decided to send it.
+        </p>
+      </header>
 
-      <GateToggle
-        enabled={gate}
-        onChanged={(enabled) => {
-          setGate(enabled)
-          setGateError(null)
-        }}
-      />
-      {gateError && <p role="alert">Could not load gate setting: {gateError}</p>}
+      <main className="app__main">
+        <div className="app__columns">
+          <div className="app__column app__column--gate">
+            <GateToggle
+              enabled={gate}
+              onChanged={(enabled) => {
+                setGate(enabled)
+                setGateError(null)
+              }}
+            />
+            {gateError && (
+              <p className="alert alert--error" role="alert">
+                Could not load gate setting: {gateError}
+              </p>
+            )}
+          </div>
 
-      <MetricsPanel metrics={metrics} error={metricsError} />
+          <div className="app__column app__column--metrics">
+            <MetricsPanel metrics={metrics} error={metricsError} />
+          </div>
+        </div>
 
-      <Feed
-        runs={runs}
-        error={feedError}
-        statusFilter={statusFilter}
-        onStatusFilterChange={setStatusFilter}
-        selectedDraftId={selectedDraftId}
-        onSelect={(item) => setSelectedDraftId(item.draft_id)}
-      />
-
-      {selectedItem && (
-        <DraftDetail
-          item={selectedItem}
-          onClose={() => setSelectedDraftId(null)}
-          onChanged={handleDraftChanged}
+        <Feed
+          runs={runs}
+          error={feedError}
+          loading={!feedLoaded}
+          statusFilter={statusFilter}
+          onStatusFilterChange={setStatusFilter}
+          selectedDraftId={selectedDraftId}
+          onSelect={(item) => setSelectedDraftId(item.draft_id)}
         />
-      )}
-    </main>
+
+        {selectedItem && (
+          <DraftDetail
+            item={selectedItem}
+            onClose={() => setSelectedDraftId(null)}
+            onChanged={handleDraftChanged}
+          />
+        )}
+      </main>
+
+      <footer className="app__footer">
+        <p>Feed and metrics refresh every {POLL_INTERVAL_MS / 1000} seconds.</p>
+      </footer>
+    </div>
   )
 }
