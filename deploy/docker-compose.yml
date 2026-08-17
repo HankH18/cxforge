@@ -108,11 +108,16 @@ services:
       # (backend/tests/deploy/test_env_forwarding.py requires that), but
       # deliberately EMPTY — see below.
       #
-      # NO `:-` DEFAULT VALUE, removed 2026-08-17. It used to default to
-      # /var/lib/cxforge/zendesk-tokens.json, which made the store opt-OUT in
-      # every container regardless of `.env` while its author had reported it as
-      # opt-in. This is the same `:-`-default trap as the tunnel token below,
-      # inverted: there a default hides a MISSING credential, here it silently
+      # NO `:-` DEFAULT VALUE, and there never has been one in a released
+      # version. While this feature was being built it read
+      # `${ZENDESK_TOKEN_STORE:-/var/lib/cxforge/zendesk-tokens.json}`, which
+      # made the store opt-OUT in every container regardless of `.env` while its
+      # author reported it as opt-in. It was caught in the working tree and
+      # removed on 2026-08-17 before the first commit, so no deployed version
+      # ever had it: `git log -S ZENDESK_TOKEN_STORE` shows exactly one commit
+      # and the value is already empty in it. The trap is still worth naming —
+      # it is the same `:-`-default trap as the tunnel token below, inverted:
+      # there a default hides a MISSING credential, here it would have silently
       # enabled a new behaviour. Three reasons it stays off until the owner asks:
       # it persists a live CREDENTIAL to a volume; it has a known unhandled
       # multi-writer race (`backend` and `worker` can both refresh — last write
@@ -349,9 +354,9 @@ services:
       # ...and this is what WOULD make "renew" survive more than one job:
       # `run_ticket` builds a fresh ZendeskAdapter per job, so without the store
       # the rotated refresh token dies with the job that earned it (measured
-      # 2026-08-17). It is forwarded and EMPTY — the `:-` default value was
-      # removed 2026-08-17 so the store is genuinely opt-in. Full reasoning on
-      # `backend` above; the decision is docs/BUILD-PLAN.md §10.7a.
+      # 2026-08-17). It is forwarded and EMPTY — no `:-` default value has ever
+      # shipped, so the store is genuinely opt-in. Full reasoning on `backend`
+      # above; the decision is docs/BUILD-PLAN.md §10.7a.
       ZENDESK_TOKEN_STORE: ${ZENDESK_TOKEN_STORE:-}
       ZENDESK_AI_USER_ID: ${ZENDESK_AI_USER_ID:-}
       ZENDESK_WEBHOOK_SIGNING_SECRET: ${ZENDESK_WEBHOOK_SIGNING_SECRET:-}

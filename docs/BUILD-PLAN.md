@@ -794,9 +794,12 @@ That is a **scope decision, not a bug fix**.
 > store on a shared named volume exists (`ZENDESK_TOKEN_STORE`,
 > `backend/src/helpdesk/zendesk_credentials.py`, tests in
 > `backend/tests/contract/test_zendesk_credentials.py`) and is green. It was reported as
-> opt-in, and was not: both compose files defaulted the variable to
-> `/var/lib/cxforge/zendesk-tokens.json` with `:-`, so the store was **opt-out in every
-> container** regardless of `.env`. That default was **removed 2026-08-17** — the variable is
+> opt-in, and in the working tree it was not: both compose files defaulted the variable to
+> `/var/lib/cxforge/zendesk-tokens.json` with `:-`, which would have made the store
+> **opt-out in every container** regardless of `.env`. That default was caught and **removed
+> 2026-08-17 before the first commit**, so it never entered git history and no deployed
+> version ever carried it (`git log -S ZENDESK_TOKEN_STORE` returns one commit, `5d11589`,
+> with the value already empty). The variable is
 > still forwarded (the app reads it, and `test_env_forwarding.py` requires the forwarding) but
 > now renders empty, so the store is dormant until the owner sets it and production behaviour
 > is unchanged. Three things the owner is deciding, not the implementation: it writes a **live
@@ -807,7 +810,7 @@ That is a **scope decision, not a bug fix**.
 >
 > *This is the same `:-`-default trap `backend/tests/deploy/test_env_forwarding.py` was built
 > for, inverted:* there a default hid a **missing** credential
-> (`docs/STATE.md §6.2`); here it silently **enabled a new behaviour**. The audit could not
+> (`docs/STATE.md §6.2`); here it would silently have **enabled a new behaviour**. The audit could not
 > catch it, and by design — it proves a variable is forwarded, never that its rendered value is
 > the one anyone intended.
 
@@ -927,7 +930,8 @@ key keeps refreshing, through a **hung Anthropic call**, which is the most likel
 system. The shorter interval promptly catches a blocked/dead event loop and a lost Redis link.
 A hung *run* is still visible only in the ERROR log and to `verify_deploy.sh --deep`. **Owner's
 call, not taken:** whether to bound the model call in `agent/llm.py` (the honest fix, which also
-lets `job_timeout` come down from 900s) or to add a real per-run health metric — noting that
+lets `job_timeout` come down from 900s — stated as a defect with its numbers in **(h)** below) or
+to add a real per-run health metric — noting that
 `run_ticket` swallows exceptions, so every arq-derived metric already reports success while every
 run fails.
 
@@ -949,6 +953,25 @@ them. Verified by execution: with `helpdesk/` hidden from the scan the old count
 passes**, and with the package moved the new test fails naming `backend/src/helpdesk/`. Same shape
 as (c), opposite resolution, and the reason for the difference is that this population is
 enumerable and the collected-test count is not.
+
+**(h) The model call is unbounded, and nothing in the suite can notice.** Named in (f) as "the
+honest fix" but never stated as a defect, so here it is. `backend/src/agent/llm.py:106` is
+`anthropic_module.Anthropic(api_key=self._api_key)` — **no `timeout=`, no `max_retries=`**. The
+SDK's defaults are a **600s read timeout with 2 retries**, and a run makes **3+ model calls**
+(`agent/nodes.py` has four `.structured()` sites), so the only ceiling on a hung run is arq's
+`job_timeout` = **900s** (`worker/main.py:242`). And that ceiling is not pinned from above:
+`backend/tests/ingress/test_queue_contract.py:118` asserts `job_timeout_s >= 900` — a floor with
+no ceiling, so raising it to 86400 passes silently.
+
+It is the **cause** of the symptom patched downstream. The `asyncio.CancelledError` handler in
+`worker/main.py` catches a model call that outlived the job timeout, and cannot stop it:
+`asyncio.to_thread` does not kill the thread, so `run_agent` keeps running and may still post its
+reply after the dedup row is released. Bounding the client is the only place a hung run can
+actually be stopped, and it would also let `job_timeout` come down from 900s.
+
+**Owner's call, not taken here** — a timeout and a retry cap change runtime behaviour on every
+real call (a slow-but-succeeding run becomes a failed one), which is a decision, not a fix.
+`llm.py` is deliberately untouched.
 
 ---
 

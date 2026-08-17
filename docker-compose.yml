@@ -123,10 +123,15 @@ services:
       # without a store the rotated value dies with the job that earned it and
       # the next job spends the invalidated one (measured 2026-08-17).
       #
-      # NO `:-` DEFAULT VALUE, removed 2026-08-17. It used to default to
-      # /var/lib/cxforge/zendesk-tokens.json, so the store was opt-OUT in every
-      # container while its author had reported it as opt-in (true only for a
-      # host-run process, where the variable really is unset). It is forwarded —
+      # NO `:-` DEFAULT VALUE, and there never has been one in a released
+      # version. While this feature was being built it read
+      # `${ZENDESK_TOKEN_STORE:-/var/lib/cxforge/zendesk-tokens.json}`, which
+      # made the store opt-OUT in every container while its author reported it
+      # as opt-in (true only for a host-run process, where the variable really
+      # is unset). That was caught in the working tree and removed on
+      # 2026-08-17 before the first commit, so it never entered git history:
+      # `git log -S ZENDESK_TOKEN_STORE` shows one commit, and the value is
+      # already empty there. It is forwarded —
       # backend/tests/deploy/test_env_forwarding.py requires that, because the
       # application reads the name — and empty, so the store stays dormant.
       # Reasons it stays off until the owner asks: it persists a live CREDENTIAL
