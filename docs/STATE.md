@@ -297,6 +297,103 @@ outage is **§10.6g**.
 
 ---
 
+## 3.5 Zendesk auth is dead locally, and the way it is deployed can survive only one refresh — 2026-08-17
+
+**Measured 2026-08-17 ~19:00Z.** Nothing here touches §3.1–§3.4: the tunnel and the public path
+are unaffected. This is the credential and where its rotated replacement goes.
+
+### The access token expired, and no fallback credential exists
+
+| Check | Result |
+|---|---|
+| `exp` claim decoded out of `ZENDESK_OAUTH_TOKEN` in `.env` | **2026-08-17T12:40:50Z** — i.e. issued 12:10:50Z, matching the measured 1800s life |
+| `GET /api/v2/users/me.json` with that token, live | **401 `invalid_token`** |
+
+Two independent methods agreeing — one offline against the JWT, one against the live API — so
+this is the ordinary expiry and not the account. **There is no second credential:**
+`.env.example:56` pins OAuth only and forbids API tokens (and this account, created 2026-08-14,
+falls after Zendesk's 2026-07-28 cutoff that blocks creating them at all); the macOS keychain
+holds nothing for this host; `ZENDESK_TOKEN_STORE` is unset and no store file is on disk.
+Recovery needs a human at a browser: `docs/OWNER-ACTIONS.md` **OA-6**, which also records why
+the move is `--serve` and not `--refresh` (the latter *spends* a refresh token that may already
+be spent, and finding out costs the only copy).
+
+### Single-use refresh tokens plus no store means the live system can refresh exactly once
+
+**Reasoned from configuration and code, NOT observed in production.** Nobody has watched a
+refresh fail on the droplet, and this entry does not claim anyone has. What was read directly:
+
+- `refresh()` (`scripts/zendesk_oauth.py:234`) posts `grant_type=refresh_token`, and
+  `save_tokens()` (`scripts/zendesk_oauth.py:259`) writes back **both** `ZENDESK_OAUTH_TOKEN`
+  and `ZENDESK_OAUTH_REFRESH_TOKEN` — because Zendesk rotates both and invalidates the value
+  just spent.
+- `ZENDESK_TOKEN_STORE` is **forwarded but empty** in `.env.example:102`,
+  `docker-compose.yml:143`, and `deploy/docker-compose.yml:131` and `:360`. The store itself is
+  implemented and green (`backend/src/helpdesk/zendesk_credentials.py`,
+  `backend/tests/contract/test_zendesk_credentials.py`); it is deliberately shipped dormant, and
+  the named volume for it is mounted but unwritten.
+
+**The consequence, stated as a consequence and not as an observation:** with no store the
+deployed worker has nowhere to persist the rotated pair, so it can refresh at most once and the
+replacement token it earns is discarded — after which Zendesk authentication fails permanently
+and the agent can no longer post replies.
+
+That is what turns the "ship the token store dormant" decision in `docs/BUILD-PLAN.md §10.7a`
+from a preference into a prerequisite for the system continuing to function. §10.7a currently
+frames the limitation as "does not survive a container restart", which is the weaker half of it.
+
+**One discrepancy in the record, left open rather than resolved.** `.env.example:79-81` states
+this *was* observed on the droplet earlier the same day — "the worker refreshed once, and ~20
+minutes later this value AND the container were both dead, with every run failing at
+`fetch_ticket` with 401." The session that measured tonight's expiry did not reproduce or re-read
+that, and every Zendesk run recorded as successful (runs 1–3 and 7) happened *before* the access
+token expired, so none of them is evidence of anything surviving a refresh. Read the mechanism as
+from-code (certain) and the droplet observation as recorded-from-an-earlier-session-log (not
+re-verified here).
+
+### `{{current_user.id}}` rendering is UNKNOWN — zero samples inspected
+
+Not measured, and deliberately not inferred. The placeholder table at
+`docs/zendesk-runbook.md:386-394` is the one place on this account where rendered placeholder
+values are recorded verbatim, read out of Zendesk's own delivery record; it covers six
+placeholders and **`{{current_user.id}}` is not among them.** Zero rendered deliveries have been
+inspected for it.
+
+**Why that specific unknown gates a code change.** The trigger body sends
+`"comment_author_id": "{{current_user.id}}"` (`docs/zendesk-runbook.md:329`), and this account has
+already produced a placeholder in that same body that renders as the **empty string**:
+`{{ticket.latest_comment_id}}`, the underscore form, measured at `docs/zendesk-runbook.md:390`
+(note that the dotted `{{ticket.latest_comment.id}}` resolves correctly — it is the underscore
+variant that is blank). Blank-rendering placeholders are therefore a demonstrated property of
+this account rather than a hypothetical. Hardening `comment_author_id` into a required non-empty
+field is consequently **not** obviously safe: if `{{current_user.id}}` renders blank too, the
+hardening turns every delivery into a **400** and drops every customer event — strictly worse
+than the defect being fixed. The measurement is a read-only GET against
+`…/invocations/<id>/attempts` and needs a live token: `docs/OWNER-ACTIONS.md` OA-6.
+
+The fix it gates, **recorded from the 2026-08-17 session log and not re-measured here:** the
+trigger's `current_tags not_includes ai-processed` nullifier means each ticket is processed
+exactly once, ever, with every customer follow-up dropped silently at Zendesk — 9/9 webhook
+deliveries while the ticket was untagged, 0/4 while tagged.
+
+### `comment_author_id` is never logged or stored, so no past delivery can answer it
+
+`backend/src/ingress/__init__.py` reads `comment_author_id` in exactly one place — the self-event
+drop at line 165, `payload.comment_author_id == ai_user_id` — and never logs it, never persists
+it, and never puts it on the job. `tickets_seen` takes `(ticket_id, comment_id)` only (line 170),
+and `TicketJob` is built from the same two (lines 208-210). The local record of every delivery
+ever received is silent on the field, so the question above cannot be answered retrospectively
+from anything on this side; it has to be measured forward out of Zendesk's own `…/attempts`
+record, which does keep the rendered body (`docs/zendesk-runbook.md:382`).
+
+That is an observability gap in its own right, independent of the placeholder question: the
+field the entire loop guard depends on leaves no trace anywhere, so a loop guard silently
+comparing against `None` looks identical in the logs to one that is working. §6.15 records that
+exact failure having already happened once, for a different reason (a configured id the token
+never acts as) — and nothing in the logs would show it happening again.
+
+---
+
 ## 4. Four defects not previously recorded anywhere
 
 ### 4.1 R8/R13 latency measures the wrong interval

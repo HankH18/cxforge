@@ -551,14 +551,31 @@ CXFORGE_VERIFY_DB_URL=postgresql://…            # optional; see below \
   ids, not from this value, so the same ticket is meant to be reused.
 - **`--deep` is not read-only.** It spends model tokens and writes rows.
 - **`CXFORGE_VERIFY_DB_URL` is optional and is never defaulted from
-  `DATABASE_URL`.** It names the database of the *deployment under test*,
-  and is used only to delete the rows the check itself created and to
-  print the raw `runs` row it asserted on. In REMOTE mode `DATABASE_URL`
-  names your own dev Postgres on `localhost`, so a fallback would aim the
-  cleanup `DELETE`s at a completely different database. The droplet
-  publishes no host port for Postgres, so leave it empty there: the check
-  then prints the exact SQL and says out loud that it left its rows
-  behind.
+  `DATABASE_URL`.** It names the database of the *deployment under test*. It
+  buys reads, plus the release of one row the check minted itself: the raw
+  `runs` row the check asserted on; a **provenance snapshot** of
+  `tickets_seen.comment_id` for the ticket, taken before the POST and re-read
+  after, which lets the check *refuse* when a comment it did not mint was
+  accepted during its window instead of guessing the new row is its own; and
+  the release of its own `tickets_seen` dedup row, keyed on the
+  `cxforge-verify-<uuid4>` comment id this invocation generated. In REMOTE
+  mode `DATABASE_URL` names your own dev Postgres on `localhost`, so a
+  fallback would aim that one write at a different database from the one the
+  run happened in. The droplet publishes no host port for Postgres, so empty
+  is the normal case there: the check prints `provenance  : UNAVAILABLE`, says
+  attribution then rests on the single-candidate rule alone, and carries on.
+  It neither fails nor pretends.
+- **`--deep` leaves its `runs` and `drafts` rows in place, deliberately**, and
+  says so on success and on failure — `LEFT BEHIND`, the run id, how many
+  `runs` rows the ticket now carries, and that those rows **count toward
+  `GET /api/metrics`**: `human_avoidance_rate`, `latency_p50_s`,
+  `latency_p95_s` and `sample_count` all include them, so repeated runs
+  visibly skew what a human reads. Pruning is a deliberate human act. The
+  check prints a `SELECT` so you look at the row first, and never a
+  paste-ready `DELETE`; nothing in it can delete from `runs` or `drafts` at
+  all — a check inside the SQL executor refuses such a statement before any
+  connection opens. Why it is built that way, and what the cleanup it
+  replaced destroyed: `docs/BUILD-PLAN.md §10.8`.
 - **Missing preconditions are hard failures**, checked before the first
   request goes out. A skipped check that still exits 0 would be the same
   lie the four liveness assertions told for weeks.

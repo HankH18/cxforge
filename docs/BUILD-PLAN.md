@@ -1038,6 +1038,64 @@ each direction:
 
 ---
 
+### 10.8 The deploy gate was deleting audit rows — fixed, with one owner decision left open
+
+**Measured 2026-08-17.** `scripts/verify_core_loop.py` (the `--deep` core-loop check) deleted
+`drafts` and then `runs` rows from a `finally`, for whatever run id it had adopted, whenever
+`CXFORGE_VERIFY_DB_URL` was set. It was the only code in the repo that deleted from either table.
+
+**What it cost.** Droplet runs **4, 5 and 6** — successful `auto_sent` runs at 10:45–10:49Z that
+each posted a real public reply to a real Zendesk ticket. The replies are still in Zendesk; the
+local record is gone. `runs.id` and `drafts.id` are independent `bigserial`s and both skip 4-6;
+`agent.store.record_run`/`record_draft` each commit a single statement, so no rollback explains
+it; Langfuse holds exactly three otherwise-unaccounted `auto_sent` traces in that window.
+
+**The worse half.** `find_new_run` adopted `max(run_id)` among the ticket's rows that were absent
+from its baseline snapshot. `CXFORGE_VERIFY_TICKET_ID` is a **reused** ticket that also receives
+real customer comments, so the gate could adopt — and delete — a customer's audit row, silently.
+
+**Fixed:**
+
+- **No delete/update/truncate against `runs` or `drafts` remains anywhere in the script.** The one
+  remaining statement targets `tickets_seen`, keyed on the `cxforge-verify-<uuid4>` comment id the
+  invocation generated itself — provably its own row, no inference about ids or recency.
+- **Structural, not careful.** `assert_not_destructive` sits inside `_execute` and refuses such a
+  statement however it was composed; a static test scans every non-docstring string literal in the
+  module and fails if one appears. Both were sabotage-verified.
+- **`find_new_run` refuses rather than guesses.** Two candidate rows for the ticket raises
+  `AmbiguousRun` (exit 1) naming both ids. When `CXFORGE_VERIFY_DB_URL` is set, a read-only
+  `tickets_seen` snapshot additionally fails the check if any comment other than the script's own
+  was accepted on the ticket during the window — the case where the single new row is a stranger's
+  and the script's own run failed (ADR-003 releases the dedup row and writes nothing).
+- **Visible pollution over silent deletion, and it says so.** The synthetic run stays. Every
+  invocation that posts a webhook now prints `LEFT BEHIND` — the run id, or the candidate ids it
+  refused to attribute — plus every run id on the ticket and that these rows count toward
+  `GET /api/metrics`, on the success path and on failure alike; one that posts nothing says that
+  instead.
+
+**Cost of the trade, stated:** each `--deep` run adds one synthetic `auto_sent`-shaped run to
+`runs`, inflating `human_avoidance_rate`, both latency percentiles and `sample_count`. Nothing can
+exclude it except by `ticket_id`, which real customer runs share.
+
+**OPEN — owner decision, deliberately not taken.** Closing that properly needs provenance on
+`runs`: a `source text NOT NULL DEFAULT 'zendesk'` column (`'verify'` for gate-caused runs), or the
+triggering `comment_id`. It would be migration `0002` plus a writer change in `agent.store.record_run`,
+and it touches `portal.service.compute_metrics` (exclude non-`'zendesk'` rows) and the frozen
+`MetricsResponse` / feed shape in §1 — which is why it was not written. The alternative that needs
+no schema change is what shipped: leave the rows and report them.
+
+**Closed 2026-08-17:** `docs/deploy.md:553-578` now documents `CXFORGE_VERIFY_DB_URL` as buying
+reads, a provenance snapshot and the release of only its own `tickets_seen` dedup row, and states
+that the `runs`/`drafts` rows are left behind on purpose and count toward `GET /api/metrics`.
+
+**Not recoverable, and reconstruction is not advised.** Runs 4-6 cannot be restored from anything
+local. The Zendesk replies plus the three Langfuse traces would allow *fabricating* rows with the
+right ids, but `bigserial` gaps are the only surviving evidence that the loss happened, and
+back-filling invented `runs` rows would put fabricated audit records into the table the metrics are
+computed from. Recommendation: leave the gap, and keep the record of why it is there.
+
+---
+
 ## 11. Risks
 
 | Risk | Mitigation |

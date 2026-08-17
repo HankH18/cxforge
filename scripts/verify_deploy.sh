@@ -122,9 +122,24 @@
 #
 # --deep is NOT read-only: it POSTs a real webhook, which makes the
 # deployment run a real agent turn (model tokens spent, a real reply
-# posted on that ticket) and write rows. It removes its own rows when
-# CXFORGE_VERIFY_DB_URL points at the deployment's database, and says
-# loudly that it could not when that is absent.
+# posted on that ticket) and write rows.
+#
+# It does NOT clean those rows up, and it must not. It used to delete the
+# `runs`/`drafts` row it believed it had caused, identifying it as the
+# highest run id for the ticket that was not there before — and on
+# 2026-08-17 that destroyed audit rows 4, 5 and 6, three successful
+# auto_sent runs whose replies are still visible in Zendesk and have no
+# local record left. The ticket is reused by design and takes real customer
+# comments, so "newest id I hadn't seen" was never proof of authorship.
+# The synthetic run now STAYS, and --deep prints its run id so a human can
+# prune it deliberately. That means repeated --deep runs visibly inflate
+# GET /api/metrics; that is the intended trade (see
+# scripts/verify_core_loop.py's docstring and docs/BUILD-PLAN.md §10).
+#
+# CXFORGE_VERIFY_DB_URL remains optional. It is now used only to read (the
+# raw runs row, and a tickets_seen provenance corroboration) and to release
+# --deep's own tickets_seen dedup row, which is keyed on a comment_id that
+# invocation generated itself.
 
 set -euo pipefail
 

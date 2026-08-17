@@ -44,6 +44,15 @@ _DEFAULT_LANGFUSE_HOST = "https://cloud.langfuse.com"
 # rules can independently co-fire with the classifier) — `_escalation_reason`
 # below and `compute_metrics`'s `escalations_by_reason` both account for
 # that; see each function's own docstring for exactly how.
+#
+# Neither of those two readers looks at `outcome` any more (see each one's
+# docstring for the live defect that caused). `'escalated'` is still a real,
+# reachable outcome and stays in the denominator tuple below: `agent.nodes.
+# act`'s gate-OFF branch writes it from `_OUTCOME_BY_ROUTE["escalate"]`, and
+# such a run's draft is recorded `auto_sent`, so approve/reject can never
+# reach it (`_fetch_draft_row` -> `DraftNotPending`). What `'escalated'` no
+# longer is, is the *record of whether a run escalated* — with the gate ON it
+# is never written at all. `runs.reasons` is that record.
 _TERMINAL_OUTCOMES = ("auto_sent", "gated_sent", "escalated")
 
 
@@ -92,15 +101,30 @@ def _trace_url(trace_id: str | None) -> str | None:
     return f"{host}/trace/{trace_id}"
 
 
-def _escalation_reason(outcome: str | None, reasons: list[str] | None) -> str | None:
+def _escalation_reason(reasons: list[str] | None) -> str | None:
     """``FeedItem.escalation_reason`` — a single display string, so a run
     escalated for more than one reason (see module docstring) reports every
     one of them, comma-joined, rather than picking just one. ``None`` for a
     non-escalated run, and — defensively, though it should never happen via
     the real graph, since ``agent.nodes.act`` always threads the full
     decision's reasons — for an escalated run with no reasons recorded,
-    rather than reintroducing a fake placeholder string."""
-    if outcome != "escalated" or not reasons:
+    rather than reintroducing a fake placeholder string.
+
+    Decided by ``runs.reasons`` ALONE, never by ``runs.outcome``. This used
+    to read ``if outcome != "escalated" or not reasons``, and that predicate
+    made an escalation vanish from the feed the moment anybody reviewed its
+    draft: ``approve_draft`` overwrites ``outcome`` with ``gated_sent`` and
+    ``reject_draft`` with ``rejected``, and ``agent.nodes.act``'s gate-ON
+    branch never writes ``'escalated'`` at all (it records ``outcome=None``
+    and holds the draft). Measured on the live droplet 2026-08-16: run 7's
+    trace carried ``escalation_reasons: ["frustration"]`` and this field
+    reported ``null``. ``reasons`` is the durable record — written once by
+    ``agent.store.record_run`` from ``agent.nodes._escalation_reasons``,
+    never rewritten by this module, and non-empty if and only if the run
+    escalated (``agent.nodes.decide`` sets ``state["escalation"]`` only for
+    an ``escalate=True`` decision). ``outcome`` records what became of the
+    reply, which is a different question from whether the run escalated."""
+    if not reasons:
         return None
     return ", ".join(reasons)
 
@@ -141,7 +165,7 @@ def _row_to_feed_item(row: tuple[Any, ...]) -> FeedItem:
         draft_body=body,
         edited_body=edited_body,
         sent_body=sent_body,
-        escalation_reason=_escalation_reason(outcome, reasons),
+        escalation_reason=_escalation_reason(reasons),
         trace_url=_trace_url(trace_id),
         received_at=received_at,
         replied_at=replied_at,
@@ -348,7 +372,34 @@ def compute_metrics() -> MetricsResponse:
     ``escalations_by_reason``: SPEC R13's "escalation counts by reason",
     grouped over ``runs.reasons`` (the array ``agent.store.record_run``
     persists — see that function's and ``data.schema``'s docstrings) for
-    every ``outcome = 'escalated'`` row. A run that escalated for more than
+    every row that HAS one, with no predicate on ``outcome``.
+
+    That last clause is the fix for a defect measured on the live droplet
+    2026-08-16: this query used to add ``WHERE outcome = 'escalated'``, and
+    reported ``escalations_by_reason: {}`` for a database whose run 7 had
+    genuinely escalated for ``frustration``. Two things put an escalated run
+    outside that predicate — ``agent.nodes.act``'s gate-ON branch records
+    ``outcome=None`` and holds the draft (so a held escalation was never
+    ``'escalated'`` to begin with), and ``approve_draft`` / ``reject_draft``
+    below overwrite ``outcome`` with ``gated_sent`` / ``rejected`` when the
+    reviewer decides. The bias ran the worst possible way: the escalations a
+    human actually had to touch were exactly the ones erased, because
+    touching them is what erased them, while the run kept counting in the
+    ``human_avoidance_rate`` denominator.
+
+    ``reasons`` is the durable record instead. It is written once by
+    ``record_run`` from ``agent.nodes._escalation_reasons``, never rewritten
+    here, and non-empty if and only if the run escalated:
+    ``agent.nodes.decide`` sets ``state["escalation"]`` only for an
+    ``escalate=True`` decision, and a branch node only sets it having
+    forwarded a condition to the escalation seam. Which is also why no
+    ``WHERE`` clause replaces the old one — ``FROM runs, unnest(reasons)``
+    is an implicit ``CROSS JOIN LATERAL``, so a run with the column's
+    ``'{}'`` default contributes no output rows and drops out on its own. A
+    ``cardinality(reasons) > 0`` predicate would be exactly redundant with
+    that, not an extra safeguard.
+
+    A run that escalated for more than
     one reason (DESIGN's ``EscalationCall.reasons: list[Reason]`` is
     genuinely multi-valued, and ``escalation.engine``'s hard rules can
     independently co-fire alongside it) is counted under EVERY one of its
@@ -372,10 +423,7 @@ def compute_metrics() -> MetricsResponse:
         )
         latencies = [float(row[0]) for row in cur.fetchall() if row[0] is not None]
 
-        cur.execute(
-            "SELECT reason, count(*) FROM runs, unnest(reasons) AS reason "
-            "WHERE outcome = 'escalated' GROUP BY reason"
-        )
+        cur.execute("SELECT reason, count(*) FROM runs, unnest(reasons) AS reason GROUP BY reason")
         escalations_by_reason: dict[str, int] = {
             reason: int(count) for reason, count in cur.fetchall()
         }

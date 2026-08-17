@@ -11,6 +11,11 @@ account signup, a purchase decision, or a camera.
 > (`docs/BUILD-PLAN.md §10.3b`) and the reply-author identity (§10.7b). Re-measure with the
 > **Quick status check** at the bottom before trusting any ✅ — this page has flipped from ✅ to
 > ❌ overnight before.
+>
+> **Appended 2026-08-17 ~19:00Z — there is now an OA-6.** The Zendesk access token expired at
+> **12:40:50Z** and re-authorizing needs a browser, not `--refresh`. The `OA-4 ✅` above is about
+> the refresh *mechanism*, which is still fixed; OA-6 is about the dead credential in `.env`.
+> That is the page flipping again, exactly as the line above warns.
 
 ---
 
@@ -562,6 +567,133 @@ the dedicated "Othram AI Agent" user. Switching is **demo optics, not correctnes
 OAuth consent as that user, which is `role: agent` and may lose permissions the admin token has.
 If you want it, do it early and prove it with a `scripts/live_smoke.py` run.
 `docs/BUILD-PLAN.md §10.7b`.
+
+---
+
+## OA-6 — Re-authorize Zendesk OAuth in the browser ⟵ the only live-Zendesk blocker
+
+**Gates:** the four read-only Zendesk measurements at the bottom of this item, the
+follow-up-comment trigger fix those measurements gate, and any live run or demo take that
+touches Zendesk at all. **BLOCKED on one browser consent.**
+
+**This is not OA-4 reopening.** OA-4 fixed the *mechanism* and it is still fixed: a refresh
+token is issued, the script saves it, and in-process renewal works. What is dead is the
+specific credential now sitting in `.env`.
+
+Measured 2026-08-17 ~19:00Z, two independent ways:
+
+```
+exp claim decoded out of ZENDESK_OAUTH_TOKEN  ->  2026-08-17T12:40:50Z
+                                                  (= issued 12:10:50Z + the measured 1800s)
+GET /api/v2/users/me.json with that token     ->  401 invalid_token
+```
+
+The offline `exp` and the live 401 agree, so this is the ordinary 1800-second expiry and
+nothing about the account. **There is no second credential to fall back on:** no Zendesk API
+token (`.env.example:56` pins OAuth only, and this account is after Zendesk's 2026-07-28
+cutoff that blocks creating them at all), nothing for this host in the macOS keychain, and
+`ZENDESK_TOKEN_STORE` unset with no store file on disk. Full measurement record:
+`docs/STATE.md §3.5`.
+
+> ### ⚠️ Do NOT reach for `--refresh` first. It *spends* a token that may be the only copy.
+>
+> `scripts/zendesk_oauth.py:375` — `if mode in {"--refresh", "-r"}` — is the branch that posts
+> `grant_type=refresh_token`, and Zendesk invalidates a refresh token the moment it is spent.
+> If the stored value is already spent, `--refresh` returns `400 invalid_grant`, you are in
+> exactly the same place, and the attempt is gone. `--serve` authorizes a **new** grant and
+> mints a fresh pair **without touching the stored refresh token**, so it is the safe move
+> whether or not the stored one is still good.
+>
+> **The honest unknown:** the pair in `.env` was written at **12:10:50Z (07:10:50 local)** —
+> that is `exp` minus the measured 1800s life. If the droplet's worker refreshed at any point
+> after that, the refresh token now in `.env` is **already spent**. That is not testable
+> without spending it, which is the entire reason this item says `--serve`.
+>
+> OA-4's standing `--refresh` procedure is still correct as the *routine* renewal — after a
+> fresh pair exists. It is only the wrong first move today.
+
+1. From the repo root:
+   ```bash
+   uv run python scripts/zendesk_oauth.py --serve
+   ```
+   It prints the authorize URL, opens a listener on `localhost:8129`, and waits.
+   **A human has to click Allow in the browser** — there is no headless path, which is why
+   this is an owner action and not a build step.
+
+2. **It rewrites `.env` in place.** `save_tokens()` (`scripts/zendesk_oauth.py:259`) upserts
+   **both** `ZENDESK_OAUTH_TOKEN` and `ZENDESK_OAUTH_REFRESH_TOKEN` and leaves every other
+   line alone. Re-source afterwards or nothing in your shell sees the new values.
+
+3. Verify by reading it back — do not trust the script's own "Success" line:
+   ```bash
+   set -a; source .env; set +a
+   curl -s -o /dev/null -w '%{http_code}\n' \
+     -H "Authorization: Bearer $ZENDESK_OAUTH_TOKEN" \
+     "https://$ZENDESK_SUBDOMAIN.zendesk.com/api/v2/users/me.json"
+   # expect 200
+   ```
+   **When that prints 200, mark this heading `✅ **DONE — verified <date>**`.** What DONE means
+   here is that the 30-day refresh token has been reseeded, not that the access token is alive
+   — the access token is dead again 30 minutes later and that is normal (OA-4).
+
+**Do the four measurements below before the 30 minutes are up.** They need only the access
+token, and letting it lapse means spending the refresh token to get another one.
+
+### What this unblocks — four read-only GETs
+
+All four are `GET`s; none of them changes anything in Zendesk.
+
+```bash
+set -a; source .env; set +a
+Z="https://$ZENDESK_SUBDOMAIN.zendesk.com/api/v2"
+AUTH="Authorization: Bearer $ZENDESK_OAUTH_TOKEN"
+
+# (i) the webhook's delivery list. Nothing in .env carries the webhook id, so get it first.
+curl -s -H "$AUTH" "$Z/webhooks" | jq -r '.webhooks[] | "\(.id)  \(.name)  \(.endpoint)"'
+WEBHOOK_ID=<the id from that line>
+curl -s -H "$AUTH" "$Z/webhooks/$WEBHOOK_ID/invocations"
+
+# (ii) the RENDERED request body of one invocation. This is the endpoint that answers the
+#      {{current_user.id}} question, and the only one that does — see the note at
+#      docs/zendesk-runbook.md:382, which is why it exists.
+curl -s -H "$AUTH" "$Z/webhooks/$WEBHOOK_ID/invocations/<invocation id>/attempts" \
+  | jq '.attempts[].request.payload'
+
+# (iii) the trigger, read back rather than trusted from the editor UI.
+curl -s -H "$AUTH" "$Z/triggers/54508374798747.json"
+
+# (iv) whether a `current_user` trigger CONDITION exists on this plan tier at all.
+#      The jq is deliberately shape-agnostic: the definitions payload has not been
+#      inspected on this account, so its exact key path is not something this file knows.
+curl -s -H "$AUTH" "$Z/triggers/definitions.json" \
+  | jq -r '.. | objects | .subject? // empty' | sort -u | grep -i current
+```
+
+What each one is for:
+
+| GET | The question it settles |
+|---|---|
+| (i) `…/invocations` | which deliveries exist to inspect, and their ids |
+| (ii) `…/invocations/<id>/attempts` | **does `{{current_user.id}}` render a non-empty id on this account** — currently UNKNOWN on zero samples (`docs/STATE.md §3.5`) |
+| (iii) `…/triggers/54508374798747.json` | the live conditions on the trigger, including the `ai-processed` nullifier that makes each ticket process exactly once ever |
+| (iv) `…/triggers/definitions.json` | whether a `current_user`-based condition is even available here, which decides whether the follow-up fix can be done in the trigger or must be done in ingress |
+
+**(ii) is the one that gates a code change.** Hardening `comment_author_id` into a required
+non-empty field is only safe if `{{current_user.id}}` resolves — this account has already
+produced one placeholder that renders as the empty string (`{{ticket.latest_comment_id}}`,
+`docs/zendesk-runbook.md:390`), and if `current_user.id` does the same, the hardening turns
+every delivery into a 400 and drops every customer event.
+
+There is a cheaper screen for (ii) that does not wait for a trigger to fire — the throwaway
+macro probe at `docs/zendesk-runbook.md:404-412` — but it *creates and deletes a macro*, so it
+is a write, not one of these four.
+
+> **Second, larger thing this credential is blocking, recorded so it is not lost:** with no
+> `ZENDESK_TOKEN_STORE` set in either compose stack, the deployed worker has nowhere to persist
+> the rotated pair, so it can refresh **at most once** and then loses Zendesk auth for good.
+> That makes the dormant-token-store item in `docs/BUILD-PLAN.md §10.7a` a prerequisite for the
+> system continuing to run rather than a preference. Reasoned from configuration, not yet
+> watched happening — `docs/STATE.md §3.5` states exactly what was and was not observed.
 
 ---
 
