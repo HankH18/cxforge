@@ -14,6 +14,7 @@ dependencies, which is exactly what ``config["configurable"]`` is for.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import cast
 
 from langgraph.graph import END, StateGraph
@@ -92,6 +93,7 @@ def run_agent(
     port: HelpdeskPort,
     llm: LLMClient,
     escalation_decider: EscalationDecider | None = None,
+    received_at: datetime | None = None,
 ) -> RunState:
     """Public entrypoint: run one full agent turn for ``ticket_id`` and
     return the final ``RunState``. ``escalation_decider`` defaults to
@@ -101,7 +103,21 @@ def run_agent(
     same fake, never a second, independent OpenAI client. Pass
     ``escalation_decider`` explicitly (e.g.
     ``agent.escalation_seam.PlaceholderEscalationDecider()``) to bypass the
-    real engine entirely."""
+    real engine entirely.
+
+    ``received_at`` (ADR-004, DESIGN §1.2) is the moment the Zendesk webhook
+    was received, stamped in the ingress handler and carried here on the job
+    payload. It is injected through ``config["configurable"]`` for the same
+    reason ``ticket_id`` and ``deps`` are: it is a run-scoped dependency, not
+    a grounding fact ``RunState`` should carry. ``act`` writes it to
+    ``runs.received_at``, so ``replied_at - received_at`` finally spans the
+    whole run — ingest, classify, retrieval, compose, verify, decide and act
+    — instead of only the tail-end HelpdeskPort calls.
+
+    ``None`` (the default) leaves ``act`` falling back to
+    ``datetime.now(UTC)``. That fallback is load-bearing: every existing
+    graph/grounding/escalation test calls ``run_agent`` without a clock and
+    must keep passing unchanged."""
     deps = AgentDeps(
         port=port,
         llm=llm,
@@ -110,6 +126,12 @@ def run_agent(
     compiled = build_graph()
     result = compiled.invoke(
         {},
-        config={"configurable": {"ticket_id": ticket_id, "deps": deps}},
+        config={
+            "configurable": {
+                "ticket_id": ticket_id,
+                "deps": deps,
+                "received_at": received_at,
+            }
+        },
     )
     return cast(RunState, result)

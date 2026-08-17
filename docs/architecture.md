@@ -73,8 +73,19 @@ implements it.
   `tickets_seen`, keyed on `(ticket_id, comment_id)`, so idempotency is
   enforced by the table's primary key rather than a read-then-write race.
 
-Ingress's job stops at "validated, deduped, accepted" (HTTP 202). It does
-not itself invoke the agent graph.
+Ingress's job stops at "validated, deduped, **dispatched**" (HTTP 202). It
+does not invoke the agent graph *inline* — holding Zendesk's connection open
+through 20–60s of model calls would serialize all intake — but it does hand
+the work off: after a successful, non-duplicate `tickets_seen` insert it
+enqueues a `worker.jobs.TicketJob` (`ticket_id`, `comment_id`,
+`received_at`) onto Redis list `cxforge:jobs` under the arq task name
+`run_ticket`, and the `worker` container calls `run_agent` (ADR-002).
+
+> Until 2026-08-16 this paragraph read "It does not itself invoke the agent
+> graph", with no dispatch step at all — and it was accurate: `run_agent`
+> had **zero** callers anywhere in `backend/src`, so the webhook returned
+> 202 and no run ever started (`docs/STATE.md §2`). The enqueue step above
+> is W1-A's fix.
 
 ### Agent core — `backend/src/agent/`
 

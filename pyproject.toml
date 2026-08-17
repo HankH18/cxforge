@@ -19,6 +19,13 @@ dependencies = [
     "langchain-core>=0.3",
     "anthropic>=0.75",
     "langfuse>=2.53",
+    # W1-A / ADR-002: the webhook enqueues onto Redis and a dedicated arq
+    # worker consumes the job and calls run_agent. `redis` is arq's own
+    # transitive dependency but is declared explicitly because
+    # backend/src/worker/settings.py imports arq's RedisSettings directly
+    # and the deploy stack runs a redis service of its own.
+    "arq>=0.26",
+    "redis>=5.0",
     "tenacity>=9.0",
     "python-dotenv>=1.0",
     "pyyaml>=6.0",

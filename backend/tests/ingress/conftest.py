@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 
 import pytest
 from fastapi.testclient import TestClient
 
 from data import get_connection, init_schema
 from main import app
+from worker.jobs import TicketJob
+from worker.queue import get_job_queue
 
 # Shaped like a REAL Zendesk signing secret: a 44-character opaque string
 # that is deliberately NOT valid base64.
@@ -52,8 +55,62 @@ def _schema_ready() -> None:
         init_schema(conn)
 
 
+@dataclass
+class RecordingJobQueue:
+    """In-memory stand-in for `worker.queue.ArqJobQueue` (W1-A / ADR-002).
+
+    Records every `TicketJob` the handler enqueues, so a test can assert on
+    *the queue itself* rather than on a return value the handler could
+    fabricate. `fail_with` drives the broker-unreachable path.
+
+    Substituted through `app.dependency_overrides`, exactly as the portal
+    suite substitutes `get_helpdesk_port` — which means deleting the
+    `await queue.enqueue(...)` line from the handler leaves `enqueued`
+    empty and fails `test_valid_webhook_enqueues_a_ticket_job`. That is the
+    sabotage check `docs/BUILD-PLAN.md §3 Track A` requires.
+
+    `attempts` records **every** call, including ones that raised; `enqueued`
+    records only the calls that succeeded. Keeping them separate is what lets a
+    test tell "the retry worked" (2 attempts, 1 job) apart from "the handler
+    queued the job twice" (2 attempts, 2 jobs) — the failure mode a retry loop
+    introduces and the one a single counter would hide.
+
+    `fail_times` bounds the failure to the first N attempts, modelling the
+    transient blip ADR-017's in-handler retry exists to absorb. `None` means
+    fail for as long as `fail_with` is set (a broker that is genuinely down).
+    """
+
+    enqueued: list[TicketJob] = field(default_factory=list)
+    attempts: list[TicketJob] = field(default_factory=list)
+    fail_with: Exception | None = None
+    fail_times: int | None = None
+
+    async def enqueue(self, job: TicketJob) -> None:
+        self.attempts.append(job)
+        if self.fail_with is not None and (
+            self.fail_times is None or len(self.attempts) <= self.fail_times
+        ):
+            raise self.fail_with
+        self.enqueued.append(job)
+
+
 @pytest.fixture
-def client(_schema_ready: None) -> Iterator[TestClient]:
+def job_queue() -> Iterator[RecordingJobQueue]:
+    """Deliberately **not** autouse. `client` depends on it, so every test
+    that posts a webhook — including the six pre-existing `test_webhook.py`
+    tests whose `202` assertions DESIGN §1.7 pins — already gets the
+    substitution. Autouse would add no coverage and would guarantee that a
+    future test written to exercise the *production* `ArqJobQueue` silently
+    received this fake instead. Tests that care about dispatch request the
+    fixture by name and read `.enqueued`."""
+    queue = RecordingJobQueue()
+    app.dependency_overrides[get_job_queue] = lambda: queue
+    yield queue
+    app.dependency_overrides.pop(get_job_queue, None)
+
+
+@pytest.fixture
+def client(_schema_ready: None, job_queue: RecordingJobQueue) -> Iterator[TestClient]:
     with TestClient(app) as test_client:
         yield test_client
 

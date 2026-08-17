@@ -588,7 +588,24 @@ def act(state: RunState, config: RunnableConfig) -> dict[str, Any]:
     gate_enabled = bool(tool_results.get("decision", {}).get("gate_enabled", False))
     actions = _actions(state, "act")
 
-    received_at = datetime.now(UTC)
+    # ADR-004 / DESIGN §1.2: true webhook-receipt time, injected by
+    # ``run_agent`` from the job payload the ingress handler stamped. This
+    # line used to be an unconditional ``datetime.now(UTC)`` — minted here,
+    # inside the LAST node of the graph — so ``replied_at - received_at``
+    # timed only the HelpdeskPort calls below and excluded every model call
+    # (docs/STATE.md §4.1). The ``or`` fallback is deliberate and must stay:
+    # every graph/grounding/escalation test drives ``run_agent`` with no
+    # clock injected and keeps its current behaviour.
+    #
+    # ``is None``, not ``or``: ``configurable`` is ``dict[str, Any]``, so mypy
+    # cannot police what lands in it, and ``or`` would treat any falsy value
+    # (an empty string, epoch 0) as "not supplied" and fall back **silently**
+    # to exactly the pre-ADR-004 behaviour. A metric quietly reverting to the
+    # wrong meaning is this project's signature failure; ``is None`` lets a
+    # bad value fail loudly in ``record_run`` instead.
+    configurable = config.get("configurable") or {}
+    injected_received_at = configurable.get("received_at")
+    received_at = datetime.now(UTC) if injected_received_at is None else injected_received_at
     trace_id = uuid.uuid4().hex
 
     if gate_enabled:
