@@ -96,7 +96,7 @@ exist**. T-10 is not a blocked ticket; it is an unstarted one whose acceptance c
 | Droplet `:8080/health` | **200** |
 | Droplet TLS | **None.** 443 and 8443 refuse connections; port 80 times out (408). Zendesk requires an HTTPS webhook endpoint — **it cannot reach the droplet as deployed.** |
 | Langfuse keys | Authenticate (`auth_check() → True`), resolve to project **"jarvis"** / org **"hank-personal"** (confirmed live via `GET /api/public/projects`). `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` hold the **byte-identical 42-char `sk-lf-…` value** — no public key is configured at all. **Two independent defects, one shared fix — see §3.1.** |
-| Stray `* 2.py` files | Both exist, both differ from their originals, and pytest **collects 7 tests** from `backend/tests/hooks/test_close_unattributed_claim_gap 2.py`. They also make the tree dirty, which blocks the harness's claim-time check. |
+| Stray `* 2.py` files | Both exist, both differ from their originals, and pytest **collects 7 tests** from `backend/tests/hooks/test_close_unattributed_claim_gap 2.py`. They also make the tree dirty, which blocks the harness's claim-time check. *(Path as measured that day. Cleared by W0.1, and `backend/tests/hooks/` itself no longer exists — ADR-019's 2026-08-17 amendment retired the whole directory to `.claude/harness-archive/hooks-tests/`.)* |
 | **Full suite** | **`2 failed, 707 passed` in 4m46s** — measured 2026-08-16, not inherited from a doc. **The suite is not green.** Both failures are caused by the stray duplicate; see §4.4. |
 | **Full suite, after W0.1** | **`702 passed, 0 failed`, 1 deselected in 4m34s** — re-measured 2026-08-16 after moving both stray `* 2.py` files out of the tree. `ruff check .`, `ruff check backend/src/portal backend/tests/portal`, and `mypy backend` (130 files) all clean. **This exactly matches §4.3's arithmetic prediction (709 − 7 = 702), so the duplicate was the whole cause and nothing else is wrong.** This is the baseline every work package must meet or beat. |
 
@@ -175,9 +175,13 @@ Also missing from `metrics.json`: any **model identifier** (nothing distinguishe
 GPT-era run from a `claude-opus-5` one) and the **threshold sweep** (so its
 "recommend 0.00" cannot be checked against the shipped 0.50).
 
-### 4.3 The suite is red right now, and one stray file is the whole cause
+### 4.3 ~~The suite is red right now~~ — RESOLVED by W0.1; one stray file was the whole cause
 
-Measured 2026-08-16: **`2 failed, 707 passed, 1 deselected` in 4m46s.**
+Measured 2026-08-16: **`2 failed, 707 passed, 1 deselected` in 4m46s.** The transcript below
+is verbatim and is left as measured; note that `backend/tests/hooks/` no longer exists —
+ADR-019's 2026-08-17 amendment retired the whole directory to
+`.claude/harness-archive/hooks-tests/`, and `test_skip_db_tests_relocation.py`'s *sample*
+directory (never its assertion) moved to `backend/tests/contract` with it.
 
 ```
 FAILED backend/tests/hooks/test_close_unattributed_claim_gap 2.py::

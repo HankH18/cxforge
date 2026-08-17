@@ -210,9 +210,10 @@ _HARNESS_WRITTEN_PATHS = (
     # session making its own tool calls while this suite runs appends to
     # this file mid-run; nothing inside this pytest process ever writes to
     # it, and no test in this suite exercises the monitor hook against the
-    # real repo path (backend/tests/hooks/conftest.py's synthetic-project
-    # fixtures redirect CLAUDE_PROJECT_DIR away from the real tree for
-    # exactly this reason).
+    # real repo path — the suite that drove the hooks at all was retired to
+    # .claude/harness-archive/hooks-tests/ by docs/DECISIONS.md ADR-019, and
+    # even then its synthetic-project fixtures redirected CLAUDE_PROJECT_DIR
+    # away from the real tree for exactly this reason.
     ".claude/monitor/heartbeat.jsonl",
     # One JSON file per claimed ticket, written/removed by
     # `.claude/scripts/claim.sh` at claim/close/release — never through the

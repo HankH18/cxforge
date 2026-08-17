@@ -52,7 +52,8 @@ Move this directory back to `backend/tests/plan/` and it works again; nothing ab
 edited. `update_structural_snapshot.py` still regenerates
 `ticket_structural_snapshot.json` and reads only `docs/tickets.json`.
 
-## Still live, deliberately
+## The sibling suite — retired too, one day later
 
-`backend/tests/hooks/**` also tests harness machinery and was **left in the gated suite**.
-Retiring it was not part of ADR-018 and would need its own decision.
+`backend/tests/hooks/**` also tested harness machinery, and ADR-018 left it in the gated
+suite pending its own decision. That decision came on 2026-08-17: it is now
+`../hooks-tests/`, see the amendment at the end of `docs/DECISIONS.md` ADR-019.

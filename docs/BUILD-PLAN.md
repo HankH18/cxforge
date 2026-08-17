@@ -375,8 +375,11 @@ there is no longer an import graph to be blind about `worker`.
 The rule those tests enforced is **subsumed by the gate**: `test_blast_radius.py` existed so
 a ticket's *narrow* verify command covered everything its scope could break, and ADR-001
 replaced narrow verifies with the full suite before every commit. No product coverage was
-lost. Suite drops ~92; CI's floor of 200 is untouched. `backend/tests/hooks/**` is the same
-category and was deliberately left alone.
+lost. Suite drops ~92; CI's floor of 200 is untouched. `backend/tests/hooks/**` was the same
+category and was left alone *here* — **superseded 2026-08-17**: it is now
+`.claude/harness-archive/hooks-tests/` as well, per the amendment at the end of
+`docs/DECISIONS.md` ADR-019 (the trigger was CI failing 30 of 30 runs on a test that was
+wrong about Linux, not the guard being wrong).
 
 <details><summary>The original open question, kept for the record</summary>
 

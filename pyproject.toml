@@ -71,8 +71,10 @@ line-length = 100
 # .claude/rules/harness-protocol.md forbids any session from editing it — so
 # every ticket's `ruff check .` would fail on files no ticket is allowed to
 # fix. Excluded here for the same reason "portal" and ".venv" are: this linter
-# governs the code the plan owns. The harness has its own coverage — 226 tests
-# under backend/tests/hooks drive .claude/scripts/harness_lib.py directly.
+# governs the code the plan owns. The harness used to carry its own coverage,
+# but that suite is retired too — docs/DECISIONS.md ADR-019 moved it to
+# .claude/harness-archive/hooks-tests/, which this exclude also covers, so the
+# archive is preserved verbatim rather than relinted.
 extend-exclude = ["portal", ".venv", ".claude"]
 # Mirrors [tool.pytest.ini_options].pythonpath so isort recognizes modules
 # resolved from backend/src and the repo root (main, ingress, portal, ...)

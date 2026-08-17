@@ -82,16 +82,26 @@ def test_skip_db_tests_actually_skips_every_test_in_this_directory(subdir: str) 
 def test_skip_db_tests_leaves_an_unrelated_directory_unaffected() -> None:
     """Sibling guard: the relocation hook is directory-scoped to exactly
     ``_SKIP_DB_TESTS_DIRS`` — it must not accidentally skip everything when
-    SKIP_DB_TESTS=1. ``backend/tests/hooks`` has no DB dependency and no
+    SKIP_DB_TESTS=1. ``backend/tests/contract`` has no DB dependency and no
     SKIP_DB_TESTS guard of its own, so it should run and pass exactly as
-    normal even with the env var set."""
-    result = _run_with_skip_db_tests("backend/tests/hooks")
+    normal even with the env var set.
+
+    The sample directory used to be ``backend/tests/hooks``, which
+    ``docs/DECISIONS.md`` ADR-019 retired to
+    ``.claude/harness-archive/hooks-tests/``. Only the *sample* moved: this
+    guard asserts nothing about the harness, and the contract it checks — that
+    SKIP_DB_TESTS does not leak outside ``_SKIP_DB_TESTS_DIRS`` — is unchanged
+    and still binds. ``contract/`` is a deliberate pick: it drives the
+    HelpdeskPort adapters against in-process fakes, so it touches no database
+    even when one is unreachable, which is the property this guard needs.
+    """
+    result = _run_with_skip_db_tests("backend/tests/contract")
     output = result.stdout + result.stderr
     assert result.returncode == 0, output
 
     passed_match = re.search(r"(\d+) passed", output)
     passed_count = int(passed_match.group(1)) if passed_match else 0
     assert passed_count > 0, (
-        f"expected backend/tests/hooks to still run and pass with SKIP_DB_TESTS=1 "
+        f"expected backend/tests/contract to still run and pass with SKIP_DB_TESTS=1 "
         f"set (it has no DB dependency):\n{output}"
     )

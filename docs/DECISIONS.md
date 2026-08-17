@@ -483,7 +483,8 @@ skip the words where they matter). Weakening
 **Decided 2026-08-16, during Wave 1.** Owner call, escalated rather than decided by the agent.
 
 **Decision.** Retire exactly three test functions to `.claude/harness-archive/`, and **keep
-all 326 others** in `backend/tests/hooks/`:
+all 326 others** in `backend/tests/hooks/` *(superseded the next day — see the amendment at
+the end of this ADR, which retires the whole directory)*:
 
 - `test_scope_guard_pathless_and_notebook.py::test_settings_json_matcher_includes_notebookedit`
 - `test_scope_guard_fail_closed.py::test_notebook_edit_is_matched_by_settings_json`
@@ -512,6 +513,29 @@ the directory wholesale would discard working coverage to solve a three-test pro
 session could silently re-add them. That is acceptable: `.claude/rules/build-protocol.md` is
 the working agreement and ADR-001 is the record. The archived file states the invariant in
 prose for anyone who revives the harness.
+
+**Amendment, 2026-08-17 — the other 326 go too.** Owner call, recorded here rather than as a
+new ADR because this ADR is where the question was left open. The whole directory is now
+`git mv`d to `.claude/harness-archive/hooks-tests/`, which also closes ADR-018's deferral
+("the same category … deliberately left alone for now … would need its own [decision]").
+"Keep all 326" above is therefore superseded, and so is its reasoning: the tests do still
+pass, but *passing* was never the question — they test the claim/close/receipt lifecycle and
+the `PreToolUse`/`Stop` guards that **W0.2 deleted from `.claude/settings.json`**, so their
+subject is dead code. What forced the issue is CI: it had failed **30 consecutive runs, every
+run in its recorded history, zero successes**, on
+`test_scope_guard_fail_closed.py::test_guard_denies_when_python3_is_unavailable`, which fakes
+"no interpreter" with `PATH=/bin` — true on macOS, false on the Ubuntu runner where `/bin` is
+a symlink to `/usr/bin`. Those two failures (that test, plus `test_skip_db_tests_relocation.py`
+spawning a child pytest over the directory) were CI's **only** two: `2 failed, 700 passed`.
+
+**One real coverage loss, stated rather than glossed.** `.claude/hooks/heartbeat.sh` is still
+registered as `PostToolUse` and `exec`s `.claude/scripts/harness_lib.py hook-heartbeat` on
+every tool call, and `.claude/watchdog/WATCHDOG.md` consumes the resulting pulse. The archived
+tests never asserted `hook-heartbeat`, but they were the only thing that executed
+`harness_lib.py` at all, so they incidentally caught module-level and dispatch breakage that
+would also break the live hook. After this move **nothing under `backend/tests/` touches
+`harness_lib.py`.** Accepted: the blast radius is a noisy hook and a stale watchdog pulse, no
+product impact — but it is a genuine loss, not an empty archive.
 
 ---
 

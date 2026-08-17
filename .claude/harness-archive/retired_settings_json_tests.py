@@ -12,9 +12,11 @@ gate refused the edit on two independent grounds: the discriminating question
 tests are escalated to the human rather than edited by an agent. The owner chose
 retirement.
 
-The other 326 tests in ``backend/tests/hooks/`` were deliberately KEPT. They
-exercise the guard scripts' own logic against synthetic fixtures and do not care
-whether the hooks are installed.
+The other 326 tests in ``backend/tests/hooks/`` were deliberately KEPT at the
+time -- they exercise the guard scripts' own logic against synthetic fixtures and
+do not care whether the hooks are installed. That was superseded on 2026-08-17:
+they are now ``./hooks-tests/``, per the amendment at the end of ADR-019. If you
+revive the harness, this file and that directory come back together.
 
 INVARIANT THIS NO LONGER ENFORCES, stated here for anyone reviving the harness:
 ``.claude/settings.json`` should carry a ``PreToolUse`` matcher covering
