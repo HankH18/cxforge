@@ -10,20 +10,19 @@ An autonomous support agent for a fictionalized forensic-genomics lab ("Othram")
 
 Built from a fixed spec (`docs/SPEC.md`), design (`docs/DESIGN.md`) and task graph (`docs/tickets.json`).
 
-## Quickstart (verified from a clean clone)
+## Quickstart
 
-Every command below was run end to end on a clean checkout while writing
+Every command below except step 4b was run end to end on a clean checkout while writing
 this section — including bringing up the production `deploy/` stack in a
 separate terminal at the same time, to confirm the two never collide (see
 `deploy/docker-compose.yml`'s header comment for how).
 
 ```bash
 cp .env.example .env            # fill in as each ticket's docs/*-runbook.md requires;
-                                 # empty Zendesk/Anthropic values are fine to start —
-                                 # see "Status" below for what that does and doesn't unlock
+                                 # empty Zendesk/Anthropic values are fine to start
 
 # 1. Dev database (Postgres 16 + pgvector) — the root docker-compose.yml
-#    is dev-only, a single `db` service the test suite points at.
+#    is dev-only; its `db` service is the one the test suite points at.
 docker compose up -d db
 
 # 2. Python deps
@@ -40,7 +39,7 @@ uv run mypy backend
 PYTHONPATH=backend/src uv run uvicorn main:app --reload --port 8000
 # -> GET http://localhost:8000/health  ==>  {"status": "ok"}
 
-# 4b. Run the queue worker (needs Redis; deploy/docker-compose.yml runs redis, worker and cloudflared as services)
+# 4b. Run the queue worker (needs Redis first: `docker compose up -d redis`)
 PYTHONPATH=backend/src uv run arq worker.main.WorkerSettings
 
 # 5. Run the portal (separate terminal; proxies /api to :8000 automatically

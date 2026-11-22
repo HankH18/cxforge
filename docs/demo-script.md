@@ -1,3 +1,5 @@
+> **Historical snapshot.** Its status notes date from before the 2026-08-17 live run, and the deployment is not running today. See `docs/STATE.md` for the current state.
+
 # Demo script / shot list (T-11)
 
 > **Read this section first.** SPEC success criterion 1 requires all five

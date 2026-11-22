@@ -2,8 +2,8 @@
 
 **Status: VERIFIED AGAINST A LIVE TUNNEL, 2026-08-17.** Written 2026-08-16 for
 work package W1-F2 (ADR-005); brought up and read back under W3-G3. The tunnel
-carries real traffic, including a Zendesk webhook that drove a complete agent
-run.
+carried real traffic, including a Zendesk webhook that drove a complete agent
+run. The deployment is not running today.
 
 The check that counts — a request from OUTSIDE the droplet that reaches the
 app (last section). Every response below came back through the
@@ -39,9 +39,7 @@ not have, which `docs/STATE.md §2` catalogues at length.
 
 So the committed configuration is this file plus the `cloudflared` service in
 `deploy/docker-compose.yml`. The parts a file could not carry — the ingress
-rule — are written down here and asserted by
-`backend/tests/deploy/test_compose_topology.py`, so they cannot silently drift
-away from what the owner was told to configure.
+rule — are written down here.
 
 If the flow ever changes to a **locally-managed** tunnel (a `credentials-file`
 plus a real `ingress:` block), that config belongs in this directory and the
@@ -194,7 +192,7 @@ accident.
 
 **The guard.** `deploy/compose.sh` refuses to start `cloudflared` — named explicitly, or
 implied by an `up` with no service list — unless the machine holds the address this repo
-deploys to (`DEPLOY_HOST` from `.env`, or the droplet of record in `docs/deploy.md`), and
+deploys to (`DEPLOY_HOST` from `.env`, or the droplet of record in `deploy/compose.sh`), and
 prints the mechanism above when it refuses. It does not touch any other invocation:
 `deploy/compose.sh up -d --wait db redis backend worker portal` is unaffected, and so is
 the droplet's own `up -d --build --wait`. Bound by
