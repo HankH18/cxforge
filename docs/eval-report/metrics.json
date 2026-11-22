@@ -1,7 +1,7 @@
 {
   "approved": true,
   "approval_status": "APPROVED",
-  "scored_labeled_set": "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/cxforge/evals/labeled_set.yaml",
+  "scored_labeled_set": "evals/labeled_set.yaml",
   "scored_labeled_set_is_canonical": true,
   "confusion_matrix": {
     "tp": 15,

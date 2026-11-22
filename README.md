@@ -1,17 +1,14 @@
-# Othram AI Support Agent
+# cxforge — AI support agent for Zendesk
 
-An autonomous AI support agent (Gauntlet challenger project, PRD_02 /
-Othram) that handles inbound tickets for a fictionalized forensic-genomics
-lab: answers routine inquiries grounded in a knowledge base and a live
-case-management system, and escalates to a human only when necessary. A
-React review portal (draft feed + approval gate) ships alongside it.
+An autonomous support agent for a fictionalized forensic-genomics lab ("Othram"). It reads inbound Zendesk tickets, answers routine questions from a knowledge base and case data using Claude, and escalates to a human (internal note + group assignment) for billing disputes, requests for a human, frustration or complexity. A React portal shows every draft and has an approval gate.
 
-Built by executing an approved task graph (`docs/tickets.json`, mirrored
-for humans at `docs/TASKS.md`) against a fixed spec (`docs/SPEC.md`) and
-design (`docs/DESIGN.md`) — see those files for the full intent and
-contracts. This README is the entry point: quickstart, where the rest of
-the documentation lives, and an honest account of what's actually been
-verified versus what's still outstanding.
+- **Recorded live result:** on 2026-08-17 a real requester comment on a live Zendesk ticket ran the whole loop on the deployed stack (webhook → Cloudflare Tunnel → Redis → worker → Claude → reply posted) in 11.5 s. See `docs/BUILD-PLAN.md` §10.6.
+- **Eval:** 30/30 route accuracy with `claude-opus-5` on the branch-route tickets of a 51-ticket labeled set (`evals/route-accuracy/report.md`).
+- **Run it locally:** follow the Quickstart below (Postgres in Docker, `uv sync`, backend on :8000, portal on <http://localhost:5173>). Seeding and the default test run need no API key.
+- **Stack:** FastAPI, Postgres + pgvector, Redis/arq, Anthropic Claude, Langfuse, promptfoo, React, Docker Compose, Cloudflare Tunnel.
+- **Read next:** architecture `docs/architecture.md` · current state `docs/STATE.md`
+
+Built from a fixed spec (`docs/SPEC.md`), design (`docs/DESIGN.md`) and task graph (`docs/tickets.json`).
 
 ## Quickstart (verified from a clean clone)
 
@@ -32,7 +29,7 @@ docker compose up -d db
 # 2. Python deps
 uv sync
 
-# 3. Full test suite (222 tests as of this writing)
+# 3. Full test suite
 uv run pytest
 uv run pytest -m contract -q    # HelpdeskPort contract suite only — both adapters
 uv run ruff check .
@@ -42,6 +39,9 @@ uv run mypy backend
 #    deploy/Dockerfile.backend and docs/deploy.md instead)
 PYTHONPATH=backend/src uv run uvicorn main:app --reload --port 8000
 # -> GET http://localhost:8000/health  ==>  {"status": "ok"}
+
+# 4b. Run the queue worker (needs Redis; deploy/docker-compose.yml runs redis, worker and cloudflared as services)
+PYTHONPATH=backend/src uv run arq worker.main.WorkerSettings
 
 # 5. Run the portal (separate terminal; proxies /api to :8000 automatically
 #    — see portal/vite.config.ts)
@@ -61,6 +61,8 @@ uv run python -c "from data.seed import seed_all; print(seed_all())"
 
 ## Documentation
 
+- `docs/STATE.md` — verified current state (updated 2026-08-17); supersedes
+  `docs/HANDOFF.md`.
 - `docs/SPEC.md` — intent: requirements, constraints, success criteria.
 - `docs/DESIGN.md` — contracts: data models, agent graph, HelpdeskPort,
   portal API, metric definitions.
@@ -75,56 +77,30 @@ uv run python -c "from data.seed import seed_all; print(seed_all())"
   the stack, pointing the Zendesk webhook at it, running
   `scripts/verify_deploy.sh` against it.
 - `docs/eval-report/` — the escalation precision/recall report generated
-  from `evals/labeled_set.yaml` (`uv run python -m evals.report`). **Draft**
-  — see Status below.
+  from `evals/labeled_set.yaml` (`uv run python -m evals.report`).
+  Hard-trigger recall of 1.0 covers 10 of 16 hard-trigger tickets; 6 are not
+  driven by the eval (`docs/STATE.md` §4.2).
 - `docs/architecture.md`, `docs/grounding.md`, `docs/portability.md`,
   `docs/demo-script.md` — system architecture (+ diagram), grounding
   design, the HelpdeskPort portability story, and the demo shot list,
   each written directly to the acceptance criteria in `docs/tickets.json`'s
   `T-11` entry.
 
-## Status — what's actually verified here, and what isn't
+## Status
 
-Said plainly, not overstated:
+The deployment described here is not running today; these are records of what was measured while it ran.
 
-**Live-verified, on this machine, as part of building this:**
-- `uv run pytest` (222 tests), `uv run pytest -m contract -q` (both
-  `HelpdeskPort` adapters), `uv run ruff check .`, `uv run mypy backend` —
-  all green.
-- `cd portal && npm run build` (typechecks + builds) and `npm test`
-  (5 component tests) — both green.
-- The production stack (`deploy/docker-compose.yml`): built, brought up,
-  and torn down locally with `bash scripts/verify_deploy.sh`, which
-  asserts `GET /health` is 200, the portal serves its built index,
-  `GET /api/metrics` is 401 with no token and 200 with the right
-  `X-Portal-Token` — all through the portal's nginx reverse proxy, the
-  same single entry point a deployed droplet would expose. The backend
-  image bootstraps its own schema and seeds 30 fixture cases / 44 KB
-  chunks on first start (`deploy/backend/bootstrap.py`).
-- The dev Postgres container (`othram-db`) was left completely undisturbed
-  by all of the above — confirmed by checking its status before and after.
+**Verified on the deployed system (2026-08-17; `docs/STATE.md` §1, `docs/BUILD-PLAN.md` §10.6):**
+- A real requester comment on live Zendesk ticket 3 ran the whole loop on the droplet: Zendesk trigger → Cloudflare Tunnel → ingress → Redis → arq worker → 2 Claude calls → 3 Zendesk writes. Run time 11.477 s, route `case_status`, confidence 0.98, outcome `auto_sent`. The reply was posted publicly on the ticket.
+- `/api/metrics` through the tunnel reported `sample_count: 3`, p50 15.0 s, p95 15.3 s.
+- Route classification: 30/30 on the branch-route tickets of a 51-ticket labeled set with `claude-opus-5` (`evals/route-accuracy/report.md`).
+- CI run 32010188872: 551 passed / 1 skipped (backend) and 36 Vitest tests (portal).
 
-**Not verified — stated honestly rather than glossed over:**
-- **No droplet exists.** `docs/deploy.md` is the procedure to create one;
-  `scripts/verify_deploy.sh` supports pointing at one (`DEPLOY_HOST`) once
-  it does, but that path has not been exercised here.
-- **Zendesk live e2e is unrun.** `ZENDESK_OAUTH_TOKEN`,
-  `ZENDESK_WEBHOOK_SIGNING_SECRET`, `ZENDESK_AI_USER_ID`, and
-  `ZENDESK_OAUTH_CLIENT_ID` are all empty in this environment — no trial
-  account has been signed up for (`docs/zendesk-runbook.md` is a human
-  step, not yet done). The app is designed to degrade honestly without
-  them (every read of a Zendesk env var happens at request time, never at
-  import/startup — see `backend/src/ingress/__init__.py` and
-  `backend/src/helpdesk/zendesk_adapter.py`), and that degrade behavior
-  itself IS verified (the production image starts and serves `/health`
-  with zero Zendesk credentials set), but the real trigger→webhook→
-  reply round trip against a live Zendesk instance is not.
-- **The agent graph's LLM-backed nodes are not exercised in CI.** Every
-  graph/grounding test runs against a fake `LLMClient`
-  (`backend/tests/graph/fakes.py`), so a green suite says nothing about
-  real model behaviour. Real calls go to the Anthropic Messages API
-  (`backend/src/agent/llm.py`'s `AnthropicLLMClient`, model pinned in
-  `backend/src/agent/config.py`) and need `ANTHROPIC_API_KEY` set.
+**Open:**
+- The 20–30 ticket scenario run (ADR-015) has not been done; live latency rests on 3 samples.
+- The Zendesk-originated trigger path was not re-measured after the 2026-08-17 tunnel recovery (`docs/STATE.md` §3.4).
+- Hard-trigger escalation recall of 1.0 covers 10 of 16 hard-trigger tickets; the other 6 are not driven by the eval (`docs/STATE.md` §4.2).
+- Graph and grounding tests in CI run against a fake `LLMClient`; real model behaviour is measured only by the evals above.
 
 ## Portability: the HelpdeskPort boundary
 

@@ -224,13 +224,13 @@ project **"jarvis"** under org **"hank-personal"**.
 > already re-pointed at `https://cxforge.hankholcomb.com/webhooks/zendesk` (read back from
 > the API, status `active`). Until this dropdown changes, no Zendesk event can reach the
 > droplet. ~~It does **not** block `scripts/verify_deploy.sh`, which targets
-> `http://161.35.2.250:8080` directly.~~
+> `http://<droplet-ip>:8080` directly.~~
 >
 > **Corrected 2026-08-17.** That last sentence was written as reassurance and it
 > described a blind spot. `verify_deploy.sh` targeting the droplet port *directly* is
 > not a reason the outage was survivable — it is the reason the outage was **invisible
 > to the gate**. Zendesk reaches this app only through `PUBLIC_BASE_URL`; a check that
-> talks to `161.35.2.250:8080` cannot fail when that route is down, which is exactly
+> talks to `<droplet-ip>:8080` cannot fail when that route is down, which is exactly
 > what happened next: the public path returned **502 for ~64% of real deliveries**
 > while the droplet port answered every request (§10.6g). "It does not block the
 > verify script" was true and worthless.
@@ -369,7 +369,7 @@ about what was measured and stale about the status; the banner above is current.
 Measured 2026-08-17 while building W3-G2, twice, from the token in `.env`:
 
 ```
-GET https://hank-43016.zendesk.com/api/v2/users/me.json
+GET https://<zendesk-subdomain>.zendesk.com/api/v2/users/me.json
   →  HTTP/2 401
      error: invalid_token
      error_description: The access token provided is expired, revoked, malformed

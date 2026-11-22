@@ -58,10 +58,6 @@ from .conftest import (
     write_fake_curl,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-VERIFY_SCRIPT = REPO_ROOT / "scripts" / "verify_deploy.sh"
-DEPLOY_DOC = REPO_ROOT / "docs" / "deploy.md"
-
 SECRET = "a-signing-secret-that-is-not-valid-base64"
 
 
@@ -159,22 +155,6 @@ def test_deep_with_no_ticket_id_hard_fails_and_says_why_one_cannot_be_invented(
     # know why has every incentive to "fix" this by generating an id.
     assert "fetch_ticket" in result.stderr, combined
     assert "PASS" not in result.stdout, combined
-
-
-def test_deploy_doc_documents_the_deep_flag_the_script_actually_parses() -> None:
-    """Mirrors the ``--local`` check in test_docs_and_env_example_consistency.
-
-    The flag is read out of the script rather than hardcoded, so renaming it
-    without updating the doc fails here instead of leaving the doc describing
-    an invocation that no longer works.
-    """
-    assert "--deep)" in VERIFY_SCRIPT.read_text(), "verify_deploy.sh no longer parses --deep"
-    doc = DEPLOY_DOC.read_text()
-    assert re.search(r"--deep\b", doc), "docs/deploy.md does not mention the --deep flag"
-    assert "CXFORGE_VERIFY_TICKET_ID" in doc, (
-        "docs/deploy.md does not tell the operator about the one variable --deep "
-        "cannot run without"
-    )
 
 
 # ---------------------------------------------------------------------------

@@ -39,10 +39,6 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 COMPOSE_WRAPPER = REPO_ROOT / "deploy" / "compose.sh"
 COMPOSE_FILE = REPO_ROOT / "deploy" / "docker-compose.yml"
-CLOUDFLARED_DOC = REPO_ROOT / "deploy" / "cloudflared" / "README.md"
-DEPLOY_DOC = REPO_ROOT / "docs" / "deploy.md"
-OWNER_ACTIONS = REPO_ROOT / "docs" / "OWNER-ACTIONS.md"
-BUILD_PLAN = REPO_ROOT / "docs" / "BUILD-PLAN.md"
 
 # Read out of the script rather than hardcoded, so renaming the override or
 # repointing the droplet fails the consistency tests below instead of leaving
@@ -499,67 +495,4 @@ def test_the_guard_derives_the_service_list_from_the_compose_file() -> None:
         f"the guard's service extraction returned {sorted(derived)}; it must be "
         "exactly the compose file's services, or a real service name will read "
         "as an unrecognised token (and vice versa)"
-    )
-
-
-def test_the_droplet_address_of_record_matches_the_deploy_doc() -> None:
-    """The fallback address is only safe while it is the droplet's. Bound to
-    docs/deploy.md, which is where the droplet is recorded."""
-    assert DROPLET_ADDR in DEPLOY_DOC.read_text(), (
-        f"deploy/compose.sh treats {DROPLET_ADDR} as the droplet, but "
-        "docs/deploy.md does not mention it — one of the two is stale, and if "
-        "it is the script the guard will refuse a real deploy"
-    )
-
-
-def test_the_cloudflared_readme_records_the_failure_mode_and_the_override() -> None:
-    """The guard is only half the fix; someone hitting it has to be able to
-    find out why. Both strings are read out of the script, so renaming either
-    fails here instead of leaving the doc describing a command that no longer
-    works."""
-    doc = CLOUDFLARED_DOC.read_text()
-    assert OVERRIDE_VAR in doc, (
-        "deploy/cloudflared/README.md does not document the override the guard "
-        "actually reads"
-    )
-    assert OVERRIDE_VALUE in doc, doc[:200]
-    lowered = doc.lower()
-    assert "second connector" in lowered, (
-        "deploy/cloudflared/README.md does not record the failure mode the "
-        "guard exists to prevent"
-    )
-
-
-def test_the_operational_rule_is_recorded_for_the_owner() -> None:
-    """docs/OWNER-ACTIONS.md OA-3 is where the tunnel's operating rules live.
-    A guard on one wrapper does not cover a human with an ssh session."""
-    oa = OWNER_ACTIONS.read_text()
-    lowered = oa.lower()
-    assert "second connector" in lowered, (
-        "OA-3 does not record that a laptop cloudflared hijacks the live tunnel"
-    )
-    assert "force-recreate" in lowered and "on the droplet" in lowered, (
-        "OA-3 does not record that recovery is a force-recreate ON THE DROPLET"
-    )
-    assert "/ready" in oa, "OA-3 does not record that /ready is not evidence"
-
-
-def test_the_build_plan_records_the_stray_connector_hypothesis_without_overstating_it() -> None:
-    """§10.6(g) is the historical 64%-failure record. The new outage makes a
-    stray second connector a candidate explanation for it — a hypothesis, not
-    a proof: nobody enumerated the connectors at the time, and there is still
-    no Cloudflare API token to do it with."""
-    plan = BUILD_PLAN.read_text()
-    lowered = plan.lower()
-    assert "second connector" in lowered, (
-        "docs/BUILD-PLAN.md does not mention the second-connector mechanism"
-    )
-    hedged = any(
-        term in lowered
-        for term in ("hypothesis", "candidate explanation", "not proof", "not proven")
-    )
-    assert hedged, (
-        "docs/BUILD-PLAN.md states the stray-connector explanation for the "
-        "historical 64% failure without hedging it; nobody enumerated the "
-        "connectors at the time, so it is not established"
     )

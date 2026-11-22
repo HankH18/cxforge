@@ -1,6 +1,6 @@
 {
   "cache_hit_count": 51,
-  "cache_path": "/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/cxforge/evals/route-accuracy/cache.json",
+  "cache_path": "evals/route-accuracy/cache.json",
   "cost": {
     "api_calls": 0,
     "cache_creation_input_tokens": 0,

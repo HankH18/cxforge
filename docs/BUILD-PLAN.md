@@ -567,7 +567,7 @@ from four liveness assertions is precisely what carried "the deploy works" for w
 > **Both gates cleared 2026-08-17 — see §10.6.** (b) the credential, and (c) the hostname. (g)'s
 > "not proven" list is now proven end to end.
 
-**2026-08-17, W3-G3.** The droplet at **`161.35.2.250`** (DigitalOcean id `592687747`, name
+**2026-08-17, W3-G3.** The droplet at **`<droplet-ip>`** (DigitalOcean id `592687747`, name
 `cxforge`; the other two droplets on the account were not touched) was redeployed by rsync +
 `scp .env` + `deploy/compose.sh up -d --build --wait`. Six services, all reporting healthy,
 `--wait` exit 0. Everything below was read back from the running system.
@@ -575,7 +575,7 @@ from four liveness assertions is precisely what carried "the deploy works" for w
 **(a) The Redis hop is crossed on the real deployment.** `docs/STATE.md §1` called it "the
 largest remaining unknown" and noted no code in this repo had ever opened a real Redis
 connection. It has now. A correctly HMAC-signed synthetic webhook at
-`http://161.35.2.250:8080/webhooks/zendesk` returned `202 {"status":"accepted","duplicate":false}`,
+`http://<droplet-ip>:8080/webhooks/zendesk` returned `202 {"status":"accepted","duplicate":false}`,
 and the droplet's arq worker picked the job up in **0.11 s**:
 
 ```
@@ -790,9 +790,7 @@ address this repo deploys to (`backend/tests/deploy/test_cloudflared_guard.py`,
 
 *No unit test can bind this*, and that is a real gap rather than an omission: it reproduces
 only against a live tunnel with a real connector history at Cloudflare's edge. Nothing that
-parses YAML or starts a container can produce the state. What **is** pinned mechanically is
-the honesty of the guidance — `backend/tests/deploy/test_compose_topology.py::test_the_tunnel_doc_records_the_live_verification_with_a_date`
-requires the README to keep stating the outside-the-droplet standard.
+parses YAML or starts a container can produce the state.
 
 *One droplet change was made, and it is not the fix.* `net.core.rmem_max` / `wmem_max` were
 raised **212992 → 7500000**, persisted in `/etc/sysctl.d/99-cloudflared-quic.conf`. That
@@ -877,12 +875,12 @@ external uptime monitor, or accepting the manual rule. Deliberately not chosen h
 
 **(e) The deploy gate could not see the path Zendesk uses. Closed 2026-08-17 — recorded here
 because it is the seventh instance of one pattern.** `scripts/verify_deploy.sh` asserted only
-against `${DEPLOY_SCHEME}://${DEPLOY_HOST}:${DEPLOY_PORT}` — `http://161.35.2.250:8080`, the
+against `${DEPLOY_SCHEME}://${DEPLOY_HOST}:${DEPLOY_PORT}` — `http://<droplet-ip>:8080`, the
 droplet's own port — and `--deep` POSTed its synthetic webhook at the same base. Zendesk reaches
 this app only through `PUBLIC_BASE_URL`, so through the §10.6g outage (**502 on ~64% of real
 deliveries**, requests never reaching the droplet) the gate would have reported **4/4** and
 `--deep` would have **passed**. `docs/OWNER-ACTIONS.md` recorded the bypass as reassurance — "it
-does not block `scripts/verify_deploy.sh`, which targets `http://161.35.2.250:8080` directly" —
+does not block `scripts/verify_deploy.sh`, which targets `http://<droplet-ip>:8080` directly" —
 which was true and worthless; that sentence is now struck and corrected in place.
 
 What was added, and why each part (full rationale in the script's header and `docs/deploy.md §7`):

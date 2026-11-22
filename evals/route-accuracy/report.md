@@ -14,7 +14,7 @@ for what is scored and what is diagnostic.
 - Live model calls this run: 0 (cache hits: 51)
 - Measured cost this run: 0.0 USD (0 in / 0 out tokens)
 
-> Every verdict above was replayed from `/Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/cxforge/evals/route-accuracy/cache.json`, so this invocation spent nothing. The numbers are still live-model measurements — the cache stores what the model actually returned, keyed on the exact prompt, so a prompt edit invalidates it and forces a real re-measurement. Use `--refresh` to re-measure anyway.
+> Every verdict above was replayed from `evals/route-accuracy/cache.json`, so this invocation spent nothing. The numbers are still live-model measurements — the cache stores what the model actually returned, keyed on the exact prompt, so a prompt edit invalidates it and forces a real re-measurement. Use `--refresh` to re-measure anyway.
 
 ## Confusion matrix — expected (rows) x predicted (columns)
 

@@ -294,7 +294,7 @@ front of the owner at `docs/BUILD-PLAN.md §10.7(i)`. Ratify or reverse it there
 **Decision.** `deploy/compose.sh` refuses to start `cloudflared` from a machine that does not hold
 the address this repo deploys to — whether the service is named outright or pulled in by an `up`
 with no service list, which starts everything in the file. "Holds the address" means `DEPLOY_HOST`,
-else the literal `161.35.2.250`, required to be a **non-private IPv4 configured on a local
+else the literal `<droplet-ip>`, required to be a **non-private IPv4 configured on a local
 interface** (a marker file `/etc/cxforge-droplet` is accepted as a durable second way to say yes).
 The escape hatch is `CXFORGE_ALLOW_SECOND_CONNECTOR=i-know-this-hijacks-the-live-tunnel`, captured
 from the invoking shell **before** `.env` is sourced, so a committed `.env` line cannot silently

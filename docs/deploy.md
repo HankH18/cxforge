@@ -2,7 +2,7 @@
 
 > ## Status after W3-G3's redeploy — 2026-08-17
 >
-> The droplet at **`161.35.2.250`** (DO id `592687747`, name `cxforge`) now runs
+> The droplet at **`<droplet-ip>`** (DO id `592687747`, name `cxforge`) now runs
 > the **six**-service stack, not the original three: `db`, `backend`, `portal`,
 > plus `redis` + `worker` (ADR-002) and `cloudflared` (ADR-005). Deployed by
 > rsync (§3 Option B) + `scp .env` (§4) + `deploy/compose.sh up -d --build
@@ -48,7 +48,7 @@
 > rewrite for the worker/queue/tunnel topology is **W5-J2**, not done here.
 
 **Status as of this writing: this project's droplet exists at
-`161.35.2.250`, and `DEPLOY_HOST` in `.env` is set to it.** The stack is
+`<droplet-ip>`, and `DEPLOY_HOST` in `.env` is set to it.** The stack is
 live there and passes `scripts/verify_deploy.sh` in REMOTE mode, 4/4.
 `doctl` is authenticated on this machine, and there are two *other*
 droplets on the account (`ubuntu-s-2vcpu-4gb-nyc1`, `trainerforge`) — both
@@ -214,7 +214,7 @@ Fill in on the droplet's copy (values you already have locally, per
   `us.cloud.langfuse.com`, and an unset host builds a syntactically valid
   link into the wrong region rather than failing.
 - `DEPLOY_HOST` — already set, to this project's droplet
-  (`161.35.2.250`), so `scripts/verify_deploy.sh` (run from your local
+  (`<droplet-ip>`), so `scripts/verify_deploy.sh` (run from your local
   machine) targets it instead of the local stack.
 
 ## 5. Running the stack
@@ -422,9 +422,9 @@ Cloudflare. Consequently a `--local` run says nothing about the public path
 and states that on its own `PUBLIC PATH:` and `SCOPE:` lines. Bound by
 `backend/tests/deploy/test_local_mode_opt_in.py`.
 
-**This has been run against the real droplet at `161.35.2.250` and
+**This has been run against the real droplet at `<droplet-ip>` and
 passed** — its `PASS` line reads `(REMOTE: verified droplet at
-161.35.2.250)`. Both paths have now actually been executed and passed
+<droplet-ip>)`. Both paths have now actually been executed and passed
 here: the local one (`--local`, `DEPLOY_HOST` empty) and the remote one
 against the live droplet.
 
@@ -517,7 +517,7 @@ them:
 
 ```
 SCOPE: liveness only. The core loop … was NOT exercised. …        ← WHAT ran
-SCOPE: PATH ASSERTED — http://161.35.2.250:8080. Zendesk cannot
+SCOPE: PATH ASSERTED — http://<droplet-ip>:8080. Zendesk cannot
        reach that address; it bypasses Cloudflare.                ← WHERE it ran
 SCOPE: PUBLIC PATH (https://cxforge.hankholcomb.com, the only
        route Zendesk has) — CHECKED, all green — …
@@ -581,7 +581,7 @@ CXFORGE_VERIFY_DB_URL=postgresql://…            # optional; see below \
   lie the four liveness assertions told for weeks.
 
 Measured 2026-08-17: against the droplet, assertions 1–4 pass and `--deep`
-**fails** — "no new runs row … after 240.9s" — because `161.35.2.250` still
+**fails** — "no new runs row … after 240.9s" — because `<droplet-ip>` still
 runs the pre-Wave-1 image. That is the check working, not the check being
 broken. W3-G3 is the redeploy that should turn it green.
 
@@ -606,9 +606,9 @@ Two consequences for anyone running `--deep` against the droplet:
 - **`CXFORGE_VERIFY_DB_URL` can be satisfied** even though the droplet publishes
   no host port for Postgres, by tunnelling to the `db` container over SSH:
   ```bash
-  ssh -f -N -L 15432:"$(ssh root@161.35.2.250 \
+  ssh -f -N -L 15432:"$(ssh root@<droplet-ip> \
       'docker inspect -f "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}" othram-deploy-db')":5432 \
-    root@161.35.2.250
+    root@<droplet-ip>
   CXFORGE_VERIFY_TICKET_ID=<disposable-ticket-id> \
   CXFORGE_VERIFY_DB_URL=postgresql://othram:othram@127.0.0.1:15432/othram \
     bash scripts/verify_deploy.sh --deep

@@ -125,7 +125,7 @@ exist**. T-10 is not a blocked ticket; it is an unstarted one whose acceptance c
 | Check | Result |
 |---|---|
 | Zendesk token | **HTTP 401**, body `{"error":"invalid_token","error_description":"The access token provided is expired, revoked, malformed or invalid for other reasons."}` |
-| Zendesk trial | **Alive.** `hank-43016.zendesk.com` resolves; the unauthenticated `/api/v2/users/me.json` answers as "Anonymous user". Only the token is dead. |
+| Zendesk trial | **Alive.** `<zendesk-subdomain>.zendesk.com` resolves; the unauthenticated `/api/v2/users/me.json` answers as "Anonymous user". Only the token is dead. |
 | Zendesk OAuth **client** | **Alive and authenticating** — measured, not assumed. POST `/oauth/tokens` with the real `client_id`/`client_secret` and a bogus `code` returns **`invalid_grant` (400)**; the control with a wrong `client_id` returns **`invalid_client` (401)**. So the client exists and only the access token is dead. This **retires the top risk in `BUILD-PLAN.md §11`**: OA-4 is the 2-minute re-auth, not an OAuth-app rebuild. (Incidental: the client's identifier is `jarvis` — harmless, since a Zendesk OAuth client is account-wide, not project-scoped.) |
 | Droplet `:8080/health` | **200** |
 | Droplet TLS | **None.** 443 and 8443 refuse connections; port 80 times out (408). Zendesk requires an HTTPS webhook endpoint — **it cannot reach the droplet as deployed.** |
@@ -255,7 +255,7 @@ The numbers below were measured that night with `curl` from outside the droplet;
 them and does not re-measure them.
 
 **What happened.** `deploy/compose.sh up -d --force-recreate cloudflared` was intended for the
-droplet (`161.35.2.250`) and run on the owner's **Mac**. `CLOUDFLARE_TUNNEL_TOKEN` identifies the
+droplet (`<droplet-ip>`) and run on the owner's **Mac**. `CLOUDFLARE_TUNNEL_TOKEN` identifies the
 **tunnel, not the host**, so the laptop's `cloudflared` registered as a second connector for the
 live tunnel, the edge began load-balancing to it, and it had no origin behind it.
 
@@ -551,7 +551,7 @@ turned **six pre-existing tests into real detectors** that fail against the old 
    **Now:** `bash scripts/verify_deploy.sh --deep` POSTs a correctly HMAC-signed
    synthetic webhook at the real endpoint and waits for a **new** `runs` row, read back
    through the deployed portal API — ingress → real Redis → real `arq` worker →
-   `run_agent`. Demonstrated to fail against `161.35.2.250` (assertions 1–4 green, deep
+   `run_agent`. Demonstrated to fail against `<droplet-ip>` (assertions 1–4 green, deep
    check `no new runs row … after 240.9s`, exit 1) and to pass in 8.2s against a stack
    with a real Redis and a real worker, with `replied_at - received_at = 7.576s`. It
    rules out the stale-row false pass with a baseline snapshot of run ids — verified

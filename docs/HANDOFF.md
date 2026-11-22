@@ -1,3 +1,5 @@
+> **Superseded.** See `docs/STATE.md` for the current state. Kept as a historical record.
+
 # Handoff — cxforge build session
 
 Written 2026-08-15. Replaces the pre-T-31 handoff; that version described the **v1**

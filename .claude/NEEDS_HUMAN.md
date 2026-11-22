@@ -1,3 +1,5 @@
+> **Superseded.** See `docs/STATE.md` for the current state. Kept as a historical record.
+
 # Needs human
 
 > ## ⬛ START HERE — build-session status, 2026-08-15 (supersedes stale headers below)
@@ -36,7 +38,7 @@
 > uv run python scripts/zendesk_oauth.py <code>    # writes a fresh token to .env
 > ```
 > T-11's deploy criterion is *already met* — the stack is live on the droplet at
-> **161.35.2.250** and passes `verify_deploy.sh` in REMOTE mode (4/4). T-11 is
+> **<droplet-ip>** and passes `verify_deploy.sh` in REMOTE mode (4/4). T-11 is
 > waiting on T-10, which is waiting on that token.
 >
 > ### 🔴🔴 THE CORE LOOP IS NOT CONNECTED. Found by browser-testing the portal.

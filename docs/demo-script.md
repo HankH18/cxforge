@@ -11,7 +11,7 @@
 > with no refresh token stored, so it needs a fresh `authorization_code` +
 > PKCE consent (`uv run python scripts/zendesk_oauth.py`) before any live
 > call succeeds. The droplet is **no longer a blocker**: this project's
-> droplet is live at `161.35.2.250` (`docs/deploy.md`). The Langfuse trace
+> droplet is live at `<droplet-ip>` (`docs/deploy.md`). The Langfuse trace
 > shot remains un-recordable for an independent reason: no Langfuse
 > instrumentation exists in the code at all (see "Shot 8" below). This
 > document is written so it is **immediately usable once those gaps
