@@ -2,7 +2,7 @@
 
 An autonomous support agent for a fictionalized forensic-genomics lab ("Othram"). It reads inbound Zendesk tickets, answers routine questions from a knowledge base and case data using Claude, and escalates to a human (internal note + group assignment) for billing disputes, requests for a human, frustration or complexity. A React portal shows every draft and has an approval gate.
 
-- **Recorded live result:** on 2026-08-17 a real requester comment on a live Zendesk ticket ran the whole loop on the deployed stack (webhook → Cloudflare Tunnel → Redis → worker → Claude → reply posted) in 11.5 s. See `docs/BUILD-PLAN.md` §10.6.
+- **Recorded live result:** on 2026-08-17 a real requester comment on a live Zendesk ticket ran the whole loop on the deployed stack (webhook → Cloudflare Tunnel → Redis → worker → Claude → reply posted); the worker's run took 11.5 s. See `docs/BUILD-PLAN.md` §10.6.
 - **Eval:** 30/30 route accuracy with `claude-opus-5` on the branch-route tickets of a 51-ticket labeled set (`evals/route-accuracy/report.md`).
 - **Run it locally:** follow the Quickstart below (Postgres in Docker, `uv sync`, backend on :8000, portal on <http://localhost:5173>). Seeding and the default test run need no API key.
 - **Stack:** FastAPI, Postgres + pgvector, Redis/arq, Anthropic Claude, Langfuse, promptfoo, React, Docker Compose, Cloudflare Tunnel.
