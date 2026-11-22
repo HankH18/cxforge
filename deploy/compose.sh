@@ -40,9 +40,9 @@ COMPOSE_FILE="$REPO_ROOT/deploy/docker-compose.yml"
 # --- cloudflared guard: constants -----------------------------------------
 
 # The address docs/deploy.md records for this project's droplet (DigitalOcean
-# droplet `cxforge`, id 592687747). See this_machine_is_the_droplet() for why
+# droplet `cxforge`). See this_machine_is_the_droplet() for why
 # an address is the identity check and why this literal is safe to carry here.
-DROPLET_ADDR_OF_RECORD="161.35.2.250"
+DROPLET_ADDR_OF_RECORD="203.0.113.10"
 
 # Deliberate override. The name is long and specific because the whole point
 # is that it cannot end up set by accident, and the value must match exactly —
@@ -254,7 +254,7 @@ host_holds_public_address() {
 # DigitalOcean assigns a droplet's public IPv4 directly to its `eth0` inside
 # the guest — there is no NAT — and the account holds no reserved (floating)
 # IPs, checked read-only against the DO API on 2026-08-17: droplet `cxforge`
-# (id 592687747) reports 161.35.2.250 type "public", and /v2/reserved_ips is
+# reports its address as type "public", and /v2/reserved_ips is
 # empty. So "this machine holds the address the repo deploys to" is true on
 # the droplet right now, with nothing installed and no marker placed, and it
 # is false on a laptop unless someone deliberately binds that address.

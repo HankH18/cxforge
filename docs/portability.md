@@ -87,8 +87,9 @@ and reaches into no adapter's transport. Twelve test cases (4 single tests
 operations + 3 more single tests), each run once per adapter via
 `pytest`'s own parametrization (`ADAPTER_FACTORIES = {"zendesk":
 make_zendesk_harness, "email": make_email_harness}`) — **12 shared tests
-× 2 adapters = 24 test executions**, all passing today (part of the
-222-test suite; run in isolation via `pytest -m contract`).
+× 2 adapters = 24 test executions** when T-3 landed. Six requester-history
+tests added since make it 18 × 2 = 36; run the suite in isolation via
+`pytest -m contract`.
 
 The strongest form of this evidence isn't "the suite passes for both
 adapters" (a suite could pass trivially if it were quietly special-cased

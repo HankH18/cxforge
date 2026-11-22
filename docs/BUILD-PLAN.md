@@ -567,7 +567,7 @@ from four liveness assertions is precisely what carried "the deploy works" for w
 > **Both gates cleared 2026-08-17 — see §10.6.** (b) the credential, and (c) the hostname. (g)'s
 > "not proven" list is now proven end to end.
 
-**2026-08-17, W3-G3.** The droplet at **`<droplet-ip>`** (DigitalOcean id `592687747`, name
+**2026-08-17, W3-G3.** The droplet at **`<droplet-ip>`** (name
 `cxforge`; the other two droplets on the account were not touched) was redeployed by rsync +
 `scp .env` + `deploy/compose.sh up -d --build --wait`. Six services, all reporting healthy,
 `--wait` exit 0. Everything below was read back from the running system.

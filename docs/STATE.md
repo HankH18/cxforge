@@ -1,3 +1,5 @@
+> **The deployment described here is not running today.** This file was written on 2026-08-16 and 2026-08-17; where it says the droplet, the tunnel or the public hostname is live or serving, that is what was measured then.
+
 # cxforge — verified state, 2026-08-16 · updated 2026-08-17
 
 **This file supersedes `docs/HANDOFF.md` and the entire `.claude/NEEDS_HUMAN.md` log as
@@ -174,7 +176,7 @@ correct pair — there is no way to fix A without fixing B. See `docs/OWNER-ACTI
 
 ---
 
-## 3.2 The Cloudflare tunnel is live, and one hostname serves everything — 2026-08-17
+## 3.2 The Cloudflare tunnel was live, and one hostname served everything — 2026-08-17
 
 `https://cxforge.hankholcomb.com`, measured from the public internet. **No droplet port is
 exposed.**
@@ -248,7 +250,7 @@ the clean recreate stopped them. Full record: `docs/BUILD-PLAN.md §10.6g`.
 
 ---
 
-## 3.4 The public path went fully down and is back up — a stray second connector, 2026-08-17
+## 3.4 The public path went fully down and came back up — a stray second connector, 2026-08-17
 
 **Recorded from the session log of 2026-08-17**, which is the session that caused and fixed this.
 The numbers below were measured that night with `curl` from outside the droplet; this entry records

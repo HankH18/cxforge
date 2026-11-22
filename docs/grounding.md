@@ -192,7 +192,7 @@ invariant (R9) this project is graded on getting right.
 
 ## Verification strategy today
 
-- `pytest -m grounding` is part of the 222-test suite that passes today
+- `pytest -m grounding` is part of the full suite
   (`uv run pytest`), and runs in CI (`.github/workflows/ci.yml` runs
   `pytest -m "not live"` against a real Postgres service, which includes
   the `grounding` marker — `live` is the only marker excluded).

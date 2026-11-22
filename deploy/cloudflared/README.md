@@ -16,9 +16,9 @@ Cloudflare edge (`server: cloudflare`, `cf-ray` present):
 | `GET /api/metrics` | **401** without a token |
 | `POST /webhooks/zendesk` unsigned | **401** `{"detail":"missing signature headers"}` |
 
-The supporting facts, also measured rather than assumed: `.env` holds a
+The supporting facts, also measured rather than assumed: `.env` held a
 184-character `CLOUDFLARE_TUNNEL_TOKEN`; `PUBLIC_BASE_URL=https://cxforge.hankholcomb.com`
-resolves to Cloudflare anycast; the connector registers 4 QUIC connections
+resolved to Cloudflare anycast; the connector registered 4 QUIC connections
 (`ewr01/08/11/12`).
 
 `GET http://cloudflared:2000/ready` used to be listed here as a fourth

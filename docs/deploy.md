@@ -1,8 +1,10 @@
+> **The deployment this page describes is not running today.** Its status notes date from 2026-08-17 or earlier.
+
 # Deploying to DigitalOcean (T-11)
 
 > ## Status after W3-G3's redeploy — 2026-08-17
 >
-> The droplet at **`<droplet-ip>`** (DO id `592687747`, name `cxforge`) now runs
+> The droplet at **`<droplet-ip>`** (name `cxforge`) ran
 > the **six**-service stack, not the original three: `db`, `backend`, `portal`,
 > plus `redis` + `worker` (ADR-002) and `cloudflared` (ADR-005). Deployed by
 > rsync (§3 Option B) + `scp .env` (§4) + `deploy/compose.sh up -d --build
@@ -47,10 +49,10 @@
 > This page still describes the original three-service deploy in places. A full
 > rewrite for the worker/queue/tunnel topology is **W5-J2**, not done here.
 
-**Status as of this writing: this project's droplet exists at
-`<droplet-ip>`, and `DEPLOY_HOST` in `.env` is set to it.** The stack is
-live there and passes `scripts/verify_deploy.sh` in REMOTE mode, 4/4.
-`doctl` is authenticated on this machine, and there are two *other*
+**Status when this was written (2026-08-15): this project's droplet existed at
+`<droplet-ip>`, and `DEPLOY_HOST` in `.env` was set to it.** The stack was
+live there and passed `scripts/verify_deploy.sh` in REMOTE mode, 4/4.
+`doctl` was authenticated on this machine, and there were two *other*
 droplets on the account (`ubuntu-s-2vcpu-4gb-nyc1`, `trainerforge`) — both
 pre-existing, unrelated to this project, and never to be touched by
 anything in this repo. Everything below is the **procedure that was
@@ -62,7 +64,7 @@ builds and runs both locally — `bash scripts/verify_deploy.sh --local`
 passes (`DEPLOY_HOST` empty + explicit `--local` opt-in → local path; the
 flag is required, and a bare invocation with an empty `DEPLOY_HOST` now
 hard-fails by design, see §7) — and on the droplet, where a bare
-`bash scripts/verify_deploy.sh` passes REMOTE mode. Separately, a live
+`bash scripts/verify_deploy.sh` passed REMOTE mode. Separately, a live
 `client.messages.parse()` call against `claude-opus-5` has succeeded from
 inside the running backend container, confirming the model credential
 reaches the app. See that script and `deploy/docker-compose.yml`'s own
@@ -426,7 +428,7 @@ and states that on its own `PUBLIC PATH:` and `SCOPE:` lines. Bound by
 passed** — its `PASS` line reads `(REMOTE: verified droplet at
 <droplet-ip>)`. Both paths have now actually been executed and passed
 here: the local one (`--local`, `DEPLOY_HOST` empty) and the remote one
-against the live droplet.
+against the droplet while it ran.
 
 ### The public path: the address Zendesk actually uses
 
@@ -505,9 +507,9 @@ DEPLOY_SCHEME=https DEPLOY_HOST=cxforge.hankholcomb.com DEPLOY_PORT=443 \
 Read this before quoting a `PASS` from the four assertions above. **Every
 one of them is a liveness check.** Not one makes a model call, writes a
 row, or touches the agent path — which is why this script reported 4/4 for
-weeks against a stack with no `ANTHROPIC_API_KEY` at all, and why it still
-reports 4/4 against the droplet today, whose webhook accepts events and
-never starts a run (`docs/STATE.md §6.2`). A pass without `--deep` now
+weeks against a stack with no `ANTHROPIC_API_KEY` at all, and why it
+reported 4/4 against the droplet while its webhook accepted events and
+never started a run (`docs/STATE.md §6.2`). A pass without `--deep` now
 prints a `SCOPE:` line saying exactly that, on the line after the `PASS`,
 so the scope travels with the claim.
 

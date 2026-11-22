@@ -1,5 +1,5 @@
 worktree_name:   wf_9910d138-f96-7
-worktree_path:   /Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/cxforge/.claude/worktrees/wf_9910d138-f96-7
+worktree_path:   .claude/worktrees/wf_9910d138-f96-7
 branch:          worktree-wf_9910d138-f96-7
 head_sha:        4618752cd364316785cdf9c1d84da3d4791bb395
 head_subject:    ticket-close: T-28

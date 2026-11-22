@@ -611,7 +611,7 @@ def _require(name: str) -> str:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base-url", required=True, help="e.g. http://161.35.2.250:8080")
+    parser.add_argument("--base-url", required=True, help="e.g. http://<droplet-ip>:8080")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     args = parser.parse_args(argv)
     base_url = args.base_url.rstrip("/")

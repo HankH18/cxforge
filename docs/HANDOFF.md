@@ -23,11 +23,10 @@ harness instructions still apply.
   T-20, T-23, T-24, T-25, T-30, T-31. **19 tickets queued.**
 - **`uv run pytest -m "not live" -q` → 589 passed**, 0 failed (as of T-30's close).
   It was 206 failed / 343 passed at the start of this session.
-- Pushed and verified by reading back from both hosts, both at `c71b141`:
-  - GitLab (cohort submission): `https://labs.gauntletai.com/hankholcomb/cxforge` → `main`
-  - GitHub (private backup): `https://github.com/HankH18/cxforge` → `main`
-  - Both remotes are configured (`gitlab`, `github`); local branch is `master`, pushed
-    as `master:main`. Credentials resolve from the keychain / `gh` — never paste a token.
+- Pushed and verified by reading back at `c71b141`: GitHub,
+  `https://github.com/HankH18/cxforge` → `main` (local branch `master`, pushed as
+  `master:main`). The session also pushed to a cohort-submission remote that has since
+  been retired; GitHub is the only remote.
 
 Run `bash .claude/scripts/claim.sh` (no args) for the live status board. Status is
 DERIVED — receipt = resolved, claim = in_progress, else queue. The `status` field

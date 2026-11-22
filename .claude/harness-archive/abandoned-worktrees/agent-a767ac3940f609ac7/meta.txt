@@ -1,5 +1,5 @@
 worktree_name:   agent-a767ac3940f609ac7
-worktree_path:   /Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/cxforge/.claude/worktrees/agent-a767ac3940f609ac7
+worktree_path:   .claude/worktrees/agent-a767ac3940f609ac7
 branch:          worktree-agent-a767ac3940f609ac7
 head_sha:        (unborn - no commit on branch)
 head_subject:    (unborn)

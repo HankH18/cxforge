@@ -806,7 +806,7 @@ This test is failing *because it is doing its job*.
 so the earlier `git checkout --` no longer restores it:**
 
 ```bash
-cd /Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/cxforge
+cd <path-to-your-cxforge-checkout>
 git log --oneline -3                                        # expect ea27e2c on top
 git show ea27e2c -- evals/labeled_set.yaml                  # see the flip yourself
 
@@ -991,7 +991,7 @@ person's authorisation**.
 real work):
 
 ```bash
-cd /Users/hankholcomb/Documents/code_parent_folders/gauntlet_repos/cxforge
+cd <path-to-your-cxforge-checkout>
 git diff evals/labeled_set.yaml                      # confirm with your own eyes first
 git checkout -- evals/labeled_set.yaml               # restore PROPOSED_AWAITING_HUMAN_REVIEW
 git checkout -- docs/eval-report/                    # un-publish the FINAL-stamped report
